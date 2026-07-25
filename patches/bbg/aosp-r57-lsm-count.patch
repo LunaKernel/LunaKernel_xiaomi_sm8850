@@ -1,0 +1,27 @@
+diff --git a/include/linux/lsm_count.h b/include/linux/lsm_count.h
+index 1fc8d13f9..c97649ca1 100644
+--- a/include/linux/lsm_count.h
++++ b/include/linux/lsm_count.h
+@@ -94,6 +94,12 @@
+ #define IPE_ENABLED
+ #endif
+ 
++#if IS_ENABLED(CONFIG_BBG)
++#define BASEBAND_GUARD_ENABLED 1,
++#else
++#define BASEBAND_GUARD_ENABLED
++#endif
++
+ /*
+  *  There is a trailing comma that we need to be accounted for. This is done by
+  *  using a skipped argument in __COUNT_LSMS
+@@ -118,7 +124,8 @@
+ 		LANDLOCK_ENABLED	\
+ 		IMA_ENABLED		\
+ 		EVM_ENABLED		\
+-		IPE_ENABLED)
++		IPE_ENABLED		\
++		BASEBAND_GUARD_ENABLED)
+ 
+ #else
+ 

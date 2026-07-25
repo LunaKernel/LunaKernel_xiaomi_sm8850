@@ -1,0 +1,6 @@
+id=xiaomi_kernel_ipset
+name=Xiaomi SM8850 Kernel IPSet Command
+version=7.24
+versionCode=724
+author=KUAPT kernel project
+description=Official ipset 7.24 command for the matching IPSet-enabled kernel; installed systemlessly at /system/bin/ipset.

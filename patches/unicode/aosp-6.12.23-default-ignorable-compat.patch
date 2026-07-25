@@ -1,0 +1,164 @@
+diff --git a/fs/ext4/namei.c b/fs/ext4/namei.c
+--- a/fs/ext4/namei.c
++++ b/fs/ext4/namei.c
+@@ -1462,7 +1462,8 @@ static bool ext4_match(struct inode *parent,
+ 		 * sure cf_name was properly initialized before
+ 		 * considering the calculated hash.
+ 		 */
+-		if (IS_ENCRYPTED(parent) && fname->cf_name.name &&
++		if (sb_no_casefold_compat_fallback(parent->i_sb) &&
++		    IS_ENCRYPTED(parent) && fname->cf_name.name &&
+ 		    (fname->hinfo.hash != EXT4_DIRENT_HASH(de) ||
+ 		     fname->hinfo.minor_hash != EXT4_DIRENT_MINOR_HASH(de)))
+ 			return false;
+@@ -1595,10 +1596,15 @@ static struct buffer_head *__ext4_find_entry(struct inode *dir,
+ 		 * return.  Otherwise, fall back to doing a search the
+ 		 * old fashioned way.
+ 		 */
+-		if (!IS_ERR(ret) || PTR_ERR(ret) != ERR_BAD_DX_DIR)
++		if (IS_ERR(ret) && PTR_ERR(ret) == ERR_BAD_DX_DIR)
++			dxtrace(printk(KERN_DEBUG "ext4_find_entry: dx failed, "
++				       "falling back\n"));
++		else if (!sb_no_casefold_compat_fallback(dir->i_sb) &&
++			 *res_dir == NULL && IS_CASEFOLDED(dir))
++			dxtrace(printk(KERN_DEBUG "ext4_find_entry: casefold "
++				       "failed, falling back\n"));
++		else
+ 			goto cleanup_and_exit;
+-		dxtrace(printk(KERN_DEBUG "ext4_find_entry: dx failed, "
+-			       "falling back\n"));
+ 		ret = NULL;
+ 	}
+ 	nblocks = dir->i_size >> EXT4_BLOCK_SIZE_BITS(sb);
+diff --git a/fs/f2fs/super.c b/fs/f2fs/super.c
+--- a/fs/f2fs/super.c
++++ b/fs/f2fs/super.c
+@@ -2264,7 +2264,7 @@ static void default_options(struct f2fs_sb_info *sbi, bool remount)
+ 
+ 	f2fs_build_fault_attr(sbi, 0, 0);
+ 
+-	f2fs_set_lookup_mode(sbi, LOOKUP_PERF);
++	f2fs_set_lookup_mode(sbi, LOOKUP_AUTO);
+ }
+ 
+ #ifdef CONFIG_QUOTA
+diff --git a/fs/unicode/mkutf8data.c b/fs/unicode/mkutf8data.c
+--- a/fs/unicode/mkutf8data.c
++++ b/fs/unicode/mkutf8data.c
+@@ -3411,7 +3411,6 @@ int main(int argc, char *argv[])
+ 	ccc_init();
+ 	nfdi_init();
+ 	nfdicf_init();
+-	ignore_init();
+ 	corrections_init();
+ 	hangul_decompose();
+ 	nfdi_decompose();
+diff --git a/fs/unicode/utf8-norm.c b/fs/unicode/utf8-norm.c
+--- a/fs/unicode/utf8-norm.c
++++ b/fs/unicode/utf8-norm.c
+@@ -397,8 +397,13 @@ ssize_t utf8nlen(const struct unicode_map *um, enum utf8_normalization n,
+ 		    um->ntab[n]->maxage)
+ 			ret += utf8clen(s);
+ 		else if (LEAF_CCC(leaf) == DECOMPOSE)
+-			ret += strlen(LEAF_STR(leaf));
+-		else
++			/*
++			 * Legacy tables encode Default_Ignorable code points as
++			 * empty decompositions.  The compatibility iterator emits
++			 * those code points unchanged, so its length must do likewise.
++			 */
++			ret += LEAF_STR(leaf)[0] ? strlen(LEAF_STR(leaf)) : utf8clen(s);
++		else
+ 			ret += utf8clen(s);
+ 		len -= utf8clen(s);
+ 		s += utf8clen(s);
+@@ -516,20 +521,23 @@ int utf8byte(struct utf8cursor *u8c)
+ 			ccc = STOPPER;
+ 		} else if (ccc == DECOMPOSE) {
+-			u8c->len -= utf8clen(u8c->s);
+-			u8c->p = u8c->s + utf8clen(u8c->s);
+-			u8c->s = LEAF_STR(leaf);
+-			/* Empty decomposition implies CCC 0. */
+-			if (*u8c->s == '\0') {
+-				if (u8c->ccc == STOPPER)
+-					continue;
++			if (LEAF_STR(leaf)[0] == '\0') {
++				/*
++				 * Preserve the original input code point.  This avoids
++				 * treating visually identical names as the same byte name,
++				 * while ext4/f2fs linear fallback keeps old on-disk hashes
++				 * reachable after the normalization correction.
++				 */
+ 				ccc = STOPPER;
+-				goto ccc_mismatch;
+-			}
++			} else {
++				u8c->len -= utf8clen(u8c->s);
++				u8c->p = u8c->s + utf8clen(u8c->s);
++				u8c->s = LEAF_STR(leaf);
+ 
+-			leaf = utf8lookup(u8c->um, u8c->n, u8c->hangul, u8c->s);
+-			if (!leaf)
+-				return -1;
+-			ccc = LEAF_CCC(leaf);
++				leaf = utf8lookup(u8c->um, u8c->n, u8c->hangul, u8c->s);
++				if (!leaf)
++					return -1;
++				ccc = LEAF_CCC(leaf);
++			}
+ 		}
+ 
+ 		/*
+diff --git a/fs/unicode/utf8-selftest.c b/fs/unicode/utf8-selftest.c
+--- a/fs/unicode/utf8-selftest.c
++++ b/fs/unicode/utf8-selftest.c
+@@ -70,6 +70,11 @@ static const struct {
+ 		.str = {0xCE, 0x87, 0x00},
+ 		.dec = {0xC2, 0xB7, 0x00}
+ 	},
++	{
++		/* ZERO WIDTH SPACE must no longer normalize to an empty name. */
++		.str = {0xe2, 0x80, 0x8b, 0x00},
++		.dec = {0xe2, 0x80, 0x8b, 0x00},
++	},
+ 	/* Canonical ordering */
+ 	{
+ 		/* A + 'COMBINING ACUTE ACCENT' + 'COMBINING OGONEK' decomposes
+@@ -135,6 +140,11 @@ static const struct {
+ 		.str = {0xea, 0x9e, 0xae, 0x00},
+ 		.ncf = {0xc9, 0xaa, 0x00},
+ 	},
++	{
++		/* Casefold surrounding text but preserve ZERO WIDTH SPACE. */
++		.str = {0x41, 0xe2, 0x80, 0x8b, 0x42, 0x00},
++		.ncf = {0x61, 0xe2, 0x80, 0x8b, 0x62, 0x00},
++	},
+ 	/* Introduced by UTF-11.0.0. */
+ 	{
+ 		/* GEORGIAN SMALL LETTER AN folds to GEORGIAN MTAVRULI
+diff --git a/fs/unicode/utf8n.h b/fs/unicode/utf8n.h
+--- a/fs/unicode/utf8n.h
++++ b/fs/unicode/utf8n.h
+@@ -17,7 +17,6 @@ int utf8version_is_supported(const struct unicode_map *um, unsigned int version);
+ 
+ /*
+  * Determine the length of the normalized from of the string,
+  * excluding any terminating NULL byte.
+- * Returns 0 if only ignorable code points are present.
+  * Returns -1 if the input is not valid UTF-8.
+  */
+ ssize_t utf8nlen(const struct unicode_map *um, enum utf8_normalization n,
+diff --git a/include/linux/unicode.h b/include/linux/unicode.h
+--- a/include/linux/unicode.h
++++ b/include/linux/unicode.h
+@@ -35,10 +35,8 @@ static inline u8 unicode_rev(unsigned int age)
+  * Two normalization forms are supported:
+  * 1) NFDI
+  *   - Apply unicode normalization form NFD.
+- *   - Remove any Default_Ignorable_Code_Point.
+  * 2) NFDICF
+  *   - Apply unicode normalization form NFD.
+- *   - Remove any Default_Ignorable_Code_Point.
+  *   - Apply a full casefold (C + F).
+  */
+ enum utf8_normalization {

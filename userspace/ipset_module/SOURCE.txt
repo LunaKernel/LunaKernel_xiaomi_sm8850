@@ -1,0 +1,12 @@
+ipset 7.24
+Source: https://ipset.netfilter.org/ipset-7.24.tar.bz2
+SHA-512: 18ccb49bd38083f0556b11e1d17f43791c52a2b094c9a500b6f770796b17e8e70c3860a628eac2252eb672b1fc9de734d3a0e0823d61dd9be7b4188adc6dd214
+
+libmnl 1.0.5
+Source: https://www.netfilter.org/projects/libmnl/files/libmnl-1.0.5.tar.bz2
+SHA-256: 274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525
+
+The build is reproducible from the pinned source archives with init.sh and
+build.sh. libipset and libmnl are linked into the command; only Android's
+/system/bin/linker64, libc.so and libdl.so are permitted runtime dependencies.
+The binary is not stored in Git.
