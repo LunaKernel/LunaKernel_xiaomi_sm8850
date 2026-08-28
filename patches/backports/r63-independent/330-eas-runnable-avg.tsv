@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	eas_runnable_avg	direct	stable	linux-6.12.y	29cf3b31e8cceebceed395b2a0ec7863adabca69	2026-07-24	d7df06e0f69b4787b8ec809fd1e2ddd8a20b44b0	kernel/sched/fair.c	-	-	-
