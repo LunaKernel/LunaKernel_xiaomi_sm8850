@@ -1,11 +1,10 @@
+Subject: [PATCH] ufs: 合并上游 runtime PM 错误恢复修复并适配 AOSP 6.12.69
+
 diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index 9fb54b2878e612c875465074a4dcf26851317d34..963f3f35b52d308f62cffbdedca65b89a65ed5a0 100644
 --- a/drivers/ufs/core/ufshcd.c
 +++ b/drivers/ufs/core/ufshcd.c
-@@ -6731,8 +6731,25 @@ static void ufshcd_err_handler(struct work_struct *work)
- 	dev_info(hba->dev,
- 		 "%s started; HBA state %s; powered %d; shutting down %d; saved_err = %d; saved_uic_err = %d; force_reset = %d%s\n",
- 		 __func__, ufshcd_state_name[hba->ufshcd_state],
- 		 hba->is_powered, hba->shutting_down, hba->saved_err,
+@@ -6771,6 +6771,23 @@ static void ufshcd_err_handler(struct work_struct *work)
  		 hba->saved_uic_err, hba->force_reset,
  		 ufshcd_is_link_broken(hba) ? "; link is broken" : "");
  
@@ -27,3 +26,5 @@ diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
 +	}
 +
  	down(&hba->host_sem);
+ 	spin_lock_irqsave(hba->host->host_lock, flags);
+ 	if (ufshcd_err_handling_should_stop(hba)) {

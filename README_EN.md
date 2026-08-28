@@ -2,76 +2,63 @@
 
 # Luna Kernel
 
-Luna Kernel is an Android 16, Linux 6.12.23, 4 KiB GKI kernel for Xiaomi 17 (`pudding`).
+Luna Kernel is a Linux 6.12.69, 4 KiB GKI kernel for the Xiaomi 17 (`pudding`) HyperOS 4 (Android 17) ROM baseline currently under validation.
 
-The name Luna evokes a small, quiet, and clean moon. The project uses Xiaomi's public kernel sources and the official AOSP GKI as its baseline, then adds verified features, bug fixes, and lightweight performance improvements while retaining device compatibility.
+The name Luna evokes a small, quiet, and clean moon. The project uses Xiaomi's public kernel sources and the official AOSP GKI as its baseline, then adds features, bug fixes, and lightweight performance improvements with traceable upstream origins and enforced validation gates.
+
+> This HyperOS 4 / Android 17 branch remains under validation. The same-OTA module closure for `OS4.0.0.9.XPCCNXM` is now proven and an Image-only candidate test package can be built; Xiaomi 17 boot, functionality, and stability still require device validation, so this is not yet a formal release.
 
 ## Support
 
-| Item | Current support |
+| Item | Current status |
 | --- | --- |
 | Device | Xiaomi 17 |
 | Codename | `pudding` |
-| Android | Android 16 |
-| Kernel | Linux 6.12.23 |
+| OS | HyperOS 4 / Android 17 (validation in progress) |
+| Kernel | Linux 6.12.69 |
 | Page size | 4 KiB |
 | boot partition | 96 MiB (`100663296` bytes) |
 
-Only `pudding` is currently supported. Do not flash this kernel on other devices.
+Only `pudding` is in scope. Support must not be inferred for other devices.
 
 ## Upstream baseline
 
 | Purpose | Official upstream | Pinned revision |
 | --- | --- | --- |
 | Xiaomi SM8850 SoC/vendor public baseline | [MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource) | `popsicle-w-oss` / `45705be1220b4cfa8100516ad86711656c0b634e` |
-| GKI Image source | [AOSP kernel/common](https://android.googlesource.com/kernel/common) | `android16-6.12-2025-06_r57` / `a82fc641d6d2c687802606190c0a8c33a4242201` |
+| GKI Image source | [AOSP kernel/common](https://android.googlesource.com/kernel/common) | `android16-6.12-2026-03_r63` / `625bef5cf43deeb3fca2e75202bcf958b6b976e5` |
 
-The final `Image` is built from AOSP common. Xiaomi's public sources provide the SoC baseline and compatibility metadata.
+The final `Image` is built from AOSP common. Xiaomi's public sources provide the SoC baseline and compatibility metadata. The `android16` text in the AOSP branch name identifies the GKI/KMI branch; it does not mean that the target OS is Android 16.
 
-## Included features
+The pinned target OTA is `OS4.0.0.9.XPCCNXM`. Its reused `system_dlkm` build fingerprint still carries Android 16 and `OS4.0.0.8.XPCCN` fields. These are the official partition's original metadata; the project verifies them as-is rather than rewriting them to Android 17.
+
+## Integrated components
 
 | Component | Version and purpose |
 | --- | --- |
-| [KernelSU](https://github.com/tiann/KernelSU) | v3.2.5, built into the kernel; the officially signed Manager APK is also included in the build outputs |
-| [SUSFS](https://gitlab.com/simonpunk/susfs4ksu) | v2.2.0, matched to the current KernelSU release |
-| [Baseband Guard](https://github.com/vc-teahouse/Baseband-guard) | Protects the baseband and critical partitions; boot/recovery write blocking stays disabled for normal kernel flashing |
-| [ADIOS](https://github.com/firelzrd/adios) | v3.2.0, available for runtime selection; the Xiaomi baseline `none` scheduler remains the default |
-| [TCP Brutal](https://github.com/apernet/tcp-brutal) | Available for runtime selection; CUBIC remains the default congestion control |
-| IPSet | Full kernel support with a separate Android arm64 command and KernelSU module |
+| [KernelSU](https://github.com/tiann/KernelSU) | v3.2.5, built into the kernel with selected reviewed upstream fixes; a release build will accompany it with the official upstream Manager APK |
+| [SUSFS](https://gitlab.com/simonpunk/susfs4ksu) | v2.2.0, matched to the current KernelSU release; `OPEN_REDIRECT` is not built, while debug logging stays available but defaults to off |
+| [Baseband Guard](https://github.com/vc-teahouse/Baseband-guard) | Restricts direct writes by KernelSU-granted processes to baseband and critical partitions; boot/recovery write blocking stays disabled for normal flashing |
+| IPSet | Full kernel support; a release will provide the Android arm64 command and KernelSU module separately |
 
-The kernel also retains Android GKI capabilities including BBR v1, FQ, seccomp, CFI, BPF JIT, module BTF, FUSE BPF, and Rust.
+The kernel also retains BBR v1, FQ, seccomp, CFI, BPF JIT, module BTF, FUSE BPF, Rust, and pKVM guest capabilities.
 
 ## Fixes and improvements
 
-Luna backports fixes from official AOSP/Linux history, including:
+Luna backports changes from official AOSP/Linux history onto the pinned r63 baseline, primarily covering:
 
-- F2FS encrypted writeback, inode lifetime, foreground GC, atomic inode, ACL, and xattr fixes.
-- EROFS directory-tail and ext4 extended-attribute bounds fixes.
-- Concurrency fixes for futex PI, timers, eventpoll, cgroups, blk-cgroup, page pool, and conntrack.
-- Binder transaction lifetime, Gunyah resource cleanup, and UFS runtime power-management recovery fixes.
-- IPv6 MLD query and rtmutex error-path fixes.
-- Unicode 12.1 Default-Ignorable handling with compatibility for existing ext4/f2fs casefold directories.
-
-The current tree also includes fast-path improvements for F2FS open and direct I/O, memcg accounting, TCP receive timestamps, timer bases, EAS CPU masks, and blk-wbt.
+- F2FS foreground GC and ACL/xattr fixes, plus EROFS and ext4 bounds fixes.
+- Fixes for futex PI, blk-cgroup, Binder, UFS, IDLETIMER, IPv6 MLD, and KVM compound-page pinning; proactive-reclaim freezer handling is provided by the r63 baseline.
+- KernelSU Manager identity verification, low-memory failure paths, and Baseband Guard device-identity and write-path fixes.
+- Selected Linux/AOSP fixes for F2FS/UFS, block and memory management, BPF, TCP/IPv6, and IPSet concurrency and lifetime bugs.
+- Fast-path improvements for timer bases, F2FS direct I/O, EAS cpumasks, blk-wbt, memcg rstat, and TCP receive timestamps.
 
 ## Defaults
 
-- Default I/O scheduler: `none`. ADIOS is available only when explicitly selected.
-- Default TCP congestion control: CUBIC. BBR v1 and TCP Brutal are available only when explicitly selected.
+- The I/O scheduler remains Xiaomi's baseline `none`.
+- CUBIC remains the default TCP congestion control. BBR v1 is available when explicitly selected.
 - Unprivileged BPF is disabled by default.
-- Kernel seccomp support remains enabled. KernelSU Manager or approved root processes may report `Seccomp: 0`; this is expected KernelSU behavior. Normal Android applications should usually report `2`.
-
-## Installation
-
-Before flashing:
-
-1. Confirm that the device is a Xiaomi 17 (`pudding`).
-2. Back up the original boot image and prepare a working recovery method.
-3. Confirm that the package name matches `luna-xiaomi17-g<short-commit>-YYYYMMDD.zip`.
-
-The package is based on [AnyKernel3](https://github.com/osm0sis/AnyKernel3). It replaces only the `Image` in the current-slot boot partition and does not ship or replace DTB, DTBO, vendor modules, or the vendor ramdisk. The installer checks the boot partition capacity and aborts if the repacked image exceeds 96 MiB.
-
-Flashing a kernel always carries a risk of boot failure or data loss. Make sure the original boot can be restored.
+- Kernel seccomp support remains enabled. KernelSU Manager or approved root processes may report `Seccomp: 0`; normal Android applications should usually report `2`.
 
 ## Build
 
@@ -85,22 +72,28 @@ Linux is recommended. After installing Bash, Git, curl, tar, unzip, 7-Zip, and G
 ```
 
 - `init.sh` prepares and verifies pinned sources and toolchains.
-- `patch.sh` applies Luna kernel fixes and improvements.
+- `patch.sh` applies Luna's official backported fixes and improvements.
 - `patch_external.sh` integrates pinned independent components.
-- `build.sh` configures, builds, tests, and packages the outputs.
+- `build.sh` configures and builds the kernel, validates the same-OTA boot module closure, and reports configuration, module, and ABI/KMI differences.
 
-Build outputs are placed in `kernel_out/`. The primary filenames are:
+The build-output directory for this branch is `kernel_out/android17-r63/`. Candidate ZIP, `Image`, complete compatibility-audit archive, Manager APK, and IPSet artifacts are produced only when the pinned same-OTA `tmp/os4/system_dlkm.img` passes identity, integrity, and module-closure gates and all reference-snapshot drift has been reviewed.
+
+Reproducing the stock ABI manifest requires the same-OTA `boot.img`, `vendor_boot.img`, `vendor_dlkm.img`, and `system_dlkm.img` under `tmp/os4/`, together with the tools verified by the extraction script. `system_dlkm.img` is a compatibility input only and is never included in the flashable package.
+
+Candidate artifact names are:
 
 ```text
 luna-xiaomi17-g<short-commit>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<short-commit>-YYYYMMDD
 ```
 
-The build also outputs KernelSU Manager, SUSFS helpers, and the IPSet KernelSU module. Kernel releases and artifact hashes are derived from the current project commit. The build identity is fixed to `luna@luna-build`.
+The AnyKernel3 package will replace only the `Image` inside boot. It will not ship or modify DTB, DTBO, vendor modules, the ramdisk, or the boot header. Kernel releases and artifact hashes are derived from the project commit, and the build identity is fixed to `luna@luna-build`.
 
 ## Validation status
 
-The current feature set has passed a complete build, configuration checks, Unicode tests, and ABI/KMI checks. It has also completed boot and basic functional validation on Xiaomi 17 `pudding`.
+The HyperOS 4 `OS4.0.0.9.XPCCNXM` boot, vendor_boot, vendor_dlkm, and system_dlkm module closure is complete. Every module dependency matches strictly except `rust_binder.ko`, which is not selected by the boot inputs and differs only in Rust build-context symbols; the default C Binder path does not depend on it. Symbols, CRCs, providers, namespaces, and relevant type compatibility required by the target OTA modules are hard build gates. Full configuration, module-matrix, and ABI/KMI snapshots are still reported, but a difference from the reference snapshot is no longer rejected by itself. Any project-added module must be load-tested with the corresponding `Image` and have a complete dependency closure.
+
+Xiaomi 17 boot, functionality, and stability still require device validation, so this branch has not been formally released.
 
 ## License
 

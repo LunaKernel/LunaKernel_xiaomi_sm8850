@@ -3,11 +3,53 @@
 # init.sh - prepare pinned sources and the Linux build environment
 #
 set -euo pipefail
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+export GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat
+unset GIT_NO_LAZY_FETCH
 
 die() { printf '[FAIL] %s\n' "$1" >&2; exit 1; }
 log_info() { printf '[INFO] %s\n' "$1"; }
 log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
+
+reject_git_environment_overrides() {
+    local name
+    while IFS= read -r name; do
+        case "${name}" in
+            GIT_CONFIG_GLOBAL)
+                [ "${!name}" = "/dev/null" ] || die "Git 全局配置隔离值异常"
+                ;;
+            GIT_CONFIG_COUNT)
+                [ "${!name}" = "1" ] || die "Git 命令配置数量异常"
+                ;;
+            GIT_CONFIG_KEY_0)
+                [ "${!name}" = "core.hooksPath" ] || die "Git 命令配置键异常"
+                ;;
+            GIT_CONFIG_VALUE_0)
+                [ "${!name}" = "/dev/null" ] || die "Git hooks 隔离值异常"
+                ;;
+            GIT_CONFIG_NOSYSTEM|GIT_NO_REPLACE_OBJECTS)
+                [ "${!name}" = "1" ] || die "Git 对象替换隔离值异常"
+                ;;
+            GIT_PAGER)
+                [ "${!name}" = "cat" ] || die "Git pager 隔离值异常"
+                ;;
+            GIT_*) die "拒绝 Git 环境覆盖: ${name}" ;;
+        esac
+    done < <(compgen -e)
+}
+reject_git_environment_overrides
+
+git_network() {
+    command git \
+        -c core.hooksPath=/dev/null \
+        -c credential.helper= \
+        -c credential.interactive=false \
+        -c http.proactiveAuth=none \
+        -c http.version=HTTP/1.1 \
+        "$@"
+}
 
 load_env_file() {
     local env_file="$1"
@@ -17,11 +59,52 @@ load_env_file() {
     set -a
     . "${env_file}"
     [ "${had_allexport}" = "1" ] || set +a
+    reject_git_environment_overrides
 }
 
 sanitize_path_component() { printf '%s' "$1" | LC_ALL=C tr -cs 'A-Za-z0-9._-' '_'; }
 resolve_workspace_path() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${HOST_WORKSPACE_DIR}" "$1" ;; esac; }
 normalize_git_url() { printf '%s' "$1" | sed -e 's#/$##' -e 's#\.git$##'; }
+
+reject_git_object_overrides() {
+    local label="$1" repo_dir="$2" git_dir replace_refs unexpected_config
+    local hooks_path is_bare top_level
+    git_dir="$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null)" || \
+        die "${label} 不是 Git 仓库"
+    replace_refs="$(git -C "${repo_dir}" for-each-ref --format='%(refname)' refs/replace/)"
+    [ -z "${replace_refs}" ] || die "${label} 存在 refs/replace 对象替换:\n${replace_refs}"
+    [ ! -s "${git_dir}/info/grafts" ] || die "${label} 存在 info/grafts 对象替换"
+    [ ! -s "${git_dir}/info/attributes" ] || die "${label} 存在 info/attributes 工作树过滤覆盖"
+    unexpected_config="$(git -C "${repo_dir}" config --name-only --list | LC_ALL=C sort -u | awk '
+        /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|hookspath|sparsecheckout|sparsecheckoutcone|ignorecase|precomposeunicode)$/ { next }
+        /^extensions\.worktreeconfig$/ { next }
+        /^remote\.origin\.(url|fetch|promisor|partialclonefilter|tagopt)$/ { next }
+        /^branch\..+\.(remote|merge)$/ { next }
+        /^(fetch|transfer)\.fsckobjects$/ { next }
+        /^backport\.[a-z0-9.]+$/ { next }
+        { print }
+    ')"
+    [ -z "${unexpected_config}" ] || \
+        die "${label} 存在非白名单 Git 配置:\n${unexpected_config}"
+    hooks_path="$(git -C "${repo_dir}" config --path --get core.hooksPath 2>/dev/null || true)"
+    [ -z "${hooks_path}" ] || [ "${hooks_path}" = "/dev/null" ] || \
+        die "${label} 存在非隔离 Git hooks 路径: ${hooks_path}"
+    is_bare="$(git -C "${repo_dir}" rev-parse --is-bare-repository)"
+    if [ "${is_bare}" = "false" ]; then
+        top_level="$(git -C "${repo_dir}" rev-parse --show-toplevel)"
+        [ "$(realpath -e "${repo_dir}")" = "$(realpath -e "${top_level}")" ] || \
+            die "${label} Git worktree 与预期目录不一致: ${top_level}"
+    fi
+}
+
+verify_no_hidden_index_flags() {
+    local label="$1" repo_dir="$2" hidden
+    hidden="$(git -C "${repo_dir}" ls-files -v | LC_ALL=C awk '
+        substr($0, 1, 1) == "S" || substr($0, 1, 1) ~ /[a-z]/ { print }
+    ')"
+    [ -z "${hidden}" ] || \
+        die "${label} 存在 skip-worktree/assume-unchanged 标记，无法证明源码状态:\n${hidden}"
+}
 
 tree_sha256() {
     local root="$1" special path digest
@@ -51,7 +134,7 @@ append_orbenv_var() {
 
 prepare_orb_passthrough_env() {
     local var
-    for var in NO_COLOR USE_CCACHE CCACHE_MAXSIZE CCACHE_COMPRESS CCACHE_COMPILERCHECK CCACHE_NOHASHDIR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
+    for var in NO_COLOR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
         [ -z "${!var:-}" ] || append_orbenv_var "${var}"
     done
     export ORBENV
@@ -74,8 +157,9 @@ sync_control_files_to_orb() {
     [ ! -f "${HOST_WORKSPACE_DIR}/.env" ] || items="${items} .env"
     [ ! -d "${HOST_WORKSPACE_DIR}/ak3_template" ] || items="${items} ak3_template"
     [ ! -d "${HOST_WORKSPACE_DIR}/patches" ] || items="${items} patches"
+    [ ! -d "${HOST_WORKSPACE_DIR}/tools" ] || items="${items} tools"
     [ ! -d "${HOST_WORKSPACE_DIR}/userspace" ] || items="${items} userspace"
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; mkdir -p \"\$target\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
+    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; mkdir -p \"\$target\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/tools\" \"\$target/userspace\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
 }
 
 run_in_orb_if_needed() {
@@ -101,18 +185,21 @@ ensure_repo() {
         [ ! -e "${target_dir}" ] || die "${label} 路径存在但不是 Git 仓库: ${target_dir}"
         mkdir -p "$(dirname "${target_dir}")"
         log_step "克隆 ${label}: ${repo_url} (${branch})"
-        git clone --depth 1 --single-branch --branch "${branch}" "${repo_url}" "${target_dir}"
+        git_network clone --depth 1 --single-branch \
+            --branch "${branch}" "${repo_url}" "${target_dir}"
     fi
+    reject_git_object_overrides "${label}" "${target_dir}"
+    verify_no_hidden_index_flags "${label}" "${target_dir}"
     actual_url="$(git -C "${target_dir}" remote get-url origin 2>/dev/null || true)"
     [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${repo_url}")" ] || die "${label} remote 不匹配: ${actual_url}"
     if ! git -C "${target_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
         log_step "获取 ${label} 固定 commit: ${commit}"
-        git -C "${target_dir}" fetch --depth 1 origin "${commit}"
+        git_network -C "${target_dir}" fetch --depth 1 origin "${commit}"
     fi
-    head="$(git -C "${target_dir}" rev-parse HEAD)"
+    head="$(git -C "${target_dir}" rev-parse HEAD 2>/dev/null || true)"
     if [ "${head}" != "${commit}" ]; then
         [ -z "$(git -C "${target_dir}" status --porcelain)" ] || die "${label} 有未提交修改，不能切换固定提交"
-        git -C "${target_dir}" checkout --detach "${commit}"
+        git_network -C "${target_dir}" checkout --detach "${commit}"
     fi
     if [ -n "$(git -C "${target_dir}" status --porcelain)" ]; then
         [ "${allow_dirty}" = "1" ] || die "${label} 工作树不干净: ${target_dir}"
@@ -133,6 +220,7 @@ ensure_audit_repo() {
         git -C "${target_dir}" config remote.origin.promisor true
         git -C "${target_dir}" config remote.origin.partialclonefilter blob:none
     fi
+    reject_git_object_overrides "${label}" "${target_dir}"
     [ "$(git -C "${target_dir}" rev-parse --is-bare-repository)" = "true" ] || \
         die "${label} 必须是无工作树的 bare 审计仓库"
     actual_url="$(git -C "${target_dir}" remote get-url origin 2>/dev/null || true)"
@@ -145,7 +233,7 @@ fetch_audit_ref() {
     local target_ref="refs/backport-audit/${ref_name}"
     if ! env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
         log_step "获取 ${label} 固定审计对象: ${commit}"
-        git -C "${repo_dir}" fetch --filter=blob:none --no-tags \
+        git_network -C "${repo_dir}" fetch --filter=blob:none --no-tags \
             --shallow-since="${shallow_since}" origin "${commit}"
     fi
     env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null || \
@@ -167,10 +255,36 @@ hydrate_audit_history() {
     )"
     [ "$(git -C "${repo_dir}" config --get backport.auditHydratedIdentity 2>/dev/null || true)" = "${identity}" ] && return
     log_step "水合 ${label} 固定浅历史，确保审计阶段完全离线"
-    git -C "${repo_dir}" fetch --refetch --no-tags --filter=blob:limit=1g \
+    git_network -C "${repo_dir}" fetch --no-tags --filter=blob:none \
         --shallow-since="${shallow_since}" origin "$@"
     git -C "${repo_dir}" config backport.auditHydratedIdentity "${identity}"
     git -C "${repo_dir}" config --unset-all backport.auditHydratedSnapshot 2>/dev/null || true
+}
+
+hydrate_audit_patches() {
+    local label="$1" repo_dir="$2" commit
+    shift 2
+    [ "$#" -gt 0 ] || return
+    log_step "水合 ${label} 已选补丁对象，确保 patch/build 阶段不联网"
+    for commit in "$@"; do
+        git_network -C "${repo_dir}" -c log.mailmap=false show --format= "${commit}" >/dev/null
+        env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" -c log.mailmap=false \
+            show --format= "${commit}" >/dev/null || \
+            die "${label} 补丁对象未完整水合: ${commit}"
+    done
+}
+
+hydrate_audit_blob() {
+    local label="$1" repo_dir="$2" commit="$3" path="$4" expected_sha256="$5"
+    local actual_sha256
+    actual_sha256="$(git_network -C "${repo_dir}" show "${commit}:${path}" | sha256sum | awk '{ print $1 }')"
+    [ "${actual_sha256}" = "${expected_sha256}" ] || \
+        die "${label} SHA-256 不匹配: ${actual_sha256}"
+    actual_sha256="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" \
+        show "${commit}:${path}" | sha256sum | awk '{ print $1 }')"
+    [ "${actual_sha256}" = "${expected_sha256}" ] || \
+        die "${label} 未完整离线水合"
+    log_success "${label} 已固定并可离线读取"
 }
 
 hydrate_audit_commit_history() {
@@ -185,7 +299,7 @@ hydrate_audit_commit_history() {
     )"
     [ "$(git -C "${repo_dir}" config --get backport.auditCommitHistoryIdentity 2>/dev/null || true)" = "${identity}" ] && return
     log_step "水合 ${label} 固定提交与 tree 历史，确保离线漏斗完整"
-    git -C "${repo_dir}" fetch --refetch --no-tags --filter=blob:none \
+    git_network -C "${repo_dir}" fetch --no-tags --filter=blob:none \
         --shallow-since="${shallow_since}" origin "$@"
     git -C "${repo_dir}" config backport.auditCommitHistoryIdentity "${identity}"
 }
@@ -220,14 +334,41 @@ verify_aosp_backport_source() {
     log_success "${label} 官方来源已固定"
 }
 
+verify_kernelsu_backport_source() {
+    local label="$1" commit="$2" commit_date="$3" patch_id="$4" expected_paths="$5"
+    local actual_date actual_patch_id actual_paths
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${KSU_COMMIT}" "${commit}" || die "${label} 不在 KernelSU ${KSU_REF} 之后"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${commit}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
+        die "${label} 不属于固定 KernelSU main 快照"
+    actual_date="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
+        -C "${KSU_DIR}" show -s --format=%cs "${commit}")"
+    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
+    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
+        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
+    [ "${actual_paths}" = "${expected_paths}" ] || die "${label} 触及非预期路径: ${actual_paths}"
+    actual_patch_id="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
+        -C "${KSU_DIR}" show --format= "${commit}" |
+        git patch-id --stable | awk '{ print $1 }')"
+    [ "${actual_patch_id}" = "${patch_id}" ] || die "${label} patch-id 不匹配"
+    log_success "${label} 官方来源已固定"
+}
+
 verify_source_baseline() {
-    local version tracked_files xiaomi_ack_commit xiaomi_ack_tag
+    local branch kmi_generation version tracked_files xiaomi_ack_commit xiaomi_ack_tag
     version="$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")"
-    [ "${version}" = "6.12.23" ] || die "GKI common 版本不是 6.12.23: ${version}"
+    [ "${version}" = "6.12.69" ] || die "GKI common 版本不是 6.12.69: ${version}"
+    branch="$(sed -n 's/^BRANCH=//p' "${COMMON_DIR}/build.config.constants")"
+    kmi_generation="$(sed -n 's/^KMI_GENERATION=//p' "${COMMON_DIR}/build.config.constants")"
+    [ "${branch}" = "android16-6.12" ] || die "GKI common BRANCH 异常: ${branch}"
+    [ "${kmi_generation}" = "6" ] || die "GKI common KMI generation 不是 6: ${kmi_generation}"
     tracked_files="$(git -C "${COMMON_DIR}" ls-files | wc -l | tr -d ' ')"
     [ "${tracked_files}" -ge 80000 ] || die "GKI common 文件不完整: ${tracked_files}"
     [ -s "${COMMON_DIR}/gki/aarch64/symbols/qcom" ] || die "缺少 QCOM KMI symbol list"
     [ -s "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" ] || die "缺少 Xiaomi KMI symbol list"
+    [ "$(sha256sum "${COMMON_DIR}/gki/aarch64/abi.stg" | awk '{ print $1 }')" = \
+      "${COMMON_ABI_STG_SHA256}" ] || die "GKI common 官方 abi.stg 身份不匹配"
     [ -f "${SOC_DIR}/configs/popsicle_perf.bzl" ] || die "小米 soc-repo 缺少 popsicle 配置"
     [ -f "${SOC_DIR}/Kconfig.msm" ] || die "小米 soc-repo 缺少 Kconfig.msm"
     xiaomi_ack_commit="$(sed -n '1p' "${SOC_DIR}/android/ACK_SHA")"
@@ -236,16 +377,140 @@ verify_source_baseline() {
     [ "${xiaomi_ack_tag}" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化: ${xiaomi_ack_tag}"
 }
 
+verify_toolchain_identity() {
+    local rustc_verbose
+    rustc_verbose="$("${CI_TOOLCHAIN_DIR}/bin/rustc" --version --verbose)"
+    printf '%s\n' "${rustc_verbose}" | grep -Fqx "commit-hash: ${CI_RUSTC_COMMIT_HASH}" || \
+        die "Rust 编译器 commit-hash 不匹配"
+    grep -aFq "Android Rust Toolchain version ${CI_RUST_TOOLCHAIN_VERSION}" \
+        "${CI_TOOLCHAIN_DIR}/bin/rustc" || \
+        die "Rust 工具链版本标识不匹配"
+}
+
+prepare_fixed_git_subtree() {
+    local label="$1" cache_dir="$2" repo="$3" commit="$4" subtree="$5"
+    local expected_tree="$6" expected_leaf="$7"
+    shift 7
+    local sparse_paths=("$@")
+    local payload_dir actual_url actual_commit actual_tree actual_leaf path
+
+    [ "${#sparse_paths[@]}" -gt 0 ] || die "${label} 缺少稀疏检出路径"
+    payload_dir="${cache_dir}/${subtree}"
+    mkdir -p "${cache_dir}"
+    if [ ! -d "${cache_dir}/.git" ]; then
+        [ -z "$(find "${cache_dir}" -mindepth 1 -print -quit)" ] || \
+            die "${label} Git 缓存目录不是空目录: ${cache_dir}"
+        git -c core.hooksPath=/dev/null init -q "${cache_dir}" || \
+            die "初始化 ${label} Git 缓存失败"
+        git -C "${cache_dir}" remote add origin "${repo}"
+    fi
+    reject_git_object_overrides "${label}" "${cache_dir}"
+    actual_url="$(git -C "${cache_dir}" remote get-url origin 2>/dev/null || true)"
+    [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${repo}")" ] || \
+        die "${label} remote 不匹配: ${actual_url}"
+    git -C "${cache_dir}" config core.hooksPath /dev/null
+    git -C "${cache_dir}" config fetch.fsckObjects true
+    git -C "${cache_dir}" config transfer.fsckObjects true
+    git -C "${cache_dir}" config remote.origin.promisor true
+    git -C "${cache_dir}" config remote.origin.partialclonefilter blob:none
+
+    log_step "获取固定 ${label} 提交与对象树"
+    git_network -c fetch.fsckObjects=true \
+        -C "${cache_dir}" fetch --no-tags --filter=blob:none origin "${commit}" || \
+        die "获取固定 ${label} 提交失败"
+    actual_commit="$(git -C "${cache_dir}" rev-parse FETCH_HEAD^{commit})"
+    [ "${actual_commit}" = "${commit}" ] || die "${label} commit 不匹配: ${actual_commit}"
+    actual_tree="$(git -C "${cache_dir}" rev-parse "${commit}:${subtree}")"
+    [ "${actual_tree}" = "${expected_tree}" ] || \
+        die "${label} 目标 Git tree 不匹配: ${actual_tree}"
+    if git -C "${cache_dir}" rev-parse --verify HEAD >/dev/null 2>&1; then
+        [ "$(git -C "${cache_dir}" rev-parse HEAD)" = "${commit}" ] || \
+            die "${label} checkout commit 不匹配"
+        [ -z "$(git -C "${cache_dir}" status --porcelain --untracked-files=all)" ] || \
+            die "${label} checkout 存在本地修改"
+    fi
+
+    git_network -C "${cache_dir}" sparse-checkout init --cone
+    git_network -C "${cache_dir}" sparse-checkout set "${sparse_paths[0]}"
+    git_network -C "${cache_dir}" checkout -q --detach "${commit}" || \
+        die "检出固定 ${label} 提交失败"
+    for path in "${sparse_paths[@]:1}"; do
+        log_step "水合 ${label} 子树: ${path#${subtree}/}"
+        git_network -C "${cache_dir}" sparse-checkout add "${path}" || \
+            die "水合 ${label} 子树失败: ${path}"
+    done
+    git_network -C "${cache_dir}" sparse-checkout set "${subtree}"
+    [ "$(git -C "${cache_dir}" rev-parse HEAD)" = "${commit}" ] || \
+        die "${label} checkout commit 发生变化"
+    [ -z "$(git -C "${cache_dir}" status --porcelain --untracked-files=all)" ] || \
+        die "${label} checkout 存在本地修改"
+    actual_leaf="$(tree_sha256 "${payload_dir}")"
+    [ "${actual_leaf}" = "${expected_leaf}" ] || \
+        die "${label} 完整叶树 SHA-256 不匹配: ${actual_leaf}"
+    PREPARED_GIT_PAYLOAD_DIR="${payload_dir}"
+    log_success "固定 ${label} 对象树完整性校验通过"
+}
+
+prepare_rust_source_tree() {
+    local cache_dir="${ENVIRONMENT_DIR}/toolchain/aosp-rust-${AOSP_RUST_COMMIT}"
+    local paths=(
+        "${CI_RUST_SUBTREE}/bin"
+        "${CI_RUST_SUBTREE}/etc"
+        "${CI_RUST_SUBTREE}/lib64"
+        "${CI_RUST_SUBTREE}/libexec"
+        "${CI_RUST_SUBTREE}/share"
+        "${CI_RUST_SUBTREE}/src"
+        "${CI_RUST_SUBTREE}/lib/rustlib/aarch64-linux-android"
+        "${CI_RUST_SUBTREE}/lib/rustlib/aarch64-unknown-none"
+        "${CI_RUST_SUBTREE}/lib/rustlib/aarch64-unknown-uefi"
+        "${CI_RUST_SUBTREE}/lib/rustlib/armv7-linux-androideabi"
+        "${CI_RUST_SUBTREE}/lib/rustlib/armv7a-none-eabi"
+        "${CI_RUST_SUBTREE}/lib/rustlib/etc"
+        "${CI_RUST_SUBTREE}/lib/rustlib/i686-linux-android"
+        "${CI_RUST_SUBTREE}/lib/rustlib/i686-unknown-linux-gnu"
+        "${CI_RUST_SUBTREE}/lib/rustlib/i686-unknown-linux-musl"
+        "${CI_RUST_SUBTREE}/lib/rustlib/i686-unknown-uefi"
+        "${CI_RUST_SUBTREE}/lib/rustlib/riscv32i-unknown-none-elf"
+        "${CI_RUST_SUBTREE}/lib/rustlib/riscv32imc-unknown-none-elf"
+        "${CI_RUST_SUBTREE}/lib/rustlib/riscv64-linux-android"
+        "${CI_RUST_SUBTREE}/lib/rustlib/src"
+        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-linux-android"
+        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-pc-windows-gnu"
+        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-linux-gnu"
+        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-linux-musl"
+        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-uefi"
+    )
+    prepare_fixed_git_subtree "AOSP Rust 工具链" "${cache_dir}" \
+        "${AOSP_RUST_REPO}" "${AOSP_RUST_COMMIT}" "${CI_RUST_SUBTREE}" \
+        "${CI_RUST_GIT_TREE}" "${CI_RUST_LEAF_TREE_SHA256}" "${paths[@]}"
+    CI_RUST_PAYLOAD_DIR="${PREPARED_GIT_PAYLOAD_DIR}"
+}
+
+prepare_build_tools_source_tree() {
+    local cache_dir="${ENVIRONMENT_DIR}/toolchain/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}"
+    local paths=(
+        "${CI_BUILD_TOOLS_SUBTREE}/bin"
+        "${CI_BUILD_TOOLS_SUBTREE}/include"
+        "${CI_BUILD_TOOLS_SUBTREE}/lib64"
+        "${CI_BUILD_TOOLS_SUBTREE}/share"
+    )
+    prepare_fixed_git_subtree "AOSP kernel build-tools" "${cache_dir}" \
+        "${AOSP_BUILD_TOOLS_REPO}" "${AOSP_BUILD_TOOLS_COMMIT}" \
+        "${CI_BUILD_TOOLS_SUBTREE}" "${CI_BUILD_TOOLS_GIT_TREE}" \
+        "${CI_BUILD_TOOLS_LEAF_TREE_SHA256}" "${paths[@]}"
+    CI_BUILD_TOOLS_PAYLOAD_DIR="${PREPARED_GIT_PAYLOAD_DIR}"
+}
+
 setup_toolchain() {
     local files=(
         aosp-clang-r536225.tar.gz
-        aosp-rust-1.82.0.tar.gz
-        aosp-kernel-build-tools-linux-x86.tar.gz
         bindgen.tar.xz
         busybox-1.35.0-x86_64-linux-musl
     )
     local file expected actual marker marker_value staging backup rust_bin compiler
     mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
+    prepare_rust_source_tree
+    prepare_build_tools_source_tree
     for file in "${files[@]}"; do
         expected="${TC_SHA256[$file]:-}"
         [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || die "工具链归档缺少固定 SHA-256: ${file}"
@@ -266,18 +531,19 @@ setup_toolchain() {
         actual="$(tree_sha256 "${CI_TOOLCHAIN_DIR}")"
         if [ "${actual}" = "${CI_TOOLCHAIN_TREE_SHA256}" ]; then
             printf '%s\n' "${CI_TOOLCHAIN_TREE_SHA256}" > "${marker}"
+            verify_toolchain_identity
             log_success "固定工具链安装树完整性校验通过"
             return
         fi
         marker_value="$(sed -n '1p' "${marker}" 2>/dev/null || true)"
         [ "${marker_value}" != "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
             die "固定工具链安装树在初始化后被修改: ${actual}"
-        log_step "工具链 pin 已变化或缺少旧树指纹，使用已校验归档重建"
+        log_step "工具链 pin 已变化或缺少旧树指纹，使用已校验来源重建"
     fi
 
     staging="$(mktemp -d "$(dirname "${CI_TOOLCHAIN_DIR}")/.ci-toolchain-install.XXXXXX")"
     if ! {
-        tar -xzf "${DL_DIR}/aosp-clang-r536225.tar.gz" -C "${staging}" &&
+        tar --no-same-owner -xzf "${DL_DIR}/aosp-clang-r536225.tar.gz" -C "${staging}" &&
         rm -rf -- \
             "${staging}/BUILD.bazel" \
             "${staging}/manifest_14043575.xml" \
@@ -300,10 +566,9 @@ setup_toolchain() {
             \( -type f -o -type l \) \
             \( -name '*-i386.*' -o -name '*-i686-android*' -o -name '*-riscv64-android*' \) \
             -delete &&
-        tar -xzf "${DL_DIR}/aosp-rust-1.82.0.tar.gz" -C "${staging}" &&
+        cp -a "${CI_RUST_PAYLOAD_DIR}/." "${staging}/" &&
         rm -f -- \
             "${staging}/BUILD.bazel" \
-            "${staging}/manifest_12909517.xml" \
             "${staging}/lib/rustlib/install.log" &&
         find "${staging}/lib/rustlib" -mindepth 1 -maxdepth 1 -type d \
             ! -name aarch64-linux-android \
@@ -317,12 +582,11 @@ setup_toolchain() {
             ! -name manifest-rust-std-x86_64-unknown-linux-gnu \
             -delete &&
         mkdir -p "${staging}/build-tools" &&
-        tar -xzf "${DL_DIR}/aosp-kernel-build-tools-linux-x86.tar.gz" \
-            -C "${staging}/build-tools" &&
+        cp -a "${CI_BUILD_TOOLS_PAYLOAD_DIR}/." "${staging}/build-tools/" &&
         find "${staging}" -type d -exec chmod 0775 {} + &&
         find "${staging}" -type f -perm /111 -exec chmod 0775 {} + &&
         find "${staging}" -type f ! -perm /111 -exec chmod 0664 {} + &&
-        tar -xJf "${DL_DIR}/bindgen.tar.xz" -C "${staging}" &&
+        tar --no-same-owner -xJf "${DL_DIR}/bindgen.tar.xz" -C "${staging}" &&
         cp -f "${staging}/bindgen-cli-x86_64-unknown-linux-gnu/bindgen" \
             "${staging}/bin/bindgen" &&
         chmod 0755 "${staging}/bin/bindgen";
@@ -362,6 +626,7 @@ setup_toolchain() {
     fi
     [ ! -d "${backup}" ] || rm -rf -- "${backup}"
     printf '%s\n' "${CI_TOOLCHAIN_TREE_SHA256}" > "${marker}"
+    verify_toolchain_identity
     log_success "固定工具链准备完成: $("${CI_TOOLCHAIN_DIR}/bin/clang" --version | sed -n '1p')"
 }
 
@@ -509,7 +774,12 @@ prepare_android_ndk() {
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+[ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
+[ "${ENABLE_KERNELSU:-0}" = "1" ] || \
+    die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
+[ "${ENABLE_SUSFS:-0}" = "1" ] || \
+    die "Luna 固定构建只支持 ENABLE_SUSFS=1；拒绝未审计的第二套产品矩阵"
 
 WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
 WORKSPACE_NAME="${WORKSPACE_NAME:-workspace}"
@@ -523,9 +793,12 @@ KERNEL_BRANCH="${KERNEL_BRANCH:-popsicle-w-oss}"
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2025-06_r57}"
-COMMON_COMMIT="${COMMON_COMMIT:-a82fc641d6d2c687802606190c0a8c33a4242201}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.23_r57}")"
+COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-03_r63}"
+COMMON_COMMIT="${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
+COMMON_ABI_STG_SHA256="${COMMON_ABI_STG_SHA256:-f919ee47d380b2eb49e9f1f4b0844fcacf1bff3bf7f5307a402430d678635ad8}"
+ABI_BASELINE_COMMIT="${ABI_BASELINE_COMMIT:-160343479eb972500e11fe76957fdb41b1772f97}"
+ABI_BASELINE_STG_SHA256="${ABI_BASELINE_STG_SHA256:-f9802b066d9ffd4a0363ee57615e9af34360a84b3427549d9398de3eadb54691}"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-v3.2.5}"
@@ -536,6 +809,20 @@ KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b
 KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.2.5_32525-release.apk}"
 KSU_MANAGER_URL="${KSU_MANAGER_URL:-https://github.com/tiann/KernelSU/releases/download/v3.2.5/KernelSU_v3.2.5_32525-release.apk}"
 KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-1417081413bf7ab1de8e440ecbcb62685037c8f28f048f0f8b79e305b31ab916}"
+ENABLE_KSU_POST_RELEASE_FIXES="${ENABLE_KSU_POST_RELEASE_FIXES:-0}"
+KSU_POST_RELEASE_AUDIT_COMMIT="${KSU_POST_RELEASE_AUDIT_COMMIT:-62e88ca93df8affff54064e74948a37945c1865a}"
+KSU_ALLOCATION_FAILURE_COMMIT="${KSU_ALLOCATION_FAILURE_COMMIT:-e9e5b616a433b32c286dbf3f6708afd0c5ef7485}"
+KSU_ALLOCATION_FAILURE_DATE="${KSU_ALLOCATION_FAILURE_DATE:-2026-07-19}"
+KSU_ALLOCATION_FAILURE_PATCH_ID="${KSU_ALLOCATION_FAILURE_PATCH_ID:-2abefc35882130184b6399f60481c66d4261bb2b}"
+KSU_APK_SHORT_READ_COMMIT="${KSU_APK_SHORT_READ_COMMIT:-be53d75fd360a9f75231c58970bee1f20a870a4e}"
+KSU_APK_SHORT_READ_DATE="${KSU_APK_SHORT_READ_DATE:-2026-07-27}"
+KSU_APK_SHORT_READ_PATCH_ID="${KSU_APK_SHORT_READ_PATCH_ID:-1c906b1d21e4a79efaa307aa94fd73c445b09e07}"
+KSU_APK_AOSP_PARSER_COMMIT="${KSU_APK_AOSP_PARSER_COMMIT:-e6cc0ef7b0cf7a96af553dedd3282eb3f8ad8d03}"
+KSU_APK_AOSP_PARSER_DATE="${KSU_APK_AOSP_PARSER_DATE:-2026-08-07}"
+KSU_APK_AOSP_PARSER_PATCH_ID="${KSU_APK_AOSP_PARSER_PATCH_ID:-46da4ee6a88ea901ecfd58ec3a255f03b302312a}"
+KSU_APK_EOCD_VALIDATION_COMMIT="${KSU_APK_EOCD_VALIDATION_COMMIT:-aab67974f1210cad94880ce1fdc14cf63f6e30e0}"
+KSU_APK_EOCD_VALIDATION_DATE="${KSU_APK_EOCD_VALIDATION_DATE:-2026-08-11}"
+KSU_APK_EOCD_VALIDATION_PATCH_ID="${KSU_APK_EOCD_VALIDATION_PATCH_ID:-74e074cec2eb4e43467619d3dbc952e31769b39c}"
 MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISK_APK_URL="${MAGISK_APK_URL:-https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk}"
@@ -544,31 +831,22 @@ MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf79
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-d9a486dc7197800149c31fe35a77997ea0ddaa83}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-0e43d12a6cb5e6b2814c8214466784285d64ebec}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
 SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-ef69c8322232340f43c78c7fc491b32cb9f7da86}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
-BBG_COMMIT="${BBG_COMMIT:-1c664957da7539de860503940ee73c7447f1dfaf}"
+BBG_COMMIT="${BBG_COMMIT:-a54e0dc6cf0aff4dd87fec49644a02d2eb612905}"
 BBG_DIR="$(resolve_workspace_path "${BBG_SOURCE_DIR:-sources/baseband_guard}")"
-ENABLE_ADIOS="${ENABLE_ADIOS:-0}"
-ADIOS_REPO="${ADIOS_REPO:-https://github.com/firelzrd/adios.git}"
-ADIOS_REF="${ADIOS_REF:-main}"
-ADIOS_COMMIT="${ADIOS_COMMIT:-08bf078aac99075a0bef73c2b2497574a82e4c41}"
-ADIOS_DIR="$(resolve_workspace_path "${ADIOS_SOURCE_DIR:-sources/adios}")"
-ADIOS_STABLE_PATCH="${ADIOS_STABLE_PATCH:-patches/stable/0001-linux6.12.44-ADIOS-3.2.0.patch}"
-ADIOS_FORCE_DEFAULT_PATCH="${ADIOS_FORCE_DEFAULT_PATCH:-patches/0002-Make-ADIOS-the-Default-I-O-scheduler.patch}"
-ENABLE_TCP_BRUTAL="${ENABLE_TCP_BRUTAL:-0}"
-TCP_BRUTAL_REPO="${TCP_BRUTAL_REPO:-https://github.com/apernet/tcp-brutal.git}"
-TCP_BRUTAL_REF="${TCP_BRUTAL_REF:-master}"
-TCP_BRUTAL_COMMIT="${TCP_BRUTAL_COMMIT:-f11e52d88c7ad2285896de018c2d96d4687f0ab6}"
-TCP_BRUTAL_DIR="$(resolve_workspace_path "${TCP_BRUTAL_SOURCE_DIR:-sources/tcp_brutal}")"
-TCP_BRUTAL_SOURCE_SHA256="${TCP_BRUTAL_SOURCE_SHA256:-171d775cc494f9378c89772ef68ad8001e093f701a35d1566ec9c7e459cb81c0}"
 ENABLE_BACKPORT_AUDIT="${ENABLE_BACKPORT_AUDIT:-0}"
 BACKPORT_AUDIT_SNAPSHOT="${BACKPORT_AUDIT_SNAPSHOT:-}"
 AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 AOSP_BACKPORT_AUDIT_REFS="${AOSP_BACKPORT_AUDIT_REFS:-}"
+ANDROID17_ABI_CLASSIFICATION_REF="${ANDROID17_ABI_CLASSIFICATION_REF:-}"
+ANDROID17_ABI_CLASSIFICATION_COMMIT="${ANDROID17_ABI_CLASSIFICATION_COMMIT:-}"
+ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256="${ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256:-}"
+ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256="${ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256:-}"
 LINUX_STABLE_AUDIT_REPO="${LINUX_STABLE_AUDIT_REPO:-https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git}"
 LINUX_STABLE_AUDIT_REF="${LINUX_STABLE_AUDIT_REF:-linux-6.12.y}"
 LINUX_STABLE_AUDIT_BASE_COMMIT="${LINUX_STABLE_AUDIT_BASE_COMMIT:-}"
@@ -578,11 +856,8 @@ LINUX_MAINLINE_AUDIT_REPO="${LINUX_MAINLINE_AUDIT_REPO:-https://git.kernel.org/p
 LINUX_MAINLINE_AUDIT_BASE_COMMIT="${LINUX_MAINLINE_AUDIT_BASE_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
-ENABLE_F2FS_OPEN_FAST_PATH="${ENABLE_F2FS_OPEN_FAST_PATH:-0}"
-F2FS_OPEN_FAST_PATH_AOSP_REF="${F2FS_OPEN_FAST_PATH_AOSP_REF:-android16-6.12}"
-F2FS_OPEN_FAST_PATH_COMMIT="${F2FS_OPEN_FAST_PATH_COMMIT:-f6e898257b3d6a3a52d4bff5cec6237eebe1ce7d}"
-F2FS_OPEN_FAST_PATH_COMMIT_DATE="${F2FS_OPEN_FAST_PATH_COMMIT_DATE:-2025-06-12}"
-F2FS_OPEN_FAST_PATH_PATCH_ID="${F2FS_OPEN_FAST_PATH_PATCH_ID:-685b528beff90bac24b8f54e12238442363a80df}"
+R63_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/r63_backports.sh"
+R63_INDEPENDENT_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh"
 ENABLE_MEMCG_RSTAT_FAST_PATH="${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}"
 MEMCG_RSTAT_FAST_PATH_AOSP_REF="${MEMCG_RSTAT_FAST_PATH_AOSP_REF:-android-mainline}"
 MEMCG_RSTAT_FAST_PATH_COMMIT="${MEMCG_RSTAT_FAST_PATH_COMMIT:-60cada258dfe3694e15c4539259173c37bd5f1fe}"
@@ -593,56 +868,11 @@ TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF="${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF:-androi
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE:-2025-10-27}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX="${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX:-0}"
-F2FS_MERGE_PAGE_BIO_UAF_FIX_AOSP_REF="${F2FS_MERGE_PAGE_BIO_UAF_FIX_AOSP_REF:-android16-6.12-2025-09}"
-F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT="${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT:-f2f676a2f21637b39f7f2be2f6137c1d9570d3e7}"
-F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT_DATE="${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT_DATE:-2025-10-31}"
-F2FS_MERGE_PAGE_BIO_UAF_FIX_PATCH_ID="${F2FS_MERGE_PAGE_BIO_UAF_FIX_PATCH_ID:-ae11e76a9f7b489004102506a0896e0894ae681f}"
-ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX="${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX:-0}"
-GUNYAH_CLEAN_RESOURCES_UAF_FIX_AOSP_REF="${GUNYAH_CLEAN_RESOURCES_UAF_FIX_AOSP_REF:-android16-6.12-lts}"
-GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT="${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT:-e5a17398e40d988ce7e9c79259eb8b08b5377b43}"
-GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT_DATE="${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT_DATE:-2025-08-07}"
-GUNYAH_CLEAN_RESOURCES_UAF_FIX_PATCH_ID="${GUNYAH_CLEAN_RESOURCES_UAF_FIX_PATCH_ID:-b422a66e01ad0e4046dedafc81785fc8b4a9ff57}"
 ENABLE_IDLETIMER_DESTROY_UAF_FIX="${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}"
 IDLETIMER_DESTROY_UAF_FIX_AOSP_REF="${IDLETIMER_DESTROY_UAF_FIX_AOSP_REF:-android16-6.12-lts}"
 IDLETIMER_DESTROY_UAF_FIX_COMMIT="${IDLETIMER_DESTROY_UAF_FIX_COMMIT:-9317fe019b5be27e888f02629a3de1f4d78cb1aa}"
 IDLETIMER_DESTROY_UAF_FIX_COMMIT_DATE="${IDLETIMER_DESTROY_UAF_FIX_COMMIT_DATE:-2026-04-21}"
 IDLETIMER_DESTROY_UAF_FIX_PATCH_ID="${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID:-2e6c62f1168d9eb5163373eac35801caa4d4a631}"
-ENABLE_EVENTPOLL_RCU_UAF_FIX="${ENABLE_EVENTPOLL_RCU_UAF_FIX:-0}"
-EVENTPOLL_RCU_UAF_FIX_AOSP_REF="${EVENTPOLL_RCU_UAF_FIX_AOSP_REF:-android16-6.12-lts}"
-EVENTPOLL_RCU_UAF_FIX_COMMIT="${EVENTPOLL_RCU_UAF_FIX_COMMIT:-5b1173b165421561db29f30afc7e97d940a398a9}"
-EVENTPOLL_RCU_UAF_FIX_COMMIT_DATE="${EVENTPOLL_RCU_UAF_FIX_COMMIT_DATE:-2026-04-22}"
-EVENTPOLL_RCU_UAF_FIX_PATCH_ID="${EVENTPOLL_RCU_UAF_FIX_PATCH_ID:-a5abf8e11ad85b58f2924d8bd693b8b644462f6a}"
-ENABLE_CGROUP_KERNFS_UAF_FIX="${ENABLE_CGROUP_KERNFS_UAF_FIX:-0}"
-CGROUP_KERNFS_UAF_FIX_AOSP_REF="${CGROUP_KERNFS_UAF_FIX_AOSP_REF:-android16-6.12-lts}"
-CGROUP_KERNFS_UAF_FIX_COMMIT="${CGROUP_KERNFS_UAF_FIX_COMMIT:-993047031c9fcb7f4a58389692e844f7be423cc7}"
-CGROUP_KERNFS_UAF_FIX_COMMIT_DATE="${CGROUP_KERNFS_UAF_FIX_COMMIT_DATE:-2026-02-06}"
-CGROUP_KERNFS_UAF_FIX_PATCH_ID="${CGROUP_KERNFS_UAF_FIX_PATCH_ID:-7fb683b637d0db664c6c37667692c27127a28dd1}"
-ENABLE_F2FS_SYNC_INODE_META_UAF_FIX="${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX:-0}"
-F2FS_SYNC_INODE_META_UAF_FIX_AOSP_REF="${F2FS_SYNC_INODE_META_UAF_FIX_AOSP_REF:-android16-6.12-lts}"
-F2FS_SYNC_INODE_META_UAF_FIX_COMMIT="${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT:-dea243f58a8391e76f42ad5eb59ff210519ee772}"
-F2FS_SYNC_INODE_META_UAF_FIX_COMMIT_DATE="${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT_DATE:-2025-08-15}"
-F2FS_SYNC_INODE_META_UAF_FIX_PATCH_ID="${F2FS_SYNC_INODE_META_UAF_FIX_PATCH_ID:-41eeded4f38919c5bffa8aef0c8b9b2468346b9d}"
-ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX="${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX:-0}"
-TIMER_SHUTDOWN_SYNC_RACE_FIX_AOSP_REF="${TIMER_SHUTDOWN_SYNC_RACE_FIX_AOSP_REF:-android16-6.12-lts}"
-TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT="${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT:-176725f4848376530a0f0da9023f956afcc33585}"
-TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT_DATE="${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT_DATE:-2025-12-01}"
-TIMER_SHUTDOWN_SYNC_RACE_FIX_PATCH_ID="${TIMER_SHUTDOWN_SYNC_RACE_FIX_PATCH_ID:-e528717d3d19cb12b0d9ac96781075350fdf4dae}"
-ENABLE_FUTEX_REQUEUE_PI_UAF_FIX="${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX:-0}"
-FUTEX_REQUEUE_PI_UAF_FIX_AOSP_REF="${FUTEX_REQUEUE_PI_UAF_FIX_AOSP_REF:-android16-6.12-lts}"
-FUTEX_REQUEUE_PI_UAF_FIX_COMMIT="${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT:-a170b9c0dde83312b8b58ccc91509c7c15711641}"
-FUTEX_REQUEUE_PI_UAF_FIX_COMMIT_DATE="${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT_DATE:-2025-10-02}"
-FUTEX_REQUEUE_PI_UAF_FIX_PATCH_ID="${FUTEX_REQUEUE_PI_UAF_FIX_PATCH_ID:-8a1bf4596581bd162f4acb909b7ee859ca2c7afa}"
-ENABLE_PAGE_POOL_DESTROY_RACE_FIX="${ENABLE_PAGE_POOL_DESTROY_RACE_FIX:-0}"
-PAGE_POOL_DESTROY_RACE_FIX_AOSP_REF="${PAGE_POOL_DESTROY_RACE_FIX_AOSP_REF:-android16-6.12-lts}"
-PAGE_POOL_DESTROY_RACE_FIX_COMMIT="${PAGE_POOL_DESTROY_RACE_FIX_COMMIT:-e869a85acc2e60dc554579b910826a4919d8cd98}"
-PAGE_POOL_DESTROY_RACE_FIX_COMMIT_DATE="${PAGE_POOL_DESTROY_RACE_FIX_COMMIT_DATE:-2025-06-19}"
-PAGE_POOL_DESTROY_RACE_FIX_PATCH_ID="${PAGE_POOL_DESTROY_RACE_FIX_PATCH_ID:-dad3ca58feaaae658e77c9e001250fed18853b1e}"
-ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX="${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX:-0}"
-CONNTRACK_UNCONFIRMED_RACE_FIX_AOSP_REF="${CONNTRACK_UNCONFIRMED_RACE_FIX_AOSP_REF:-android16-6.12-lts}"
-CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT="${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT:-fc38c249c622ff5e3011b8845fd49dbfd9289afc}"
-CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT_DATE="${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT_DATE:-2025-07-24}"
-CONNTRACK_UNCONFIRMED_RACE_FIX_PATCH_ID="${CONNTRACK_UNCONFIRMED_RACE_FIX_PATCH_ID:-37b80fce84a874c3917935828ffbb6b74b3a8ee6}"
 ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
 EROFS_DIR_TAIL_OOB_FIX_AOSP_REF="${EROFS_DIR_TAIL_OOB_FIX_AOSP_REF:-android16-6.12-lts}"
 EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
@@ -658,25 +888,19 @@ IPV6_MLD_UAF_FIX_AOSP_REF="${IPV6_MLD_UAF_FIX_AOSP_REF:-android-mainline}"
 IPV6_MLD_UAF_FIX_COMMIT="${IPV6_MLD_UAF_FIX_COMMIT:-791c91dc7a9dfb2457d5e29b8216a6484b9c4b40}"
 IPV6_MLD_UAF_FIX_COMMIT_DATE="${IPV6_MLD_UAF_FIX_COMMIT_DATE:-2026-06-04}"
 IPV6_MLD_UAF_FIX_PATCH_ID="${IPV6_MLD_UAF_FIX_PATCH_ID:-1358ebc3d619657f50c2f0f50f5408f60ea5b732}"
-ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX="${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX:-0}"
-RTMUTEX_WAITER_ENQUEUE_FIX_AOSP_REF="${RTMUTEX_WAITER_ENQUEUE_FIX_AOSP_REF:-android16-6.12-2026-03}"
-RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT="${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT:-202a62288cb6884f0bdcea8a8d47a1a8c4d3e143}"
-RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT_DATE="${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT_DATE:-2026-07-23}"
-RTMUTEX_WAITER_ENQUEUE_FIX_PATCH_ID="${RTMUTEX_WAITER_ENQUEUE_FIX_PATCH_ID:-0d78a126f83be68e6f97baae61550baacc3a2ecc}"
-ENABLE_STAGE5_RTMUTEX_FIX="${ENABLE_STAGE5_RTMUTEX_FIX:-0}"
-STAGE5_AOSP_SECURITY_REF="${STAGE5_AOSP_SECURITY_REF:-android16-6.12-2026-06}"
-STAGE5_RTMUTEX_FIX_COMMIT="${STAGE5_RTMUTEX_FIX_COMMIT:-e7d9bd94fbdbf9842ea6f1b6d5af45758e87e3d6}"
-STAGE5_RTMUTEX_FIX_PATCH_ID="${STAGE5_RTMUTEX_FIX_PATCH_ID:-bd48afa70647e92db0e44335fbe75d2b520671a6}"
-ENABLE_UNICODE_IGNORABLE_FIX="${ENABLE_UNICODE_IGNORABLE_FIX:-0}"
-UNICODE_FIX_COMMIT="${UNICODE_FIX_COMMIT:-425419e5b2a8c88096b8bbc61d8865600d1a91c0}"
-UNICODE_FIX_PATCH_ID="${UNICODE_FIX_PATCH_ID:-8bad10993f9d6df5a0130e8394608f4550904bbd}"
-UNICODE_FIX_UPSTREAM_COMMIT="${UNICODE_FIX_UPSTREAM_COMMIT:-5c26d2f1d3f5e4be3e196526bead29ecb139cf91}"
-UNICODE_EXT4_COMPAT_COMMIT="${UNICODE_EXT4_COMPAT_COMMIT:-aa66603ddf1b22e65992ae893c76a0224a4dd415}"
-UNICODE_EXT4_COMPAT_PATCH_ID="${UNICODE_EXT4_COMPAT_PATCH_ID:-30a2d2ee185826e104434ab83b75c546dfd87900}"
-UNICODE_F2FS_FALLBACK_COMMIT="${UNICODE_F2FS_FALLBACK_COMMIT:-79f2beb7a4f5f256928e57fd79cc194b422d2694}"
-UNICODE_F2FS_FALLBACK_PATCH_ID="${UNICODE_F2FS_FALLBACK_PATCH_ID:-c02cc596ec7a8785afd11511ee49ed043c655163}"
-UNICODE_F2FS_POLICY_COMMIT="${UNICODE_F2FS_POLICY_COMMIT:-3a1ee29cd6df3069bce8321784d065fa01d219ff}"
-UNICODE_F2FS_POLICY_PATCH_ID="${UNICODE_F2FS_POLICY_PATCH_ID:-7c165eee5689f89c2f553b6a958d11a2e72cb2e5}"
+ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX="${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}"
+IPV6_MLD_DELAYED_WORK_STABLE_COMMIT="${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-ebbebf6cee950d7f1c81990256c0eae9e62572ae}"
+IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT="${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT:-9b26518b6896a16b809b1e42986f4ebac7bccc1e}"
+IPV6_MLD_DELAYED_WORK_COMMIT_DATE="${IPV6_MLD_DELAYED_WORK_COMMIT_DATE:-2026-07-24}"
+IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID="${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID:-4fcf3ce5ec83da4c8203e344d896802035700c78}"
+IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ipv6-mld-delayed-work-uaf-6.12.69.patch}"
+IPV6_MLD_DELAYED_WORK_PATCH_SHA256="${IPV6_MLD_DELAYED_WORK_PATCH_SHA256:-7bd3339c3a5db6b1aa034585a5bb5eb53d90a0ac98775e5bdfc941547d5c1c5b}"
+IPV6_MLD_DELAYED_WORK_PATCH_ID="${IPV6_MLD_DELAYED_WORK_PATCH_ID:-8d28904741b04eefe83489706946e55a0682fe08}"
+ENABLE_KVM_COMPOUND_HEAD_PIN_FIX="${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}"
+KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF="${KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF:-android16-6.12}"
+KVM_COMPOUND_HEAD_PIN_FIX_COMMIT="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-1a138e24e292579ddcf417ed09e78df667f51396}"
+KVM_COMPOUND_HEAD_PIN_FIX_COMMIT_DATE="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT_DATE:-2026-07-31}"
+KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID="${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID:-e57c8f60ba72c69067f5f1327a5b9dd9cf956e3d}"
 ENABLE_IPSET="${ENABLE_IPSET:-0}"
 IPSET_VERSION="${IPSET_VERSION:-7.24}"
 IPSET_URL="${IPSET_URL:-https://ipset.netfilter.org/ipset-7.24.tar.bz2}"
@@ -701,46 +925,68 @@ CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225"
 DL_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225-downloads"
 SOURCE_DOWNLOAD_DIR="${ENVIRONMENT_DIR}/source-downloads"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
-CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-67da74f00a801440ca7c256b028d94e6c85bf7168fbdecab62c3710384a25d5a}"
+CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-65644bd77ed4ecde7239e3ce5a4aa53451a28c0a52b12394b88c5bd095517cc0}"
 AOSP_CLANG_COMMIT="${AOSP_CLANG_COMMIT:-77c95e8253c2c82ffd4fee92c0ad9f5ac1e8ca04}"
 CI_CLANG_URL="${CI_CLANG_URL:-https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/${AOSP_CLANG_COMMIT}/clang-r536225.tar.gz}"
 CI_CLANG_SHA256="${CI_CLANG_SHA256:-4a1e231a9bfff63f7708d956d661e1a5cbf61a6dbaa8bc20246a7e5684a8c79c}"
 AOSP_RUST_COMMIT="${AOSP_RUST_COMMIT:-5c78b1e636b2bf68d46a6980437590fddca64147}"
-CI_RUST_URL="${CI_RUST_URL:-https://android.googlesource.com/platform/prebuilts/rust/+archive/${AOSP_RUST_COMMIT}/linux-x86/1.82.0.tar.gz}"
-CI_RUST_SHA256="${CI_RUST_SHA256:-fd9a88b659172bc392ff4b70858b2b93d95f738680aa872605dcd81772e130ba}"
-AOSP_BUILD_TOOLS_COMMIT="${AOSP_BUILD_TOOLS_COMMIT:-b12d639efb8844ee1be5b437d707e7c94be3ce3a}"
-CI_BUILD_TOOLS_URL="${CI_BUILD_TOOLS_URL:-https://android.googlesource.com/kernel/prebuilts/build-tools/+archive/${AOSP_BUILD_TOOLS_COMMIT}/linux-x86.tar.gz}"
-CI_BUILD_TOOLS_SHA256="${CI_BUILD_TOOLS_SHA256:-af9938dde2454368c8a5bb8c461f49ac6a96c4b92852eacac5d7c13fec3844be}"
+AOSP_RUST_REPO="${AOSP_RUST_REPO:-https://android.googlesource.com/platform/prebuilts/rust}"
+CI_RUST_SUBTREE="${CI_RUST_SUBTREE:-linux-x86/1.82.0.p2}"
+CI_RUST_GIT_TREE="${CI_RUST_GIT_TREE:-94ac5b5f1377b32edbde5359d17a7994a80363b1}"
+CI_RUST_LEAF_TREE_SHA256="${CI_RUST_LEAF_TREE_SHA256:-87288c429cfbc10e1b0083043246adbf3eed26f976e702e0a7ef97348c337627}"
+CI_RUSTC_COMMIT_HASH="${CI_RUSTC_COMMIT_HASH:-f6e511eec7342f59a25f7c0534f1dbea00d01b14}"
+CI_RUST_TOOLCHAIN_VERSION="${CI_RUST_TOOLCHAIN_VERSION:-linux-glibc-15545352}"
+AOSP_BUILD_TOOLS_COMMIT="${AOSP_BUILD_TOOLS_COMMIT:-811c6e2938d53b3c318d7635b03931601a68c765}"
+AOSP_BUILD_TOOLS_REPO="${AOSP_BUILD_TOOLS_REPO:-https://android.googlesource.com/kernel/prebuilts/build-tools}"
+CI_BUILD_TOOLS_SUBTREE="${CI_BUILD_TOOLS_SUBTREE:-linux-x86}"
+CI_BUILD_TOOLS_GIT_TREE="${CI_BUILD_TOOLS_GIT_TREE:-c7f55719e28bb1a324140f7dae7018e8c41a1b7c}"
+CI_BUILD_TOOLS_LEAF_TREE_SHA256="${CI_BUILD_TOOLS_LEAF_TREE_SHA256:-82f36c2f3efbaea6f5b278aae01c9b1c0318a0de00603b66a5cb5e815a249c2d}"
 CI_BINDGEN_URL="${CI_BINDGEN_URL:-https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.5/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz}"
 CI_BINDGEN_SHA256="${CI_BINDGEN_SHA256:-b7e2321ee8c617f14ccc5b9f39b3a804db173ee217e924ad93ed16af6bc62b1d}"
 CI_BUSYBOX_URL="${CI_BUSYBOX_URL:-https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox}"
 CI_BUSYBOX_SHA256="${CI_BUSYBOX_SHA256:-6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348}"
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
+[[ "${COMMON_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "GKI common commit 格式错误"
+[[ "${COMMON_ABI_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "GKI common abi.stg SHA-256 格式错误"
+[[ "${ABI_BASELINE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "ABI 基线 commit 格式错误"
+[[ "${ABI_BASELINE_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "ABI 基线 abi.stg SHA-256 格式错误"
 [[ "${AOSP_CLANG_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP clang commit 格式错误"
 [[ "${MAGISK_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Magisk commit 格式错误"
+for ksu_fix_commit in \
+    "${KSU_POST_RELEASE_AUDIT_COMMIT}" \
+    "${KSU_ALLOCATION_FAILURE_COMMIT}" \
+    "${KSU_APK_SHORT_READ_COMMIT}" \
+    "${KSU_APK_AOSP_PARSER_COMMIT}" \
+    "${KSU_APK_EOCD_VALIDATION_COMMIT}"; do
+    [[ "${ksu_fix_commit}" =~ ^[0-9a-f]{40}$ ]] || die "KernelSU 回移 commit 格式错误"
+done
 [[ "${MAGISK_APK_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Magisk APK SHA-256 格式错误"
 [[ "${MAGISKBOOT_ARM64_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "arm64 magiskboot SHA-256 格式错误"
 [[ "${AOSP_RUST_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP Rust commit 格式错误"
+[[ "${CI_RUST_GIT_TREE}" =~ ^[0-9a-f]{40}$ ]] || die "Rust Git tree 格式错误"
+[[ "${CI_RUST_LEAF_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Rust 叶子树 SHA-256 格式错误"
+[[ "${CI_RUSTC_COMMIT_HASH}" =~ ^[0-9a-f]{40}$ ]] || die "Rust 编译器 commit-hash 格式错误"
+[[ "${CI_RUST_TOOLCHAIN_VERSION}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Rust 工具链版本标识格式错误"
 [[ "${AOSP_BUILD_TOOLS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP build-tools commit 格式错误"
+[[ "${CI_BUILD_TOOLS_GIT_TREE}" =~ ^[0-9a-f]{40}$ ]] || die "build-tools Git tree 格式错误"
+[[ "${CI_BUILD_TOOLS_LEAF_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "build-tools 叶子树 SHA-256 格式错误"
+[ "${AOSP_RUST_REPO}" = "https://android.googlesource.com/platform/prebuilts/rust" ] || \
+    die "Rust 必须来自 AOSP 官方仓库"
+[ "${CI_RUST_SUBTREE}" = "linux-x86/1.82.0.p2" ] || die "Rust 工具链子树异常"
 [ "${CI_CLANG_URL}" = "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/${AOSP_CLANG_COMMIT}/clang-r536225.tar.gz" ] || \
     die "clang 必须来自固定 AOSP Gitiles 提交"
-[ "${CI_RUST_URL}" = "https://android.googlesource.com/platform/prebuilts/rust/+archive/${AOSP_RUST_COMMIT}/linux-x86/1.82.0.tar.gz" ] || \
-    die "Rust 必须来自固定 AOSP Gitiles 提交"
-[ "${CI_BUILD_TOOLS_URL}" = "https://android.googlesource.com/kernel/prebuilts/build-tools/+archive/${AOSP_BUILD_TOOLS_COMMIT}/linux-x86.tar.gz" ] || \
-    die "build-tools 必须来自固定 AOSP Gitiles 提交"
+[ "${AOSP_BUILD_TOOLS_REPO}" = "https://android.googlesource.com/kernel/prebuilts/build-tools" ] || \
+    die "build-tools 必须来自 AOSP 官方仓库"
+[ "${CI_BUILD_TOOLS_SUBTREE}" = "linux-x86" ] || die "build-tools 子树异常"
 [[ "${ANDROID_NDK_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK SHA-256 格式错误"
 [[ "${ANDROID_NDK_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK 安装树 SHA-256 格式错误"
 declare -A TC_PKGS=(
     [aosp-clang-r536225.tar.gz]="${CI_CLANG_URL}"
-    [aosp-rust-1.82.0.tar.gz]="${CI_RUST_URL}"
-    [aosp-kernel-build-tools-linux-x86.tar.gz]="${CI_BUILD_TOOLS_URL}"
     [bindgen.tar.xz]="${CI_BINDGEN_URL}"
     [busybox-1.35.0-x86_64-linux-musl]="${CI_BUSYBOX_URL}"
 )
 declare -A TC_SHA256=(
     [aosp-clang-r536225.tar.gz]="${CI_CLANG_SHA256}"
-    [aosp-rust-1.82.0.tar.gz]="${CI_RUST_SHA256}"
-    [aosp-kernel-build-tools-linux-x86.tar.gz]="${CI_BUILD_TOOLS_SHA256}"
     [bindgen.tar.xz]="${CI_BINDGEN_SHA256}"
     [busybox-1.35.0-x86_64-linux-musl]="${CI_BUSYBOX_SHA256}"
 )
@@ -751,38 +997,61 @@ if [ "${ENABLE_KERNELSU}" = "1" ]; then
     ensure_repo "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_REF}" "${KSU_COMMIT}" "${ENABLE_SUSFS}"
     if [ -f "$(git -C "${KSU_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
         log_step "在初始化阶段补齐 KernelSU Git 历史以固定 KSU_VERSION"
-        git -C "${KSU_DIR}" fetch --unshallow --tags origin
+        git_network -C "${KSU_DIR}" fetch --unshallow --tags origin
     fi
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
     git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
         die "固定 KernelSU 版本未包含官方增强安全功能移除提交"
+    if [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ]; then
+        if ! env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
+            cat-file -e "${KSU_POST_RELEASE_AUDIT_COMMIT}^{commit}" 2>/dev/null; then
+            log_step "获取固定 KernelSU main 修复快照"
+            git_network -C "${KSU_DIR}" fetch --no-tags origin \
+                "${KSU_POST_RELEASE_AUDIT_COMMIT}"
+        fi
+        env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+            "${KSU_COMMIT}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
+            die "KernelSU 修复快照不以 ${KSU_REF} 为祖先"
+        git -C "${KSU_DIR}" update-ref \
+            refs/backport-audit/kernelsu-post-release \
+            "${KSU_POST_RELEASE_AUDIT_COMMIT}"
+        [ "$(git -C "${KSU_DIR}" rev-parse refs/backport-audit/kernelsu-post-release)" = \
+            "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || die "KernelSU 修复快照保活引用异常"
+        verify_kernelsu_backport_source "KernelSU 分配失败处理修复" \
+            "${KSU_ALLOCATION_FAILURE_COMMIT}" "${KSU_ALLOCATION_FAILURE_DATE}" \
+            "${KSU_ALLOCATION_FAILURE_PATCH_ID}" \
+            "kernel/manager/throne_tracker.c kernel/selinux/sepolicy.c"
+        verify_kernelsu_backport_source "KernelSU APK 签名块短读修复" \
+            "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
+            "${KSU_APK_SHORT_READ_PATCH_ID}" "kernel/manager/apk_sign.c"
+        verify_kernelsu_backport_source "KernelSU AOSP APK 签名块解析修复" \
+            "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
+            "${KSU_APK_AOSP_PARSER_PATCH_ID}" "kernel/manager/apk_sign.c"
+        verify_kernelsu_backport_source "KernelSU APK EOCD 边界验证修复" \
+            "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
+            "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" "kernel/manager/apk_sign.c"
+    fi
 fi
 if [ "${ENABLE_SUSFS}" = "1" ]; then
     [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"
     ensure_repo "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_REF}" "${SUSFS_COMMIT}"
     if ! git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}^{commit}" 2>/dev/null; then
         log_step "获取与 KernelSU ${KSU_REF} 兼容的官方 SUSFS 补丁提交"
-        git -C "${SUSFS_DIR}" fetch --depth 1 origin "${SUSFS_KSU_PATCH_COMMIT}"
+        git_network -C "${SUSFS_DIR}" fetch --depth 1 origin "${SUSFS_KSU_PATCH_COMMIT}"
     fi
     git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" 2>/dev/null || \
         die "SUSFS KernelSU 兼容补丁不存在: ${SUSFS_KSU_PATCH_COMMIT}"
+    git -C "${SUSFS_DIR}" update-ref \
+        refs/backport-audit/susfs-kernelsu-patch "${SUSFS_KSU_PATCH_COMMIT}"
+    [ "$(git -C "${SUSFS_DIR}" rev-parse refs/backport-audit/susfs-kernelsu-patch)" = \
+        "${SUSFS_KSU_PATCH_COMMIT}" ] || die "SUSFS KernelSU 兼容补丁保活引用异常"
 fi
 if [ "${ENABLE_BBG}" = "1" ]; then
-    ensure_repo "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_REF}" "${BBG_COMMIT}"
+    ensure_repo "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_REF}" "${BBG_COMMIT}" "1"
     if [ -f "$(git -C "${BBG_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
         log_step "在初始化阶段补齐 Baseband Guard 历史，禁止构建期联网"
-        git -C "${BBG_DIR}" fetch --unshallow origin
+        git_network -C "${BBG_DIR}" fetch --unshallow origin
     fi
-fi
-if [ "${ENABLE_ADIOS}" = "1" ]; then
-    ensure_repo "ADIOS ${ADIOS_REF}" "${ADIOS_DIR}" "${ADIOS_REPO}" "${ADIOS_REF}" "${ADIOS_COMMIT}"
-    [ -s "${ADIOS_DIR}/${ADIOS_STABLE_PATCH}" ] || die "ADIOS 6.12 stable 补丁缺失"
-    [ -s "${ADIOS_DIR}/${ADIOS_FORCE_DEFAULT_PATCH}" ] || die "ADIOS 强制默认补丁审计输入缺失"
-fi
-if [ "${ENABLE_TCP_BRUTAL}" = "1" ]; then
-    ensure_repo "TCP Brutal ${TCP_BRUTAL_REF}" "${TCP_BRUTAL_DIR}" "${TCP_BRUTAL_REPO}" "${TCP_BRUTAL_REF}" "${TCP_BRUTAL_COMMIT}"
-    [ "$(sha256sum "${TCP_BRUTAL_DIR}/brutal.c" | awk '{ print $1 }')" = "${TCP_BRUTAL_SOURCE_SHA256}" ] || \
-        die "TCP Brutal 官方源码 SHA-256 不匹配"
 fi
 if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     [ -n "${BACKPORT_AUDIT_SNAPSHOT}" ] || die "缺少后续改进审计快照日期"
@@ -791,11 +1060,17 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 审计终点"
     [ -n "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux mainline 审计起点"
     [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 审计终点"
+    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        bash "${R63_BACKPORT_TOOL}" verify-manifest
+    fi
+    bash "${R63_INDEPENDENT_BACKPORT_TOOL}" verify-manifests
 
-    aosp_audit_commits=("${COMMON_COMMIT}")
+    aosp_audit_commits=("${COMMON_COMMIT}" "${ABI_BASELINE_COMMIT}")
     ensure_audit_repo "AOSP common 后续历史" "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_REPO}"
-    fetch_audit_ref "AOSP common r57 基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
-        "aosp/base-r57" "${COMMON_COMMIT}" "2025-01-01"
+    fetch_audit_ref "AOSP common r63 构建基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
+        "aosp/build-base-r63" "${COMMON_COMMIT}" "2025-01-01"
+    fetch_audit_ref "AOSP common r60 ABI 基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
+        "aosp/abi-base-r60" "${ABI_BASELINE_COMMIT}" "2025-01-01"
     for audit_ref in ${AOSP_BACKPORT_AUDIT_REFS}; do
         audit_name="${audit_ref%%:*}"
         audit_commit="${audit_ref#*:}"
@@ -806,15 +1081,88 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     done
     hydrate_audit_history "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
         "${BACKPORT_AUDIT_SNAPSHOT}" "2025-01-01" "${aosp_audit_commits[@]}"
+    hydrate_audit_blob "AOSP r60 ABI STG" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${ABI_BASELINE_COMMIT}" \
+        "gki/aarch64/abi.stg" "${ABI_BASELINE_STG_SHA256}"
+    hydrate_audit_blob "AOSP r63 ABI STG" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_COMMIT}" \
+        "gki/aarch64/abi.stg" "${COMMON_ABI_STG_SHA256}"
+    [ "$(git -C "${AOSP_BACKPORT_AUDIT_DIR}" rev-parse \
+        "refs/backport-audit/aosp/${ANDROID17_ABI_CLASSIFICATION_REF}^{commit}")" = \
+        "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" ] || \
+        die "Android 17 ABI 分类 ref 与固定提交不匹配"
+    hydrate_audit_blob "Android 17 ABI 分类 QCOM symbol list" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
+        "gki/aarch64/symbols/qcom" "${ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256}"
+    hydrate_audit_blob "Android 17 ABI 分类 Xiaomi symbol list" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
+        "gki/aarch64/symbols/xiaomi" "${ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256}"
+
+    selected_aosp_patches=()
+    for selected_aosp_entry in \
+        "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH:-0}:${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT:-}" \
+        "${ENABLE_EAS_CPUMASK_FAST_PATH:-0}:${EAS_CPUMASK_FAST_PATH_COMMIT:-}" \
+        "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}:${BLK_WBT_DONE_FAST_PATH_COMMIT:-}" \
+        "${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}:${MEMCG_RSTAT_FAST_PATH_COMMIT:-}" \
+        "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}:${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-}" \
+        "${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}:${IDLETIMER_DESTROY_UAF_FIX_COMMIT:-}" \
+        "${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}:${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-}" \
+        "${ENABLE_EXT4_XATTR_OOB_FIX:-0}:${EXT4_XATTR_OOB_FIX_COMMIT:-}" \
+        "${ENABLE_IPV6_MLD_UAF_FIX:-0}:${IPV6_MLD_UAF_FIX_COMMIT:-}" \
+        "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}:${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-}" \
+        "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}:${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT:-}" \
+        "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}:${UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT:-}" \
+        "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}:${UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT:-}"; do
+        [ "${selected_aosp_entry%%:*}" = "1" ] || continue
+        selected_aosp_patches+=("${selected_aosp_entry#*:}")
+    done
+    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        while IFS= read -r audit_commit; do
+            selected_aosp_patches+=("${audit_commit}")
+        done < <(bash "${R63_BACKPORT_TOOL}" list aosp)
+    fi
+    while IFS= read -r audit_commit; do
+        [ -n "${audit_commit}" ] && selected_aosp_patches+=("${audit_commit}")
+    done < <(bash "${R63_INDEPENDENT_BACKPORT_TOOL}" list aosp)
+    hydrate_audit_patches "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
+        "${selected_aosp_patches[@]}"
 
     ensure_audit_repo "Linux 6.12 stable 历史" "${LINUX_STABLE_AUDIT_DIR}" "${LINUX_STABLE_AUDIT_REPO}"
-    fetch_audit_ref "Linux stable v6.12.23" "${LINUX_STABLE_AUDIT_DIR}" \
-        "linux-stable/base-v6.12.23" "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "2024-11-01"
+    fetch_audit_ref "Linux stable v6.12.69" "${LINUX_STABLE_AUDIT_DIR}" \
+        "linux-stable/base-v6.12.69" "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "2026-01-01"
     fetch_audit_ref "Linux stable ${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_DIR}" \
-        "linux-stable/${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_COMMIT}" "2024-11-01"
+        "linux-stable/${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_COMMIT}" "2026-02-01"
     hydrate_audit_commit_history "Linux 6.12 stable" "${LINUX_STABLE_AUDIT_DIR}" \
-        "${BACKPORT_AUDIT_SNAPSHOT}" "2024-11-01" \
+        "${BACKPORT_AUDIT_SNAPSHOT}" "2026-02-01" \
         "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}"
+    env GIT_NO_LAZY_FETCH=1 git -C "${LINUX_STABLE_AUDIT_DIR}" merge-base --is-ancestor \
+        "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
+        die "Linux stable 审计历史未形成 v6.12.69 到固定终点的完整祖先链"
+    selected_stable_patches=()
+    for selected_stable_entry in \
+        "${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}:${FUTEX_EXITING_POINTER_STABLE_COMMIT:-}" \
+        "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}:${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT:-}" \
+        "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}:${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-}" \
+        "${ENABLE_F2FS_LISTXATTR_BOUNDS_FIX:-0}:${F2FS_LISTXATTR_BOUNDS_STABLE_COMMIT:-}" \
+        "${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}:${BLKCG_RSTAT_RELEASE_STABLE_COMMIT:-}" \
+        "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}:${BINDER_THREAD_RELEASE_STABLE_COMMIT:-}" \
+        "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}:${BINDER_FREE_TRANSACTION_STABLE_COMMIT:-}" \
+        "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}:${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT:-}" \
+        "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}:${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT:-}" \
+        "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}:${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-}"; do
+        [ "${selected_stable_entry%%:*}" = "1" ] || continue
+        selected_stable_patches+=("${selected_stable_entry#*:}")
+    done
+    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        while IFS= read -r audit_commit; do
+            selected_stable_patches+=("${audit_commit}")
+        done < <(bash "${R63_BACKPORT_TOOL}" list stable)
+    fi
+    while IFS= read -r audit_commit; do
+        [ -n "${audit_commit}" ] && selected_stable_patches+=("${audit_commit}")
+    done < <(bash "${R63_INDEPENDENT_BACKPORT_TOOL}" list stable)
+    hydrate_audit_patches "Linux 6.12 stable" "${LINUX_STABLE_AUDIT_DIR}" \
+        "${selected_stable_patches[@]}"
 
     ensure_audit_repo "Linux mainline 历史" "${LINUX_MAINLINE_AUDIT_DIR}" "${LINUX_MAINLINE_AUDIT_REPO}"
     fetch_audit_ref "Linux mainline v6.12" "${LINUX_MAINLINE_AUDIT_DIR}" \
@@ -824,15 +1172,28 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     hydrate_audit_commit_history "Linux mainline" "${LINUX_MAINLINE_AUDIT_DIR}" \
         "${BACKPORT_AUDIT_SNAPSHOT}" "2024-11-01" \
         "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "${LINUX_MAINLINE_AUDIT_COMMIT}"
+    selected_mainline_patches=()
+    if [ "${ENABLE_TIMER_BASE_FAST_PATH:-0}" = "1" ]; then
+        selected_mainline_patches+=("${TIMER_BASE_FAST_PATH_COMMIT}")
+    fi
+    if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
+        selected_mainline_patches+=("${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}")
+    fi
+    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        while IFS= read -r audit_commit; do
+            selected_mainline_patches+=("${audit_commit}")
+        done < <(bash "${R63_BACKPORT_TOOL}" list mainline)
+    fi
+    while IFS= read -r audit_commit; do
+        [ -n "${audit_commit}" ] && selected_mainline_patches+=("${audit_commit}")
+    done < <(bash "${R63_INDEPENDENT_BACKPORT_TOOL}" list mainline)
+    hydrate_audit_patches "Linux mainline 已选补丁" "${LINUX_MAINLINE_AUDIT_DIR}" \
+        "${selected_mainline_patches[@]}"
+    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        bash "${R63_BACKPORT_TOOL}" verify-sources
+    fi
+    bash "${R63_INDEPENDENT_BACKPORT_TOOL}" verify-sources
     log_success "后续改进只读审计历史已固定"
-fi
-if [ "${ENABLE_F2FS_OPEN_FAST_PATH}" = "1" ]; then
-    verify_aosp_backport_source "F2FS open 快路径优化" \
-        "${F2FS_OPEN_FAST_PATH_AOSP_REF}" \
-        "${F2FS_OPEN_FAST_PATH_COMMIT}" \
-        "${F2FS_OPEN_FAST_PATH_COMMIT_DATE}" \
-        "${F2FS_OPEN_FAST_PATH_PATCH_ID}" \
-        "fs/f2fs/file.c"
 fi
 if [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then
     verify_aosp_backport_source "memcg rstat 快路径优化" \
@@ -850,46 +1211,6 @@ if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
         "${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID}" \
         "net/ipv4/tcp.c net/ipv4/tcp_input.c"
 fi
-if [ "${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX}" = "1" ]; then
-    [ "${ENABLE_BACKPORT_AUDIT}" = "1" ] || \
-        die "F2FS merge_page_bio UAF 修复需要启用固定 AOSP 审计源"
-    f2fs_fix_ref_commit=""
-    for audit_ref in ${AOSP_BACKPORT_AUDIT_REFS}; do
-        if [ "${audit_ref%%:*}" = "${F2FS_MERGE_PAGE_BIO_UAF_FIX_AOSP_REF}" ]; then
-            f2fs_fix_ref_commit="${audit_ref#*:}"
-            break
-        fi
-    done
-    [ -n "${f2fs_fix_ref_commit}" ] || \
-        die "F2FS merge_page_bio UAF 修复来源 ref 未固定"
-    env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        merge-base --is-ancestor "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}" "${f2fs_fix_ref_commit}" || \
-        die "F2FS merge_page_bio UAF 修复不属于固定 AOSP 来源 ref"
-    [ "$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        show -s --format=%cs "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}")" = \
-      "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT_DATE}" ] || \
-        die "F2FS merge_page_bio UAF 修复提交日期不匹配"
-    [[ "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT_DATE}" < "${BACKPORT_AUDIT_SNAPSHOT}" ||
-       "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT_DATE}" = "${BACKPORT_AUDIT_SNAPSHOT}" ]] || \
-        die "F2FS merge_page_bio UAF 修复晚于固定审计快照"
-    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}")" = \
-      "fs/f2fs/data.c" ] || die "F2FS merge_page_bio UAF 修复触及非预期路径"
-    [ "$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        show --format= "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}" |
-        git patch-id --stable | awk '{ print $1 }')" = \
-      "${F2FS_MERGE_PAGE_BIO_UAF_FIX_PATCH_ID}" ] || \
-        die "F2FS merge_page_bio UAF 修复 patch-id 不匹配"
-    log_success "F2FS merge_page_bio UAF 官方修复来源已固定"
-fi
-if [ "${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX}" = "1" ]; then
-    verify_aosp_backport_source "Gunyah clean_resources UAF 修复" \
-        "${GUNYAH_CLEAN_RESOURCES_UAF_FIX_AOSP_REF}" \
-        "${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT}" \
-        "${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT_DATE}" \
-        "${GUNYAH_CLEAN_RESOURCES_UAF_FIX_PATCH_ID}" \
-        "drivers/virt/gunyah/vm_mgr.c"
-fi
 if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ]; then
     verify_aosp_backport_source "IDLETIMER destroy UAF 修复" \
         "${IDLETIMER_DESTROY_UAF_FIX_AOSP_REF}" \
@@ -897,62 +1218,6 @@ if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ]; then
         "${IDLETIMER_DESTROY_UAF_FIX_COMMIT_DATE}" \
         "${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID}" \
         "net/netfilter/xt_IDLETIMER.c"
-fi
-if [ "${ENABLE_EVENTPOLL_RCU_UAF_FIX}" = "1" ]; then
-    verify_aosp_backport_source "eventpoll RCU UAF 修复" \
-        "${EVENTPOLL_RCU_UAF_FIX_AOSP_REF}" \
-        "${EVENTPOLL_RCU_UAF_FIX_COMMIT}" \
-        "${EVENTPOLL_RCU_UAF_FIX_COMMIT_DATE}" \
-        "${EVENTPOLL_RCU_UAF_FIX_PATCH_ID}" \
-        "fs/eventpoll.c"
-fi
-if [ "${ENABLE_CGROUP_KERNFS_UAF_FIX}" = "1" ]; then
-    verify_aosp_backport_source "cgroup kernfs UAF 修复" \
-        "${CGROUP_KERNFS_UAF_FIX_AOSP_REF}" \
-        "${CGROUP_KERNFS_UAF_FIX_COMMIT}" \
-        "${CGROUP_KERNFS_UAF_FIX_COMMIT_DATE}" \
-        "${CGROUP_KERNFS_UAF_FIX_PATCH_ID}" \
-        "kernel/cgroup/cgroup.c"
-fi
-if [ "${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX}" = "1" ]; then
-    verify_aosp_backport_source "F2FS sync_inode_meta UAF 修复" \
-        "${F2FS_SYNC_INODE_META_UAF_FIX_AOSP_REF}" \
-        "${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT}" \
-        "${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT_DATE}" \
-        "${F2FS_SYNC_INODE_META_UAF_FIX_PATCH_ID}" \
-        "fs/f2fs/inode.c"
-fi
-if [ "${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX}" = "1" ]; then
-    verify_aosp_backport_source "timer shutdown_sync 竞态修复" \
-        "${TIMER_SHUTDOWN_SYNC_RACE_FIX_AOSP_REF}" \
-        "${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT}" \
-        "${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT_DATE}" \
-        "${TIMER_SHUTDOWN_SYNC_RACE_FIX_PATCH_ID}" \
-        "kernel/time/timer.c"
-fi
-if [ "${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX}" = "1" ]; then
-    verify_aosp_backport_source "futex requeue-PI UAF 修复" \
-        "${FUTEX_REQUEUE_PI_UAF_FIX_AOSP_REF}" \
-        "${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT}" \
-        "${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT_DATE}" \
-        "${FUTEX_REQUEUE_PI_UAF_FIX_PATCH_ID}" \
-        "kernel/futex/requeue.c"
-fi
-if [ "${ENABLE_PAGE_POOL_DESTROY_RACE_FIX}" = "1" ]; then
-    verify_aosp_backport_source "page_pool 销毁竞态修复" \
-        "${PAGE_POOL_DESTROY_RACE_FIX_AOSP_REF}" \
-        "${PAGE_POOL_DESTROY_RACE_FIX_COMMIT}" \
-        "${PAGE_POOL_DESTROY_RACE_FIX_COMMIT_DATE}" \
-        "${PAGE_POOL_DESTROY_RACE_FIX_PATCH_ID}" \
-        "net/core/page_pool.c"
-fi
-if [ "${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX}" = "1" ]; then
-    verify_aosp_backport_source "conntrack 未确认项并发删除修复" \
-        "${CONNTRACK_UNCONFIRMED_RACE_FIX_AOSP_REF}" \
-        "${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT}" \
-        "${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT_DATE}" \
-        "${CONNTRACK_UNCONFIRMED_RACE_FIX_PATCH_ID}" \
-        "include/net/netfilter/nf_conntrack.h net/netfilter/nf_conntrack_core.c"
 fi
 if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
     verify_aosp_backport_source "EROFS 目录尾项越界读取修复" \
@@ -978,58 +1243,13 @@ if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
         "${IPV6_MLD_UAF_FIX_PATCH_ID}" \
         "net/ipv6/mcast.c"
 fi
-if [ "${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX}" = "1" ]; then
-    verify_aosp_backport_source "rtmutex 未入队 waiter 错误路径修复" \
-        "${RTMUTEX_WAITER_ENQUEUE_FIX_AOSP_REF}" \
-        "${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT}" \
-        "${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT_DATE}" \
-        "${RTMUTEX_WAITER_ENQUEUE_FIX_PATCH_ID}" \
-        "kernel/locking/rtmutex.c kernel/locking/rtmutex_api.c"
-fi
-if [ "${ENABLE_STAGE5_RTMUTEX_FIX}" = "1" ]; then
-    if ! git -C "${COMMON_DIR}" cat-file -e "${STAGE5_RTMUTEX_FIX_COMMIT}^{commit}" 2>/dev/null; then
-        log_step "获取阶段 5 AOSP rtmutex 官方修复"
-        git -C "${COMMON_DIR}" fetch --depth=300 --no-tags origin \
-            "refs/heads/${STAGE5_AOSP_SECURITY_REF}:refs/stage5/aosp-security-source"
-    fi
-    [ "$(git -C "${COMMON_DIR}" diff-tree --no-commit-id --name-only -r "${STAGE5_RTMUTEX_FIX_COMMIT}")" = "kernel/locking/rtmutex.c" ] || \
-        die "阶段 5 rtmutex 修复触及了非预期路径"
-    [ "$(git -C "${COMMON_DIR}" show --format= "${STAGE5_RTMUTEX_FIX_COMMIT}" | git patch-id --stable | awk '{ print $1 }')" = "${STAGE5_RTMUTEX_FIX_PATCH_ID}" ] || \
-        die "阶段 5 rtmutex 官方修复 patch-id 不匹配"
-fi
-if [ "${ENABLE_UNICODE_IGNORABLE_FIX}" = "1" ]; then
-    if ! git -C "${COMMON_DIR}" cat-file -e "${UNICODE_FIX_COMMIT}^" 2>/dev/null; then
-        log_step "获取 AOSP Unicode default-ignorable 官方修复及父对象"
-        git -C "${COMMON_DIR}" fetch --depth=2 --no-tags origin "${UNICODE_FIX_COMMIT}"
-    fi
-    [ "$(git -C "${COMMON_DIR}" diff-tree --no-commit-id --name-only -r "${UNICODE_FIX_COMMIT}" | LC_ALL=C sort | paste -sd ' ' -)" = \
-      "fs/unicode/mkutf8data.c fs/unicode/utf8data.h_shipped" ] || die "Unicode 官方修复触及了非预期路径"
-    [ "$(git -C "${COMMON_DIR}" show --format= "${UNICODE_FIX_COMMIT}" | git patch-id --stable | awk '{ print $1 }')" = "${UNICODE_FIX_PATCH_ID}" ] || \
-        die "Unicode 官方修复 patch-id 不匹配"
-    git -C "${COMMON_DIR}" show -s --format=%B "${UNICODE_FIX_COMMIT}" | grep -Fq "cherry picked from commit ${UNICODE_FIX_UPSTREAM_COMMIT}" || \
-        die "Unicode 修复缺少预期上游来源"
-    if ! git -C "${COMMON_DIR}" cat-file -e "${UNICODE_EXT4_COMPAT_COMMIT}^" 2>/dev/null; then
-        log_step "获取 AOSP ext4 casefold 兼容回退及父对象"
-        git -C "${COMMON_DIR}" fetch --depth=2 --no-tags origin "${UNICODE_EXT4_COMPAT_COMMIT}"
-    fi
-    [ "$(git -C "${COMMON_DIR}" diff-tree --no-commit-id --name-only -r "${UNICODE_EXT4_COMPAT_COMMIT}" | LC_ALL=C sort | paste -sd ' ' -)" = \
-      "fs/ext4/namei.c include/linux/fs.h" ] || die "ext4 casefold 官方兼容提交触及了非预期路径"
-    [ "$(git -C "${COMMON_DIR}" show --format= "${UNICODE_EXT4_COMPAT_COMMIT}" -- fs/ext4/namei.c | git patch-id --stable | awk '{ print $1 }')" = \
-      "${UNICODE_EXT4_COMPAT_PATCH_ID}" ] || die "ext4 casefold 官方兼容提交 patch-id 不匹配"
-    for unicode_f2fs_commit in "${UNICODE_F2FS_FALLBACK_COMMIT}" "${UNICODE_F2FS_POLICY_COMMIT}"; do
-        if ! git -C "${COMMON_DIR}" cat-file -e "${unicode_f2fs_commit}^" 2>/dev/null; then
-            log_step "获取 AOSP f2fs casefold 兼容对象 ${unicode_f2fs_commit:0:12}"
-            git -C "${COMMON_DIR}" fetch --depth=2 --no-tags origin "${unicode_f2fs_commit}"
-        fi
-    done
-    [ "$(git -C "${COMMON_DIR}" diff-tree --no-commit-id --name-only -r "${UNICODE_F2FS_FALLBACK_COMMIT}" | LC_ALL=C sort | paste -sd ' ' -)" = \
-      "fs/f2fs/dir.c fs/f2fs/f2fs.h fs/f2fs/inline.c" ] || die "f2fs 官方线性回退提交路径集合异常"
-    [ "$(git -C "${COMMON_DIR}" show --format= "${UNICODE_F2FS_FALLBACK_COMMIT}" | git patch-id --stable | awk '{ print $1 }')" = \
-      "${UNICODE_F2FS_FALLBACK_PATCH_ID}" ] || die "f2fs 官方线性回退 patch-id 不匹配"
-    [ "$(git -C "${COMMON_DIR}" diff-tree --no-commit-id --name-only -r "${UNICODE_F2FS_POLICY_COMMIT}" | LC_ALL=C sort | paste -sd ' ' -)" = \
-      "fs/f2fs/dir.c include/linux/fs.h" ] || die "f2fs 官方回退策略提交路径集合异常"
-    [ "$(git -C "${COMMON_DIR}" show --format= "${UNICODE_F2FS_POLICY_COMMIT}" | git patch-id --stable | awk '{ print $1 }')" = \
-      "${UNICODE_F2FS_POLICY_PATCH_ID}" ] || die "f2fs 官方回退策略 patch-id 不匹配"
+if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" = "1" ]; then
+    verify_aosp_backport_source "KVM compound head 引用修复" \
+        "${KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF}" \
+        "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT}" \
+        "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT_DATE}" \
+        "${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID}" \
+        "virt/kvm/kvm_main.c"
 fi
 if [ "${ENABLE_IPSET}" = "1" ]; then
     prepare_source_archive "ipset ${IPSET_VERSION}" "${IPSET_URL}" \
@@ -1051,28 +1271,14 @@ log_info "GKI common: ${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || log_info "KernelSU: ${KSU_DIR} (${KSU_REF} @ ${KSU_COMMIT})"
 [ "${ENABLE_SUSFS}" != "1" ] || log_info "SUSFS: ${SUSFS_DIR} (${SUSFS_REF} @ ${SUSFS_COMMIT})"
 [ "${ENABLE_BBG}" != "1" ] || log_info "Baseband Guard: ${BBG_DIR} (${BBG_REF} @ ${BBG_COMMIT})"
-[ "${ENABLE_ADIOS}" != "1" ] || log_info "ADIOS: ${ADIOS_DIR} (${ADIOS_REF} @ ${ADIOS_COMMIT})"
-[ "${ENABLE_TCP_BRUTAL}" != "1" ] || log_info "TCP Brutal: ${TCP_BRUTAL_DIR} (${TCP_BRUTAL_REF} @ ${TCP_BRUTAL_COMMIT})"
 [ "${ENABLE_BACKPORT_AUDIT}" != "1" ] || log_info "Backport audit snapshot: ${BACKPORT_AUDIT_SNAPSHOT} (no age cutoff)"
-[ "${ENABLE_F2FS_OPEN_FAST_PATH}" != "1" ] || log_info "AOSP F2FS open fast path: ${F2FS_OPEN_FAST_PATH_COMMIT} (${F2FS_OPEN_FAST_PATH_AOSP_REF})"
 [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" != "1" ] || log_info "Linux memcg rstat fast path: ${MEMCG_RSTAT_FAST_PATH_COMMIT} (${MEMCG_RSTAT_FAST_PATH_AOSP_REF})"
 [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" != "1" ] || log_info "Linux TCP recv timestamp fast path: ${TCP_RECV_MSTAMP_FAST_PATH_COMMIT} (${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF})"
-[ "${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX}" != "1" ] || log_info "AOSP F2FS merge_page_bio UAF fix: ${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT} (${F2FS_MERGE_PAGE_BIO_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX}" != "1" ] || log_info "AOSP Gunyah clean_resources UAF fix: ${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT} (${GUNYAH_CLEAN_RESOURCES_UAF_FIX_AOSP_REF})"
 [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" != "1" ] || log_info "AOSP IDLETIMER destroy UAF fix: ${IDLETIMER_DESTROY_UAF_FIX_COMMIT} (${IDLETIMER_DESTROY_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_EVENTPOLL_RCU_UAF_FIX}" != "1" ] || log_info "AOSP eventpoll RCU UAF fix: ${EVENTPOLL_RCU_UAF_FIX_COMMIT} (${EVENTPOLL_RCU_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_CGROUP_KERNFS_UAF_FIX}" != "1" ] || log_info "AOSP cgroup kernfs UAF fix: ${CGROUP_KERNFS_UAF_FIX_COMMIT} (${CGROUP_KERNFS_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX}" != "1" ] || log_info "AOSP F2FS sync_inode_meta UAF fix: ${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT} (${F2FS_SYNC_INODE_META_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX}" != "1" ] || log_info "AOSP timer shutdown_sync race fix: ${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT} (${TIMER_SHUTDOWN_SYNC_RACE_FIX_AOSP_REF})"
-[ "${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX}" != "1" ] || log_info "AOSP futex requeue-PI UAF fix: ${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT} (${FUTEX_REQUEUE_PI_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_PAGE_POOL_DESTROY_RACE_FIX}" != "1" ] || log_info "AOSP page_pool destroy race fix: ${PAGE_POOL_DESTROY_RACE_FIX_COMMIT} (${PAGE_POOL_DESTROY_RACE_FIX_AOSP_REF})"
-[ "${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX}" != "1" ] || log_info "AOSP conntrack unconfirmed race fix: ${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT} (${CONNTRACK_UNCONFIRMED_RACE_FIX_AOSP_REF})"
 [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" != "1" ] || log_info "AOSP EROFS directory tail OOB fix: ${EROFS_DIR_TAIL_OOB_FIX_COMMIT} (${EROFS_DIR_TAIL_OOB_FIX_AOSP_REF})"
 [ "${ENABLE_EXT4_XATTR_OOB_FIX}" != "1" ] || log_info "AOSP ext4 xattr OOB fix: ${EXT4_XATTR_OOB_FIX_COMMIT} (${EXT4_XATTR_OOB_FIX_AOSP_REF})"
 [ "${ENABLE_IPV6_MLD_UAF_FIX}" != "1" ] || log_info "AOSP IPv6 MLD UAF fix: ${IPV6_MLD_UAF_FIX_COMMIT} (${IPV6_MLD_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX}" != "1" ] || log_info "AOSP rtmutex waiter enqueue fix: ${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT} (${RTMUTEX_WAITER_ENQUEUE_FIX_AOSP_REF})"
-[ "${ENABLE_STAGE5_RTMUTEX_FIX}" != "1" ] || log_info "AOSP rtmutex fix: ${STAGE5_RTMUTEX_FIX_COMMIT} (${STAGE5_AOSP_SECURITY_REF})"
-[ "${ENABLE_UNICODE_IGNORABLE_FIX}" != "1" ] || log_info "AOSP Unicode fix: ${UNICODE_FIX_COMMIT} (upstream ${UNICODE_FIX_UPSTREAM_COMMIT})"
+[ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" != "1" ] || log_info "AOSP KVM compound head pin fix: ${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT} (${KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF})"
 [ "${ENABLE_IPSET}" != "1" ] || log_info "IPSet userspace: ${IPSET_DIR} + libmnl ${LIBMNL_DIR} (NDK ${ANDROID_NDK_VERSION})"
 log_info "toolchain: ${CI_TOOLCHAIN_DIR}"
 log_info "MagiskBoot: v${MAGISK_VERSION} (${MAGISK_COMMIT})"

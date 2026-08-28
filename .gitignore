@@ -7,6 +7,7 @@
 /.build.pull.*/
 
 # Local boot references and extracted diagnostics
+/tmp/
 /ak3_edit/
 /cat-77.zip
 /kernel_boot_ok_*/

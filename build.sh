@@ -3,27 +3,88 @@
 # build.sh - Luna Kernel build, verification and release packaging
 #
 set -euo pipefail
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat
 
 die() {
     printf '[FAIL] %s\n' "$1" >&2
     exit 1
 }
 
-log_info() { printf '[INFO] %s\n' "$1"; }
 log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
+
+audit_compare() {
+    local metric="$1" reference="$2" actual="$3" status
+    if [ "${actual}" = "${reference}" ]; then
+        status="MATCH"
+    else
+        status="DRIFT"
+        AUDIT_DRIFT_COUNT="$((AUDIT_DRIFT_COUNT + 1))"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "${status}" "${metric}" "${reference}" "${actual}" >> "${AUDIT_REPORT}"
+    printf '[AUDIT] %s: %s (reference=%s actual=%s)\n' \
+        "${metric}" "${status}" "${reference}" "${actual}"
+}
+
+sha256_file() {
+    local output
+    if command -v sha256sum >/dev/null 2>&1; then
+        output="$(sha256sum "$1")"
+    elif command -v shasum >/dev/null 2>&1; then
+        output="$(shasum -a 256 "$1")"
+    else
+        die "缺少 SHA-256 校验工具"
+    fi
+    printf '%s\n' "${output%% *}"
+}
+
+reject_git_environment_overrides() {
+    local name
+    while IFS= read -r name; do
+        case "${name}" in
+            GIT_CONFIG_GLOBAL)
+                [ "${!name}" = "/dev/null" ] || die "Git 全局配置隔离值异常"
+                ;;
+            GIT_CONFIG_COUNT)
+                [ "${!name}" = "1" ] || die "Git 命令配置数量异常"
+                ;;
+            GIT_CONFIG_KEY_0)
+                [ "${!name}" = "core.hooksPath" ] || die "Git 命令配置键异常"
+                ;;
+            GIT_CONFIG_VALUE_0)
+                [ "${!name}" = "/dev/null" ] || die "Git hooks 隔离值异常"
+                ;;
+            GIT_CONFIG_NOSYSTEM|GIT_NO_LAZY_FETCH|GIT_NO_REPLACE_OBJECTS)
+                [ "${!name}" = "1" ] || die "Git 隔离值异常: ${name}"
+                ;;
+            GIT_PAGER)
+                [ "${!name}" = "cat" ] || die "Git pager 隔离值异常"
+                ;;
+            GIT_*) die "拒绝 Git 环境覆盖: ${name}" ;;
+        esac
+    done < <(compgen -e)
+}
+reject_git_environment_overrides
 
 clean_previous_release_artifacts() {
     local output_dir="$1"
     local manifest_name="$2"
     local manifest="${output_dir}/${manifest_name}"
-    local name path
+    local digest name extra path
 
     [ -d "${output_dir}" ] || return
     if [ -f "${manifest}" ]; then
-        while IFS= read -r name; do
+        while read -r digest name extra; do
+            if [ -z "${name}" ]; then
+                name="${digest}"
+            else
+                [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] && [ -z "${extra}" ] || \
+                    die "已有产物清单含非法摘要记录"
+            fi
             case "${name}" in
-                ''|*/*|.|..) die "已有产物清单含非法条目: ${name}" ;;
+                ''|*/*|.|..|*[!A-Za-z0-9._-]*) die "已有产物清单含非法条目: ${name}" ;;
             esac
             rm -f -- "${output_dir}/${name}"
         done < "${manifest}"
@@ -32,11 +93,34 @@ clean_previous_release_artifacts() {
     while IFS= read -r -d '' path; do
         rm -f -- "${path}"
     done < <(
-        find "${output_dir}" -maxdepth 1 -type f \
+        find "${output_dir}" -maxdepth 1 \( -type f -o -type l \) \
             \( -name 'Image-luna-xiaomi17-g????????-????????' \
-            -o -name 'luna-xiaomi17-g????????-????????.zip' \) -print0
+            -o -name 'luna-xiaomi17-g????????-????????.zip' \
+            -o -name 'luna-xiaomi17-g????????-????????-audit.zip' \
+            -o -name 'KernelSU_v*-release.apk' \
+            -o -name 'ipset-arm64-v*' \
+            -o -name 'ipset-v*-android-arm64-kernelsu-module.zip' \
+            -o -name 'susfs4ksu-v*.zip' \
+            -o -name 'ksu_susfs_arm64' \) -print0
     )
     rm -f -- "${manifest}" "${output_dir}/Image"
+}
+
+prepare_product_directory() {
+    local relative_dir="$1" path component
+    case "${relative_dir}" in
+        ''|/*|.|..|../*|*/../*|*/..) die "构建产物目录必须是项目内的普通相对路径: ${relative_dir}" ;;
+    esac
+    path="${HOST_WORKSPACE_DIR}"
+    while IFS= read -r component; do
+        case "${component}" in
+            ''|.|..) die "构建产物目录含非法路径分量: ${relative_dir}" ;;
+        esac
+        path="${path}/${component}"
+        [ ! -L "${path}" ] || die "构建产物目录不得经过符号链接: ${path}"
+    done < <(printf '%s\n' "${relative_dir}" | tr '/' '\n')
+    mkdir -p "${path}"
+    PRODUCT_DIR="${path}"
 }
 
 append_orbenv_var() {
@@ -49,7 +133,7 @@ append_orbenv_var() {
 
 prepare_orb_passthrough_env() {
     local var
-    for var in NO_COLOR USE_CCACHE CCACHE_MAXSIZE CCACHE_COMPRESS CCACHE_COMPILERCHECK CCACHE_NOHASHDIR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
+    for var in NO_COLOR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
         if [ -n "${!var:-}" ]; then
             append_orbenv_var "${var}"
         fi
@@ -71,6 +155,7 @@ load_env_file() {
     if [ "${had_allexport}" = "0" ]; then
         set +a
     fi
+    reject_git_environment_overrides
 }
 
 sanitize_path_component() {
@@ -86,6 +171,37 @@ resolve_workspace_path() {
 
 normalize_git_url() {
     printf '%s' "$1" | sed -e 's#/$##' -e 's#\.git$##'
+}
+
+reject_git_object_overrides() {
+    local label="$1" repo_dir="$2" git_dir replace_refs unexpected_config
+    local hooks_path is_bare top_level
+    git_dir="$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null)" || \
+        die "${label} 不是 Git 仓库"
+    replace_refs="$(git -C "${repo_dir}" for-each-ref --format='%(refname)' refs/replace/)"
+    [ -z "${replace_refs}" ] || die "${label} 存在 refs/replace 对象替换:\n${replace_refs}"
+    [ ! -s "${git_dir}/info/grafts" ] || die "${label} 存在 info/grafts 对象替换"
+    [ ! -s "${git_dir}/info/attributes" ] || die "${label} 存在 info/attributes 工作树过滤覆盖"
+    unexpected_config="$(git -C "${repo_dir}" config --name-only --list | LC_ALL=C sort -u | awk '
+        /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|hookspath|sparsecheckout|sparsecheckoutcone|ignorecase|precomposeunicode)$/ { next }
+        /^extensions\.worktreeconfig$/ { next }
+        /^remote\.origin\.(url|fetch|promisor|partialclonefilter|tagopt)$/ { next }
+        /^branch\..+\.(remote|merge)$/ { next }
+        /^(fetch|transfer)\.fsckobjects$/ { next }
+        /^backport\.[a-z0-9.]+$/ { next }
+        { print }
+    ')"
+    [ -z "${unexpected_config}" ] || \
+        die "${label} 存在非白名单 Git 配置:\n${unexpected_config}"
+    hooks_path="$(git -C "${repo_dir}" config --path --get core.hooksPath 2>/dev/null || true)"
+    [ -z "${hooks_path}" ] || [ "${hooks_path}" = "/dev/null" ] || \
+        die "${label} 存在非隔离 Git hooks 路径: ${hooks_path}"
+    is_bare="$(git -C "${repo_dir}" rev-parse --is-bare-repository)"
+    if [ "${is_bare}" = "false" ]; then
+        top_level="$(git -C "${repo_dir}" rev-parse --show-toplevel)"
+        [ "$(realpath -e "${repo_dir}")" = "$(realpath -e "${top_level}")" ] || \
+            die "${label} Git worktree 与预期目录不一致: ${top_level}"
+    fi
 }
 
 tree_sha256() {
@@ -109,14 +225,22 @@ tree_sha256() {
     ) | sha256sum | awk '{ print $1 }'
 }
 
+normalize_archive_timestamps() {
+    local root="$1"
+    [ -d "${root}" ] || die "归档暂存目录不存在: ${root}"
+    find "${root}" -depth -exec touch -h -d "${KERNEL_BUILD_TIMESTAMP}" -- {} +
+}
+
 resolve_project_identity() {
     local actual_commit
 
     if git -C "${HOST_WORKSPACE_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+        reject_git_object_overrides "项目仓库" "${HOST_WORKSPACE_DIR}"
+        verify_no_hidden_index_flags "项目仓库" "${HOST_WORKSPACE_DIR}"
         actual_commit="$(git -C "${HOST_WORKSPACE_DIR}" rev-parse HEAD)"
         [[ "${actual_commit}" =~ ^[0-9a-f]{40}$ ]] || die "项目提交格式异常: ${actual_commit}"
-        [ -z "$(git -C "${HOST_WORKSPACE_DIR}" status --porcelain --untracked-files=no)" ] || \
-            die "项目受跟踪文件存在未提交修改，拒绝生成发布产物"
+        [ -z "$(git -C "${HOST_WORKSPACE_DIR}" status --porcelain --untracked-files=normal)" ] || \
+            die "项目存在未提交或未跟踪文件，拒绝生成发布产物"
         if [ -n "${LUNA_PROJECT_COMMIT:-}" ]; then
             [ "${LUNA_PROJECT_COMMIT}" = "${actual_commit}" ] || \
                 die "宿主与构建环境的项目提交不一致"
@@ -149,34 +273,50 @@ orbctl_run_host_path() {
 
 sync_control_files_to_orb() {
     local items="init.sh patch.sh patch_external.sh build.sh"
+    [ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "tmp/os4/system_dlkm.img" ] || \
+        die "macOS 同步只接受固定的 tmp/os4/system_dlkm.img"
     if [ -f "${HOST_WORKSPACE_DIR}/.env" ]; then items="${items} .env"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/ak3_template" ]; then items="${items} ak3_template"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/patches" ]; then items="${items} patches"; fi
+    if [ -d "${HOST_WORKSPACE_DIR}/abi" ]; then items="${items} abi"; fi
+    if [ -d "${HOST_WORKSPACE_DIR}/tools" ]; then items="${items} tools"; fi
+    if [ -d "${HOST_WORKSPACE_DIR}/userspace" ]; then items="${items} userspace"; fi
+    if [ -f "${HOST_WORKSPACE_DIR}/tmp/os4/system_dlkm.img" ]; then
+        items="${items} tmp/os4/system_dlkm.img"
+    fi
 
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
+    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target/tmp/os4\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/abi\" \"\$target/tools\" \"\$target/userspace\"; rm -f \"\$target/tmp/os4/system_dlkm.img\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
 }
 
 export_orb_results() {
-    orbctl_run sh -lc "set -e; workspace=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; output_dir='${BUILD_OUTPUT_DIR}'; case \"\$output_dir\" in /*) ;; *) output_dir=\"\$workspace/\$output_dir\" ;; esac; manifest=\"\$output_dir/${ARTIFACT_MANIFEST_NAME}\"; [ -s \"\$manifest\" ] || { printf '[FAIL] 当前构建产物清单缺失: %s\n' \"\$manifest\" >&2; exit 1; }; rm -rf \"\$workspace/../artifact_out\"; mkdir -p \"\$workspace/../artifact_out/kernel_out\" \"\$workspace/../outbox\"; count=0; while IFS= read -r name; do case \"\$name\" in ''|*/*|.|..) printf '[FAIL] 非法产物清单项: %s\n' \"\$name\" >&2; exit 1 ;; esac; path=\"\$output_dir/\$name\"; [ -f \"\$path\" ] || { printf '[FAIL] 当前构建产物缺失: %s\n' \"\$path\" >&2; exit 1; }; cp -f \"\$path\" \"\$workspace/../artifact_out/kernel_out/\$name\"; count=\$((count + 1)); done < \"\$manifest\"; [ \"\$count\" -gt 0 ] || { printf '[FAIL] 当前构建产物清单为空\n' >&2; exit 1; }; cp -f \"\$manifest\" \"\$workspace/../artifact_out/kernel_out/${ARTIFACT_MANIFEST_NAME}\"; tar -cf \"\$workspace/../outbox/${ORB_RESULT_ARCHIVE}\" -C \"\$workspace/../artifact_out\" kernel_out"
+    orbctl_run sh -lc "set -e; workspace=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; output_dir='${BUILD_OUTPUT_DIR}'; case \"\$output_dir\" in /*) ;; *) output_dir=\"\$workspace/\$output_dir\" ;; esac; manifest=\"\$output_dir/${ARTIFACT_MANIFEST_NAME}\"; [ -s \"\$manifest\" ] && [ ! -L \"\$manifest\" ] || { printf '[FAIL] 当前构建产物清单缺失或不安全: %s\n' \"\$manifest\" >&2; exit 1; }; rm -rf \"\$workspace/../artifact_out\"; mkdir -p \"\$workspace/../artifact_out/kernel_out\" \"\$workspace/../outbox\"; count=0; while read -r digest name extra; do case \"\$digest\" in ''|*[!0-9a-f]*) printf '[FAIL] 非法产物摘要\n' >&2; exit 1 ;; esac; [ \"\${#digest}\" -eq 64 ] && [ -n \"\$name\" ] && [ -z \"\$extra\" ] || { printf '[FAIL] 非法产物清单记录\n' >&2; exit 1; }; case \"\$name\" in ''|*/*|.|..|*[!A-Za-z0-9._-]*) printf '[FAIL] 非法产物清单项: %s\n' \"\$name\" >&2; exit 1 ;; esac; path=\"\$output_dir/\$name\"; [ -f \"\$path\" ] && [ ! -L \"\$path\" ] || { printf '[FAIL] 当前构建产物缺失或不安全: %s\n' \"\$path\" >&2; exit 1; }; actual=\$(sha256sum \"\$path\"); actual=\${actual%% *}; [ \"\$actual\" = \"\$digest\" ] || { printf '[FAIL] 当前构建产物摘要不匹配: %s\n' \"\$name\" >&2; exit 1; }; cp -f \"\$path\" \"\$workspace/../artifact_out/kernel_out/\$name\"; count=\$((count + 1)); done < \"\$manifest\"; [ \"\$count\" -gt 0 ] || { printf '[FAIL] 当前构建产物清单为空\n' >&2; exit 1; }; cp -f \"\$manifest\" \"\$workspace/../artifact_out/kernel_out/${ARTIFACT_MANIFEST_NAME}\"; tar -cf \"\$workspace/../outbox/${ORB_RESULT_ARCHIVE}\" -C \"\$workspace/../artifact_out\" kernel_out"
 }
 
 pull_orb_results() {
-    local temp_dir manifest name count=0
+    local temp_dir manifest digest name extra path actual count=0
     temp_dir="$(mktemp -d "${HOST_WORKSPACE_DIR}/.${SCRIPT_NAME%.sh}.pull.XXXXXX")"
     orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; src=\"\$HOME/${ORB_LINUX_OUTBOX}/${ORB_RESULT_ARCHIVE}\"; dst='${temp_dir}/${ORB_RESULT_ARCHIVE}'; [ -f \"\$src\" ] || { printf '[FAIL] Orb 结果归档不存在: %s\n' \"\$src\" >&2; exit 1; }; cp -f \"\$src\" \"\$dst\""
     mkdir -p "${temp_dir}/extracted"
     tar -xf "${temp_dir}/${ORB_RESULT_ARCHIVE}" -C "${temp_dir}/extracted"
     [ -d "${temp_dir}/extracted/kernel_out" ] || die "Orb 结果缺少 kernel_out"
     manifest="${temp_dir}/extracted/kernel_out/${ARTIFACT_MANIFEST_NAME}"
-    [ -s "${manifest}" ] || die "Orb 结果缺少当前构建产物清单"
+    [ -s "${manifest}" ] && [ ! -L "${manifest}" ] || die "Orb 结果缺少安全的当前构建产物清单"
     mkdir -p "${PRODUCT_DIR}"
     clean_previous_release_artifacts "${PRODUCT_DIR}" "${ARTIFACT_MANIFEST_NAME}"
-    while IFS= read -r name; do
+    while read -r digest name extra; do
+        [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] && [ -n "${name}" ] && [ -z "${extra}" ] || \
+            die "Orb 结果含非法产物摘要记录"
         case "${name}" in
-            ''|*/*|.|..) die "Orb 结果含非法产物清单项: ${name}" ;;
+            ''|*/*|.|..|*[!A-Za-z0-9._-]*) die "Orb 结果含非法产物清单项: ${name}" ;;
         esac
-        [ -f "${temp_dir}/extracted/kernel_out/${name}" ] || die "Orb 结果缺少清单产物: ${name}"
-        cp -f "${temp_dir}/extracted/kernel_out/${name}" "${PRODUCT_DIR}/${name}"
+        path="${temp_dir}/extracted/kernel_out/${name}"
+        [ -f "${path}" ] && [ ! -L "${path}" ] || \
+            die "Orb 结果缺少安全的清单产物: ${name}"
+        actual="$(sha256_file "${path}")"
+        [ "${actual}" = "${digest}" ] || die "Orb 结果产物摘要不匹配: ${name}"
+        cp -f "${path}" "${PRODUCT_DIR}/${name}"
+        [ "$(sha256_file "${PRODUCT_DIR}/${name}")" = "${digest}" ] || \
+            die "Orb 结果复制后摘要不匹配: ${name}"
         count=$((count + 1))
     done < "${manifest}"
     [ "${count}" -gt 0 ] || die "Orb 结果产物清单为空"
@@ -228,6 +368,8 @@ verify_repo_identity() {
     local actual_commit
 
     git -C "${repo_dir}" rev-parse --git-dir >/dev/null 2>&1 || die "${label} 不是 Git 仓库: ${repo_dir}"
+    reject_git_object_overrides "${label}" "${repo_dir}"
+    verify_no_hidden_index_flags "${label}" "${repo_dir}"
     actual_url="$(git -C "${repo_dir}" remote get-url origin 2>/dev/null || true)"
     actual_commit="$(git -C "${repo_dir}" rev-parse HEAD)"
     [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${expected_url}")" ] || die "${label} remote 不匹配: ${actual_url}"
@@ -240,16 +382,13 @@ verify_repo_identity() {
 verify_kernelsu_source_state() {
     local kconfig_line='source "drivers/kernelsu/Kconfig"'
     local makefile_line='obj-$(CONFIG_KSU) += kernelsu/'
-    local official_selinux_hide unexpected
+    local official_selinux_hide
     [ "${KSU_INTEGRATION_MODE}" = "builtin" ] || die "KernelSU 集成模式不是 builtin"
-    if [ "${ENABLE_SUSFS}" = "1" ]; then
-        verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}" "0"
-    else
-        verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}"
-    fi
+    verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}" "0"
+    verify_kernelsu_post_release_fixes
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
     [ "$(grep -Fxc "${kconfig_line}" "${COMMON_DIR}/drivers/Kconfig")" = "1" ] || die "KernelSU Kconfig 接入状态异常"
-    [ "$(tail -n 2 "${COMMON_DIR}/drivers/Kconfig" | head -n 1)" = "${kconfig_line}" ] || die "KernelSU Kconfig 接入位置异常"
+    [ "$(tail -n 2 "${COMMON_DIR}/drivers/Kconfig")" = "${kconfig_line}"$'\nendmenu' ] || die "KernelSU Kconfig 接入位置异常"
     [ "$(grep -Fxc "${makefile_line}" "${COMMON_DIR}/drivers/Makefile")" = "1" ] || die "KernelSU Kbuild 接入状态异常"
     [ -L "${COMMON_DIR}/drivers/kernelsu" ] || die "KernelSU drivers 链接缺失"
     [ "$(readlink -f "${COMMON_DIR}/drivers/kernelsu")" = "${KSU_DIR}/kernel" ] || die "KernelSU drivers 链接目标错误"
@@ -272,11 +411,6 @@ verify_kernelsu_source_state() {
         die "SUSFS 接入后缺少 SELinux attr/current 代理"
     ! grep -Rqs --exclude='lsm_hook.h' 'security_add_hooks[[:space:]]*(' "${KSU_DIR}/kernel" || \
         die "KernelSU 意外注册了额外 LSM，必须重新审计 MAX_LSM_COUNT"
-    if [ "${ENABLE_SUSFS}" != "1" ]; then
-        unexpected="$(git -C "${COMMON_DIR}" status --porcelain --untracked-files=all | grep -Ev '^( M drivers/(Kconfig|Makefile)|\?\? drivers/kernelsu)$' || true)"
-        [ -z "${unexpected}" ] || die "GKI common 存在未授权差异:\n${unexpected}"
-        git -C "${COMMON_DIR}" diff --check
-    fi
     log_success "KernelSU ${KSU_REF} 源码、官方 DirtySepolicy 修复与接入状态检查通过"
 }
 
@@ -292,39 +426,253 @@ verify_allowed_paths() {
     done < <(git -C "${repo_dir}" status --porcelain --untracked-files=all)
 }
 
+patch_paths_excluding() {
+    local patch_file="$1" excluded path skip
+    shift
+    while IFS= read -r path; do
+        skip=0
+        for excluded in "$@"; do
+            if [ "${path}" = "${excluded}" ]; then
+                skip=1
+                break
+            fi
+        done
+        [ "${skip}" = "1" ] || printf '%s\n' "${path}"
+    done < <(awk '$1 == "diff" && $2 == "--git" { sub(/^a\//, "", $3); print $3 }' "${patch_file}")
+}
+
+verify_rejected_susfs_fdinfo_hunk() {
+    local official_patch="$1" repo_dir="$2" patch_file status
+    local patch_header='diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c'
+    shift 2
+
+    # The official hunk receives the inotify anon_inode file, not the watched
+    # path.  Its d_path() lookup cannot identify the watched mount and its
+    # three-argument callback also breaks a FANOTIFY-enabled configuration.
+    [ "$(grep -Fxc "${patch_header}" "${official_patch}")" = "1" ] || \
+        die "SUSFS 官方 fdinfo hunk 结构已变化，必须重新审计"
+    for patch_file in "$@"; do
+        ! grep -Fqx "${patch_header}" "${patch_file}" || \
+            die "经审计拒绝的 SUSFS fdinfo hunk 被项目补丁重新引入"
+    done
+    status="$(git -C "${repo_dir}" status --porcelain --untracked-files=all -- fs/notify/fdinfo.c)"
+    [ -z "${status}" ] || die "fs/notify/fdinfo.c 必须保持 AOSP 基线实现"
+}
+
+verify_no_trailing_whitespace() {
+    local label="$1" source_file="$2" bad_lines
+    bad_lines="$(LC_ALL=C grep -nE '[[:blank:]]+$' "${source_file}" || true)"
+    [ -z "${bad_lines}" ] || die "${label} 存在行尾空白:\n${bad_lines}"
+}
+
+verify_no_hidden_index_flags() {
+    local label="$1" repo_dir="$2" hidden
+    hidden="$(git -C "${repo_dir}" ls-files -v | LC_ALL=C awk '
+        substr($0, 1, 1) == "S" || substr($0, 1, 1) ~ /[a-z]/ { print }
+    ')"
+    [ -z "${hidden}" ] || \
+        die "${label} 存在 skip-worktree/assume-unchanged 标记，无法证明源码差异:\n${hidden}"
+}
+
+tracked_diff_sha256() {
+    local repo_dir="$1"
+    env GIT_NO_LAZY_FETCH=1 LC_ALL=C git -c color.ui=false -C "${repo_dir}" diff \
+        --binary --full-index --no-ext-diff --no-textconv --no-renames --no-color \
+        --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
+        HEAD -- . | sha256sum | awk '{ print $1 }'
+}
+
+verify_final_source_deltas() {
+    local ksu_sha256
+    verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
+    verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
+    ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
+    bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+        verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
+    [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
+        die "KernelSU 精确差异指纹不匹配: ${ksu_sha256}"
+    log_success "GKI common 基础差异、独立回移层与 KernelSU 精确差异指纹匹配"
+}
+
+verify_project_patch() {
+    local label="$1" patch_file="$2" expected_sha256="$3" expected_patch_id="$4"
+    local actual_sha256 actual_patch_id
+    [ -s "${patch_file}" ] || die "${label}缺失"
+    actual_sha256="$(sha256sum "${patch_file}" | awk '{ print $1 }')"
+    [ "${actual_sha256}" = "${expected_sha256}" ] || die "${label} SHA-256 不匹配"
+    actual_patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
+    [ "${actual_patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
+}
+
+verify_kernelsu_backport_commit() {
+    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
+    local expected_paths="$5"
+    local actual_date actual_patch_id actual_paths
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${KSU_COMMIT}" "${commit}" || die "${label} 不在 KernelSU ${KSU_REF} 之后"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${commit}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
+        die "${label} 不属于固定 KernelSU main 快照"
+    actual_date="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
+        -C "${KSU_DIR}" show -s --format=%cs "${commit}")"
+    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
+    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
+        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
+    [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常: ${actual_paths}"
+    actual_patch_id="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
+        -C "${KSU_DIR}" show --format= "${commit}" |
+        git patch-id --stable | awk '{ print $1 }')"
+    [ "${actual_patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
+}
+
+verify_kernelsu_file_at_commit() {
+    local label="$1" commit="$2" path="$3" expected
+    expected="$(mktemp)"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" show "${commit}:${path}" > "${expected}" || \
+        die "${label}无法读取固定上游文件"
+    cmp -s "${expected}" "${KSU_DIR}/${path}" || die "${label}最终源码不匹配"
+    rm -f "${expected}"
+}
+
+verify_kernelsu_post_release_fixes() {
+    [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ] || return
+    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" rev-parse \
+        refs/backport-audit/kernelsu-post-release 2>/dev/null || true)" = \
+        "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || \
+        die "KernelSU 固定修复快照引用缺失，请先运行 ./init.sh"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${KSU_COMMIT}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
+        die "KernelSU 修复快照不以 ${KSU_REF} 为祖先"
+    verify_kernelsu_backport_commit "KernelSU 分配失败处理修复" \
+        "${KSU_ALLOCATION_FAILURE_COMMIT}" "${KSU_ALLOCATION_FAILURE_DATE}" \
+        "${KSU_ALLOCATION_FAILURE_PATCH_ID}" \
+        "kernel/manager/throne_tracker.c kernel/selinux/sepolicy.c"
+    verify_kernelsu_backport_commit "KernelSU APK 签名块短读修复" \
+        "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
+        "${KSU_APK_SHORT_READ_PATCH_ID}" \
+        "kernel/manager/apk_sign.c"
+    verify_kernelsu_backport_commit "KernelSU AOSP APK 签名块解析修复" \
+        "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
+        "${KSU_APK_AOSP_PARSER_PATCH_ID}" \
+        "kernel/manager/apk_sign.c"
+    verify_kernelsu_backport_commit "KernelSU APK EOCD 边界验证修复" \
+        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
+        "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" \
+        "kernel/manager/apk_sign.c"
+    verify_kernelsu_file_at_commit "KernelSU Manager 扫描分配失败修复" \
+        "${KSU_ALLOCATION_FAILURE_COMMIT}" "kernel/manager/throne_tracker.c"
+    verify_kernelsu_file_at_commit "KernelSU SELinux 分配失败修复" \
+        "${KSU_ALLOCATION_FAILURE_COMMIT}" "kernel/selinux/sepolicy.c"
+    verify_kernelsu_file_at_commit "KernelSU APK 签名验证完整链" \
+        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "kernel/manager/apk_sign.c"
+}
+
 verify_susfs_source_state() {
-    local ksu_patch common_patch allowed_ksu allowed_common source_file
+    local ksu_patch common_patch allowed_ksu allowed_common
+    local actual_sha256 source_file target_file
     verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
-    [ -s "${SUSFS_HOOKS_ADAPTATION}" ] || die "缺少 AOSP r57 SUSFS SELinux 适配补丁"
+    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
+        refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
+        "${SUSFS_KSU_PATCH_COMMIT}" ] || \
+        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
+    verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
+        "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_CONTEXT_PATCH_SHA256}" \
+        "${SUSFS_CONTEXT_PATCH_ID}"
+    verify_project_patch "基于 SUSFS v2.2.0 官方补丁的 common Luna 修正版" \
+        "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
+        "${SUSFS_COMMON_FIX_PATCH_ID}"
+    verify_project_patch "基于 SUSFS v2.2.0 官方补丁的 KernelSU Luna 修正版" \
+        "${SUSFS_KSU_FIX_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_SHA256}" \
+        "${SUSFS_KSU_FIX_PATCH_ID}"
     ksu_patch="$(mktemp)"
     common_patch="$(mktemp)"
     allowed_ksu="$(mktemp)"
     allowed_common="$(mktemp)"
     git -C "${SUSFS_DIR}" show "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${ksu_patch}"
     cp "${SUSFS_DIR}/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" "${common_patch}"
-    git -C "${KSU_DIR}" apply --reverse --check "${ksu_patch}" || die "KernelSU SUSFS 补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check --exclude=security/selinux/hooks.c "${common_patch}" || die "AOSP SUSFS 主补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_HOOKS_ADAPTATION}" || die "AOSP r57 SELinux 适配状态异常"
+    verify_rejected_susfs_fdinfo_hunk \
+        "${common_patch}" "${COMMON_DIR}" \
+        "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_COMMON_FIX_PATCH_FILE}"
+    git -C "${KSU_DIR}" apply --reverse --check \
+        --exclude=kernel/Kconfig \
+        --exclude=kernel/policy/app_profile.c \
+        --exclude=kernel/runtime/boot_event.c \
+        --exclude=kernel/runtime/ksud_integration.c \
+        --exclude=kernel/selinux/selinux.c \
+        --exclude=kernel/sulog/event.c \
+        --exclude=kernel/supercall/dispatch.c \
+        "${ksu_patch}" || die "KernelSU SUSFS 官方补丁状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check \
+        --exclude=fs/exec.c \
+        --exclude=fs/namei.c \
+        --exclude=fs/namespace.c \
+        --exclude=fs/notify/fdinfo.c \
+        --exclude=fs/proc/base.c \
+        --exclude=fs/proc/fd.c \
+        --exclude=fs/proc/task_mmu.c \
+        --exclude=fs/stat.c \
+        --exclude=mm/memory.c \
+        --exclude=security/selinux/hooks.c \
+        "${common_patch}" || \
+        die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_CONTEXT_ADAPTATION}" || \
+        die "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
+        die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
+    git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
+        die "基于 SUSFS 官方补丁的 KernelSU Luna 修正版状态异常"
     for source_file in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-        cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}" || \
+        target_file="${COMMON_DIR}/${source_file}"
+        if [ "${source_file}" = "fs/susfs.c" ]; then
+            actual_sha256="$(sha256sum "${target_file}" | awk '{ print $1 }')"
+            [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
+                die "SUSFS Luna 修正源码摘要不匹配: ${source_file}"
+            verify_no_trailing_whitespace "SUSFS Luna 修正源码" "${target_file}"
+            grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${target_file}" || \
+                die "SUSFS 日志必须默认关闭"
+            [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "2" ] || \
+                die "SUSFS 日志静态分支提示异常"
+            continue
+        fi
+        cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${target_file}" || \
             die "SUSFS 源文件不是固定上游内容: ${source_file}"
     done
-    awk '$1 == "diff" && $2 == "--git" { sub(/^a\//, "", $3); print $3 }' "${ksu_patch}" | sort -u > "${allowed_ksu}"
+    {
+        patch_paths_excluding "${ksu_patch}" \
+            kernel/Kconfig \
+            kernel/policy/app_profile.c \
+            kernel/runtime/boot_event.c \
+            kernel/runtime/ksud_integration.c \
+            kernel/selinux/selinux.c \
+            kernel/sulog/event.c \
+            kernel/supercall/dispatch.c
+        patch_paths_excluding "${SUSFS_KSU_FIX_PATCH_FILE}"
+        if [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ]; then
+            printf '%s\n' \
+                kernel/manager/apk_sign.c \
+                kernel/manager/throne_tracker.c \
+                kernel/selinux/sepolicy.c
+        fi
+        if [ "${ENABLE_BBG}" = "1" ]; then
+            patch_paths_excluding "${BBG_KSU_CREDENTIAL_PATCH}"
+        fi
+    } | sort -u > "${allowed_ksu}"
     {
         printf '%s\n' drivers/Kconfig drivers/Makefile drivers/kernelsu
-        awk '$1 == "diff" && $2 == "--git" { sub(/^a\//, "", $3); print $3 }' "${common_patch}"
+        patch_paths_excluding "${common_patch}" \
+            fs/exec.c \
+            fs/namei.c \
+            fs/namespace.c \
+            fs/notify/fdinfo.c \
+            fs/proc/base.c \
+            fs/proc/task_mmu.c \
+            security/selinux/hooks.c
+        patch_paths_excluding "${SUSFS_CONTEXT_ADAPTATION}"
+        patch_paths_excluding "${SUSFS_COMMON_FIX_PATCH_FILE}"
         printf '%s\n' fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h
         if [ "${ENABLE_BBG}" = "1" ]; then
             printf '%s\n' security/Kconfig security/Makefile security/baseband-guard include/linux/lsm_count.h
-        fi
-        if [ "${ENABLE_STAGE5_RTMUTEX_FIX}" = "1" ]; then
-            printf '%s\n' kernel/locking/rtmutex.c
-        fi
-        if [ "${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX}" = "1" ]; then
-            printf '%s\n' fs/f2fs/data.c
-        fi
-        if [ "${ENABLE_F2FS_OPEN_FAST_PATH}" = "1" ]; then
-            printf '%s\n' fs/f2fs/file.c
+            patch_paths_excluding "${BBG_COMMON_CREDENTIAL_PATCH}"
         fi
         if [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then
             printf '%s\n' mm/memcontrol.c
@@ -332,32 +680,8 @@ verify_susfs_source_state() {
         if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
             printf '%s\n' net/ipv4/tcp.c net/ipv4/tcp_input.c
         fi
-        if [ "${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX}" = "1" ]; then
-            printf '%s\n' drivers/virt/gunyah/vm_mgr.c
-        fi
         if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ]; then
             printf '%s\n' net/netfilter/xt_IDLETIMER.c
-        fi
-        if [ "${ENABLE_EVENTPOLL_RCU_UAF_FIX}" = "1" ]; then
-            printf '%s\n' fs/eventpoll.c
-        fi
-        if [ "${ENABLE_CGROUP_KERNFS_UAF_FIX}" = "1" ]; then
-            printf '%s\n' kernel/cgroup/cgroup.c
-        fi
-        if [ "${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX}" = "1" ]; then
-            printf '%s\n' fs/f2fs/inode.c
-        fi
-        if [ "${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX}" = "1" ]; then
-            printf '%s\n' kernel/time/timer.c
-        fi
-        if [ "${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX}" = "1" ]; then
-            printf '%s\n' kernel/futex/requeue.c
-        fi
-        if [ "${ENABLE_PAGE_POOL_DESTROY_RACE_FIX}" = "1" ]; then
-            printf '%s\n' net/core/page_pool.c
-        fi
-        if [ "${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX}" = "1" ]; then
-            printf '%s\n' include/net/netfilter/nf_conntrack.h net/netfilter/nf_conntrack_core.c
         fi
         if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
             printf '%s\n' fs/erofs/dir.c
@@ -368,8 +692,11 @@ verify_susfs_source_state() {
         if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
             printf '%s\n' net/ipv6/mcast.c
         fi
-        if [ "${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX}" = "1" ]; then
-            printf '%s\n' kernel/locking/rtmutex.c kernel/locking/rtmutex_api.c
+        if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
+            printf '%s\n' include/net/addrconf.h net/ipv6/mcast.c
+        fi
+        if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}" = "1" ]; then
+            printf '%s\n' virt/kvm/kvm_main.c
         fi
         if [ "${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}" = "1" ]; then
             printf '%s\n' kernel/futex/pi.c
@@ -392,9 +719,6 @@ verify_susfs_source_state() {
         if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}" = "1" ]; then
             printf '%s\n' fs/f2fs/data.c fs/f2fs/f2fs.h fs/f2fs/segment.c
         fi
-        if [ "${ENABLE_F2FS_ATOMIC_INODE_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/f2fs/gc.c fs/f2fs/inode.c
-        fi
         if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}" = "1" ]; then
             printf '%s\n' drivers/ufs/core/ufshcd.c
         fi
@@ -410,60 +734,115 @@ verify_susfs_source_state() {
         if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' block/blk-wbt.c
         fi
-        if [ "${ENABLE_UNICODE_IGNORABLE_FIX}" = "1" ]; then
-            printf '%s\n' fs/ext4/namei.c fs/f2fs/super.c fs/unicode/mkutf8data.c fs/unicode/utf8-norm.c \
-                fs/unicode/utf8-selftest.c fs/unicode/utf8n.h include/linux/unicode.h
+        if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+            bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" list-paths
         fi
-        if [ "${ENABLE_ADIOS:-0}" = "1" ]; then
-            printf '%s\n' block/Kconfig.iosched block/Makefile block/adios.c block/elevator.c
-        fi
-        if [ "${ENABLE_TCP_BRUTAL:-0}" = "1" ]; then
-            printf '%s\n' net/ipv4/Kconfig net/ipv4/Makefile net/ipv4/tcp_brutal.c
-        fi
+        bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" list-paths
     } | sort -u > "${allowed_common}"
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
     rm -f "${ksu_patch}" "${common_patch}" "${allowed_ksu}" "${allowed_common}"
-    log_success "SUSFS v2.2.0 源码、补丁与 r57 适配状态检查通过"
+    git -C "${COMMON_DIR}" diff --check
+    git -C "${KSU_DIR}" diff --check
+    log_success "SUSFS v2.2.0 固定源码、经审计拒绝项与 Luna 修正版状态检查通过"
 }
 
 verify_bbg_source_state() {
     local kconfig_line='source "security/baseband-guard/Kconfig"'
     local makefile_line='obj-$(CONFIG_BBG) += baseband-guard/'
-    verify_repo_identity "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_COMMIT}"
+    local allowed actual_sha256 marker_count token
+    verify_repo_identity "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_COMMIT}" "0"
+    [ ! -f "$(git -C "${BBG_DIR}" rev-parse --absolute-git-dir)/shallow" ] || \
+        die "Baseband Guard 历史未在 init 阶段补齐，拒绝构建期联网"
+    verify_project_patch "Baseband Guard 保护边界修复" \
+        "${BBG_LUNA_FIX_PATCH}" "${BBG_LUNA_FIX_PATCH_SHA256}" \
+        "${BBG_LUNA_FIX_PATCH_ID}"
+    git -C "${BBG_DIR}" apply --reverse --check "${BBG_LUNA_FIX_PATCH}" || \
+        die "Baseband Guard 保护边界修复状态异常"
+    allowed="$(mktemp)"
+    printf '%s\n' \
+        baseband_guard.c \
+        blkdev_helper.c \
+        blkdev_helper.h \
+        tracing/tracing.c > "${allowed}"
+    verify_allowed_paths "Baseband Guard" "${BBG_DIR}" "${allowed}"
+    rm -f "${allowed}"
+    actual_sha256="$(tracked_diff_sha256 "${BBG_DIR}")"
+    [ "${actual_sha256}" = "${BBG_TRACKED_DIFF_SHA256}" ] || \
+        die "Baseband Guard 出现非预期源码差异: ${actual_sha256}"
+    ! grep -Eq 'allowed_devs|allow_add|allow_has|security_secctx_to_secid|get_cmdline|argv=|path=%s' \
+        "${BBG_DIR}/baseband_guard.c" \
+        "${BBG_DIR}/blkdev_helper.c" \
+        "${BBG_DIR}/tracing/tracing.c" || \
+        die "Baseband Guard 仍含失效缓存、SID 推断或敏感拒绝日志"
+    grep -Fq 'IS_ERR_OR_NULL(bdev)' "${BBG_DIR}/blkdev_helper.c" || \
+        die "Baseband Guard block_device 获取未同时处理 NULL 与 ERR_PTR"
+    ! grep -Fq 'slot_suffix_from_cmdline' "${BBG_DIR}/blkdev_helper.c" || \
+        die "Baseband Guard 仍依赖不必要的活动槽解析"
+    grep -Fq 'partition_name_matches(name, name_len,' "${BBG_DIR}/blkdev_helper.c" || \
+        die "Baseband Guard A/B 分区名匹配缺失"
+    for hook in file_ioctl_compat uring_cmd mmap_file file_mprotect; do
+        grep -Fq "LSM_HOOK_INIT(${hook}," "${BBG_DIR}/baseband_guard.c" || \
+            die "Baseband Guard 缺少 ${hook} 写入口保护"
+    done
+    grep -Fq 'static inline bool is_destructive_ioctl(unsigned int cmd)' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard 缺少明确破坏性 ioctl 判定"
+    grep -Fq 'if (!inode || !is_destructive_ioctl(cmd))' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 未默认放行非破坏性 block ioctl"
+    grep -Fq 'return deny("destructive ioctl on protected partition", inode, cmd);' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 缺少受保护分区破坏性 ioctl 拒绝路径"
+    grep -Fq 'return bb_file_ioctl(file, cmd, arg);' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard compat ioctl 未复用同一策略"
+    ! grep -Eq 'is_read_only_block_ioctl|is_partition_scoped_block_ioctl|normalize_compat_block_ioctl|case (LOOP_SET_FD|BLKFLSBUF|BLKROSET):' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 仍含默认拒绝或非破坏性 ioctl 特判"
+    for token in 'case BLKDISCARD:' 'case BLKSECDISCARD:' 'case BLKZEROOUT:' \
+        'case BLKRRPART:' 'cmd == SG_IO' 'cmd == SCSI_IOCTL_SEND_COMMAND' \
+        'S_ISCHR(inode->i_mode)'; do
+        grep -Fq "${token}" "${BBG_DIR}/baseband_guard.c" || \
+            die "Baseband Guard ioctl 或原始存储入口保护缺失: ${token}"
+    done
+    grep -Fq 'if (!inode || ioucmd->cmd_op != BLOCK_URING_CMD_DISCARD)' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 未将 io_uring 拒绝边界收敛到 discard"
+    marker_count="$(grep -RhcF 'bbg_mark_untrusted_cred(cred);' \
+        "${KSU_DIR}/kernel/policy/app_profile.c" \
+        "${KSU_DIR}/kernel/selinux/selinux.c" | awk '{ total += $1 } END { print total + 0 }')"
+    [ "${marker_count}" = "3" ] || die "KernelSU root 凭据标记数量异常: ${marker_count}"
+    verify_project_patch "KernelSU Baseband Guard 凭据标记补丁" \
+        "${BBG_KSU_CREDENTIAL_PATCH}" "${BBG_KSU_CREDENTIAL_PATCH_SHA256}" \
+        "${BBG_KSU_CREDENTIAL_PATCH_ID}"
+    git -C "${KSU_DIR}" apply --reverse --check "${BBG_KSU_CREDENTIAL_PATCH}" || \
+        die "KernelSU Baseband Guard 凭据标记状态异常"
+    verify_project_patch "Baseband Guard AOSP 6.12.69 内部凭据接口补丁" \
+        "${BBG_COMMON_CREDENTIAL_PATCH}" "${BBG_COMMON_CREDENTIAL_PATCH_SHA256}" \
+        "${BBG_COMMON_CREDENTIAL_PATCH_ID}"
+    git -C "${COMMON_DIR}" apply --reverse --check "${BBG_COMMON_CREDENTIAL_PATCH}" || \
+        die "Baseband Guard 内部凭据接口状态异常"
+    grep -Fq 'void bbg_mark_untrusted_cred(struct cred *cred)' \
+        "${COMMON_DIR}/include/linux/baseband_guard.h" || \
+        die "Baseband Guard 内部凭据接口缺失"
+    grep -Fq '#include <linux/baseband_guard.h>' \
+        "${BBG_DIR}/tracing/tracing.c" || \
+        die "Baseband Guard 未通过公共内部头文件声明凭据接口"
+    [ "$(grep -Fxc 'void bbg_mark_untrusted_cred(struct cred *cred);' \
+        "${BBG_DIR}/tracing/tracing.c")" = "0" ] || \
+        die "Baseband Guard 仍含重复的本地凭据接口声明"
+    ! grep -Rq 'EXPORT_SYMBOL.*bbg_mark_untrusted_cred' "${COMMON_DIR}/include/linux/baseband_guard.h" "${BBG_DIR}/tracing" || \
+        die "Baseband Guard 内部凭据接口不得导出"
     [ "$(grep -Fxc "${kconfig_line}" "${COMMON_DIR}/security/Kconfig")" = "1" ] || die "Baseband Guard Kconfig 接入状态异常"
     [ "$(grep -Fxc "${makefile_line}" "${COMMON_DIR}/security/Makefile")" = "1" ] || die "Baseband Guard Kbuild 接入状态异常"
     [ -L "${COMMON_DIR}/security/baseband-guard" ] || die "Baseband Guard security 链接缺失"
     [ "$(readlink -f "${COMMON_DIR}/security/baseband-guard")" = "${BBG_DIR}" ] || die "Baseband Guard security 链接目标错误"
+    verify_project_patch "Baseband Guard AOSP 6.12.69 LSM 计数适配补丁" \
+        "${BBG_LSM_COUNT_PATCH}" "${BBG_LSM_COUNT_PATCH_SHA256}" \
+        "${BBG_LSM_COUNT_PATCH_ID}"
     git -C "${COMMON_DIR}" apply --reverse --check "${BBG_LSM_COUNT_PATCH}" || die "Baseband Guard LSM 计数适配状态异常"
     [ "$(grep -Ec '^#define BASEBAND_GUARD_ENABLED( |$)' "${COMMON_DIR}/include/linux/lsm_count.h")" = "2" ] || die "Baseband Guard LSM 计数宏异常"
     [ "$(grep -Ec '^[[:space:]]*BASEBAND_GUARD_ENABLED\)?[[:space:]]*\\?$' "${COMMON_DIR}/include/linux/lsm_count.h")" = "1" ] || die "Baseband Guard LSM 计数入口异常"
-    log_success "Baseband Guard ${BBG_COMMIT:0:12} 源码与 overlay 状态检查通过"
-}
-
-verify_f2fs_merge_page_bio_uaf_fix() {
-    local changed_paths patch_file patch_id
-    [ "${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX}" = "1" ] || return
-    env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        cat-file -e "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}^{commit}" 2>/dev/null || \
-        die "F2FS merge_page_bio UAF 修复对象缺失"
-    changed_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}")"
-    [ "${changed_paths}" = "fs/f2fs/data.c" ] || \
-        die "F2FS merge_page_bio UAF 修复路径集合异常"
-    patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        show --format= "${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    [ "${patch_id}" = "${F2FS_MERGE_PAGE_BIO_UAF_FIX_PATCH_ID}" ] || \
-        die "F2FS merge_page_bio UAF 修复 patch-id 不匹配"
-    git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || \
-        die "F2FS merge_page_bio UAF 修复未完整应用"
-    rm -f "${patch_file}"
-    grep -Fq 'inc_page_count(fio->sbi, WB_DATA_TYPE(fio->page, false));' \
-        "${COMMON_DIR}/fs/f2fs/data.c" || \
-        die "F2FS merge_page_bio UAF 修复语义检查失败"
-    log_success "F2FS merge_page_bio 加密写回 UAF 修复检查通过"
+    log_success "Baseband Guard ${BBG_COMMIT:0:12} 保护边界、凭据标记与 overlay 状态检查通过"
 }
 
 verify_aosp_backport_source() {
@@ -509,6 +888,42 @@ verify_linux_stable_source() {
     [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
 }
 
+verify_linux_stable_source_exact() {
+    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
+    local expected_paths="$5" upstream_commit="$6"
+    local actual_date commit_message upstream_patch_id upstream_paths
+
+    [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 固定审计终点"
+    verify_linux_stable_source "${label}" "${commit}" "${expected_patch_id}" \
+        "${expected_paths}"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
+        merge-base --is-ancestor "${commit}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
+        die "${label} 不属于固定 Linux 6.12.y 审计快照"
+    actual_date="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
+        -c log.mailmap=false show -s --format=%cs "${commit}")"
+    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
+    commit_message="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
+        -c log.mailmap=false show -s --format=%B "${commit}")"
+    grep -Fx "[ Upstream commit ${upstream_commit} ]" <<<"${commit_message}" >/dev/null || \
+        die "${label} 未绑定固定 Linux mainline 上游提交"
+    [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 固定审计终点"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        cat-file -e "${upstream_commit}^{commit}" 2>/dev/null || \
+        die "${label} Linux mainline 上游对象缺失"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        merge-base --is-ancestor "${upstream_commit}" "${LINUX_MAINLINE_AUDIT_COMMIT}" || \
+        die "${label} 上游提交不属于固定 Linux mainline 快照"
+    upstream_paths="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        diff-tree --no-commit-id --name-only -r "${upstream_commit}" | LC_ALL=C sort | paste -sd ' ' -)"
+    [ "${upstream_paths}" = "${expected_paths}" ] || \
+        die "${label} Linux mainline 上游触及非预期路径: ${upstream_paths}"
+    upstream_patch_id="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        -c log.mailmap=false show --format= "${upstream_commit}" | \
+        git patch-id --stable | awk '{ print $1 }')"
+    [ "${upstream_patch_id}" = "${expected_patch_id}" ] || \
+        die "${label} Linux mainline 上游 patch-id 不匹配"
+}
+
 verify_linux_stable_backport_applied() {
     local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
     local patch_file
@@ -516,6 +931,31 @@ verify_linux_stable_backport_applied() {
     patch_file="$(mktemp)"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
         -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
+    git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
+    rm -f "${patch_file}"
+}
+
+verify_linux_mainline_backport_applied() {
+    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
+    local expected_paths="$5" actual_date actual_paths patch_file patch_id
+
+    [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 固定审计终点"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        merge-base --is-ancestor "${commit}" "${LINUX_MAINLINE_AUDIT_COMMIT}" || \
+        die "${label}不属于固定 Linux mainline 审计快照"
+    actual_date="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        -c log.mailmap=false show -s --format=%cs "${commit}")"
+    [ "${actual_date}" = "${commit_date}" ] || die "${label}提交日期不匹配: ${actual_date}"
+    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
+    [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常: ${actual_paths}"
+    patch_file="$(mktemp)"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
+        -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
+    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
+    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label}patch-id 不匹配"
     git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
     rm -f "${patch_file}"
 }
@@ -589,17 +1029,17 @@ verify_first_batch_linux_backports() {
             "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" \
             "${F2FS_GC_MERGE_DEADLOCK_PATCH_ID}" \
             "fs/f2fs/segment.c"
-        [ "$(git --git-dir="${LINUX_STABLE_AUDIT_DIR}" rev-parse \
+        [ "$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" rev-parse \
             "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}^")" = \
             "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" ] || \
             die "F2FS GC 死锁组合提交顺序异常"
-        composite_patch="$(mktemp)"
-        git --git-dir="${LINUX_STABLE_AUDIT_DIR}" diff \
-            "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}^" \
-            "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" -- fs/f2fs > "${composite_patch}"
-        git -C "${COMMON_DIR}" apply --reverse --check "${composite_patch}" || \
-            die "F2FS GC 死锁组合修复未完整应用"
-        rm -f "${composite_patch}"
+        verify_project_patch "F2FS GC 死锁 AOSP 6.12.69 适配补丁" \
+            "${F2FS_FOREGROUND_GC_PATCH}" \
+            "${F2FS_FOREGROUND_GC_PATCH_SHA256}" \
+            "${F2FS_FOREGROUND_GC_PATCH_ID}"
+        git -C "${COMMON_DIR}" apply --reverse --check \
+            "${F2FS_FOREGROUND_GC_PATCH}" || \
+            die "F2FS GC 死锁 AOSP 6.12.69 适配补丁未完整应用"
     fi
     log_success "第一批 Linux 稳定修复来源、路径与应用状态检查通过"
 }
@@ -607,12 +1047,6 @@ verify_first_batch_linux_backports() {
 verify_second_batch_backports() {
     local actual_sha256 patch_id ufs_error_handler
 
-    if [ "${ENABLE_F2FS_ATOMIC_INODE_UAF_FIX}" = "1" ]; then
-        verify_linux_stable_backport_applied "F2FS atomic inode 生命周期修复" \
-            "${F2FS_ATOMIC_INODE_UAF_STABLE_COMMIT}" \
-            "${F2FS_ATOMIC_INODE_UAF_PATCH_ID}" \
-            "fs/f2fs/gc.c fs/f2fs/inode.c"
-    fi
     if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX}" = "1" ]; then
         verify_aosp_backport_source "UFS runtime suspend 错误恢复死锁修复" \
             "${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT}" \
@@ -628,13 +1062,13 @@ verify_second_batch_backports() {
             "drivers/ufs/core/ufshcd.c"
         actual_sha256="$(sha256sum "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" | awk '{ print $1 }')"
         [ "${actual_sha256}" = "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256}" ] || \
-            die "UFS r57 适配补丁 SHA-256 不匹配"
+            die "UFS AOSP 6.12.69 适配补丁 SHA-256 不匹配"
         patch_id="$(git patch-id --stable < "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" | awk '{ print $1 }')"
         [ "${patch_id}" = "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID}" ] || \
-            die "UFS r57 适配补丁 patch-id 不匹配"
+            die "UFS AOSP 6.12.69 适配补丁 patch-id 不匹配"
         git -C "${COMMON_DIR}" apply --reverse --check \
             "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" || \
-            die "UFS r57 适配补丁未完整应用"
+            die "UFS AOSP 6.12.69 适配补丁未完整应用"
         ufs_error_handler="$(sed -n '/^static void ufshcd_err_handler(/,/^}/p' \
             "${COMMON_DIR}/drivers/ufs/core/ufshcd.c")"
         printf '%s\n' "${ufs_error_handler}" | \
@@ -655,8 +1089,9 @@ verify_second_batch_backports() {
         ' || die "UFS runtime PM 检查未置于 host_sem 获取之前"
     fi
     if [ "${ENABLE_TIMER_BASE_FAST_PATH}" = "1" ]; then
-        verify_aosp_backport_applied "timer base 指针获取快路径优化" \
+        verify_linux_mainline_backport_applied "timer base 指针获取快路径优化" \
             "${TIMER_BASE_FAST_PATH_COMMIT}" \
+            "${TIMER_BASE_FAST_PATH_COMMIT_DATE}" \
             "${TIMER_BASE_FAST_PATH_PATCH_ID}" \
             "kernel/time/timer.c"
     fi
@@ -679,18 +1114,6 @@ verify_second_batch_backports() {
             "block/blk-wbt.c"
     fi
     log_success "第二批修复/优化来源、路径与应用状态检查通过"
-}
-
-verify_f2fs_open_fast_path() {
-    [ "${ENABLE_F2FS_OPEN_FAST_PATH}" = "1" ] || return
-    verify_aosp_backport_applied "F2FS open 快路径优化" \
-        "${F2FS_OPEN_FAST_PATH_COMMIT}" \
-        "${F2FS_OPEN_FAST_PATH_PATCH_ID}" \
-        "fs/f2fs/file.c"
-    grep -Fq 'opened = is_inode_flag_set(inode, FI_OPENED_FILE);' \
-        "${COMMON_DIR}/fs/f2fs/file.c" || \
-        die "F2FS open 快路径语义检查失败"
-    log_success "F2FS open 快路径优化检查通过"
 }
 
 verify_memcg_rstat_fast_path() {
@@ -717,17 +1140,6 @@ verify_tcp_recv_mstamp_fast_path() {
     log_success "TCP recv 时间戳快路径优化检查通过"
 }
 
-verify_gunyah_clean_resources_uaf_fix() {
-    [ "${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "Gunyah clean_resources UAF 修复" \
-        "${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT}" \
-        "${GUNYAH_CLEAN_RESOURCES_UAF_FIX_PATCH_ID}" \
-        "drivers/virt/gunyah/vm_mgr.c"
-    grep -Fq 'list_del(&ghrsc->list);' "${COMMON_DIR}/drivers/virt/gunyah/vm_mgr.c" || \
-        die "Gunyah clean_resources UAF 修复语义检查失败"
-    log_success "Gunyah clean_resources UAF 修复检查通过"
-}
-
 verify_idletimer_destroy_uaf_fix() {
     [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ] || return
     verify_aosp_backport_applied "IDLETIMER destroy UAF 修复" \
@@ -735,71 +1147,6 @@ verify_idletimer_destroy_uaf_fix() {
         "${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID}" \
         "net/netfilter/xt_IDLETIMER.c"
     log_success "IDLETIMER destroy UAF 修复检查通过"
-}
-
-verify_eventpoll_rcu_uaf_fix() {
-    [ "${ENABLE_EVENTPOLL_RCU_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "eventpoll RCU UAF 修复" \
-        "${EVENTPOLL_RCU_UAF_FIX_COMMIT}" \
-        "${EVENTPOLL_RCU_UAF_FIX_PATCH_ID}" \
-        "fs/eventpoll.c"
-    grep -Fq 'kfree_rcu(ep, rcu);' "${COMMON_DIR}/fs/eventpoll.c" || \
-        die "eventpoll RCU UAF 修复语义检查失败"
-    log_success "eventpoll RCU UAF 修复检查通过"
-}
-
-verify_cgroup_kernfs_uaf_fix() {
-    [ "${ENABLE_CGROUP_KERNFS_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "cgroup kernfs UAF 修复" \
-        "${CGROUP_KERNFS_UAF_FIX_COMMIT}" \
-        "${CGROUP_KERNFS_UAF_FIX_PATCH_ID}" \
-        "kernel/cgroup/cgroup.c"
-    log_success "cgroup kernfs UAF 修复检查通过"
-}
-
-verify_f2fs_sync_inode_meta_uaf_fix() {
-    [ "${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "F2FS sync_inode_meta UAF 修复" \
-        "${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT}" \
-        "${F2FS_SYNC_INODE_META_UAF_FIX_PATCH_ID}" \
-        "fs/f2fs/inode.c"
-    log_success "F2FS sync_inode_meta UAF 修复检查通过"
-}
-
-verify_timer_shutdown_sync_race_fix() {
-    [ "${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "timer shutdown_sync 竞态修复" \
-        "${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT}" \
-        "${TIMER_SHUTDOWN_SYNC_RACE_FIX_PATCH_ID}" \
-        "kernel/time/timer.c"
-    log_success "timer shutdown_sync 竞态修复检查通过"
-}
-
-verify_futex_requeue_pi_uaf_fix() {
-    [ "${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "futex requeue-PI UAF 修复" \
-        "${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT}" \
-        "${FUTEX_REQUEUE_PI_UAF_FIX_PATCH_ID}" \
-        "kernel/futex/requeue.c"
-    log_success "futex requeue-PI UAF 修复检查通过"
-}
-
-verify_page_pool_destroy_race_fix() {
-    [ "${ENABLE_PAGE_POOL_DESTROY_RACE_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "page_pool 销毁竞态修复" \
-        "${PAGE_POOL_DESTROY_RACE_FIX_COMMIT}" \
-        "${PAGE_POOL_DESTROY_RACE_FIX_PATCH_ID}" \
-        "net/core/page_pool.c"
-    log_success "page_pool 销毁竞态修复检查通过"
-}
-
-verify_conntrack_unconfirmed_race_fix() {
-    [ "${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "conntrack 未确认项并发删除修复" \
-        "${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT}" \
-        "${CONNTRACK_UNCONFIRMED_RACE_FIX_PATCH_ID}" \
-        "include/net/netfilter/nf_conntrack.h net/netfilter/nf_conntrack_core.c"
-    log_success "conntrack 未确认项并发删除修复检查通过"
 }
 
 verify_erofs_dir_tail_oob_fix() {
@@ -831,126 +1178,46 @@ verify_ipv6_mld_uaf_fix() {
     log_success "IPv6 MLD 查询释放后访问修复检查通过"
 }
 
-verify_rtmutex_waiter_enqueue_fix() {
-    [ "${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "rtmutex 未入队 waiter 错误路径修复" \
-        "${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT}" \
-        "${RTMUTEX_WAITER_ENQUEUE_FIX_PATCH_ID}" \
-        "kernel/locking/rtmutex.c kernel/locking/rtmutex_api.c"
-    grep -Fq 'if (!waiter_task) /* never enqueued */' \
-        "${COMMON_DIR}/kernel/locking/rtmutex.c" || \
-        die "rtmutex 未入队 waiter 错误路径修复语义检查失败"
-    grep -Fq 'if (unlikely(ret < 0))' \
-        "${COMMON_DIR}/kernel/locking/rtmutex_api.c" || \
-        die "rtmutex proxy lock 返回值检查语义失败"
-    log_success "rtmutex 未入队 waiter 错误路径修复检查通过"
+verify_ipv6_mld_delayed_work_uaf_fix() {
+    [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX}" = "1" ] || return
+    verify_linux_stable_source_exact "IPv6 MLD delayed-work 生命周期修复" \
+        "${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT}" \
+        "${IPV6_MLD_DELAYED_WORK_COMMIT_DATE}" \
+        "${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID}" \
+        "include/net/addrconf.h net/ipv6/mcast.c" \
+        "${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}"
+    verify_project_patch "IPv6 MLD delayed-work AOSP 6.12.69 适配补丁" \
+        "${IPV6_MLD_DELAYED_WORK_PATCH_FILE}" \
+        "${IPV6_MLD_DELAYED_WORK_PATCH_SHA256}" \
+        "${IPV6_MLD_DELAYED_WORK_PATCH_ID}"
+    git -C "${COMMON_DIR}" apply --reverse --check \
+        "${IPV6_MLD_DELAYED_WORK_PATCH_FILE}" || \
+        die "IPv6 MLD delayed-work AOSP 6.12.69 适配补丁未完整应用"
+    [ "$(grep -Fc 'in6_dev_hold_safe(idev)' "${COMMON_DIR}/net/ipv6/mcast.c")" = "5" ] || \
+        die "IPv6 MLD delayed-work 安全引用覆盖点异常"
+    grep -Fq 'return refcount_inc_not_zero(&idev->refcnt);' \
+        "${COMMON_DIR}/include/net/addrconf.h" || \
+        die "IPv6 MLD delayed-work 仍可能复活零引用 inet6_dev"
+    log_success "IPv6 MLD delayed-work 生命周期修复检查通过"
 }
 
-verify_stage5_rtmutex_fix() {
-    local patch_file patch_id stack_patch_id
-    [ "${ENABLE_STAGE5_RTMUTEX_FIX}" = "1" ] || return
-    git -C "${COMMON_DIR}" cat-file -e "${STAGE5_RTMUTEX_FIX_COMMIT}^{commit}" 2>/dev/null || \
-        die "阶段 5 AOSP rtmutex 修复对象缺失"
-    patch_file="$(mktemp)"
-    git -C "${COMMON_DIR}" show --format= "${STAGE5_RTMUTEX_FIX_COMMIT}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    [ "${patch_id}" = "${STAGE5_RTMUTEX_FIX_PATCH_ID}" ] || die "阶段 5 rtmutex patch-id 不匹配"
-    if [ "${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX}" = "1" ]; then
-        stack_patch_id="$(
-            git -C "${COMMON_DIR}" diff HEAD -- \
-                kernel/locking/rtmutex.c kernel/locking/rtmutex_api.c |
-                git patch-id --stable | awk '{ print $1 }'
-        )"
-        [ "${stack_patch_id}" = "${RTMUTEX_FIX_STACK_PATCH_ID}" ] || \
-            die "rtmutex 固定修复栈 patch-id 不匹配"
-    else
-        git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || \
-            die "阶段 5 rtmutex 修复未应用"
+verify_android17_selected_fixes() {
+    if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" = "1" ]; then
+        verify_aosp_backport_applied "KVM compound head 引用修复" \
+            "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT}" \
+            "${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID}" \
+            "virt/kvm/kvm_main.c"
+        grep -Fq 'return folio_try_get(page_folio(page));' \
+            "${COMMON_DIR}/virt/kvm/kvm_main.c" || \
+            die "KVM compound head 引用修复语义检查失败"
     fi
-    rm -f "${patch_file}"
-    grep -Fq 'struct task_struct *waiter_task = waiter->task;' "${COMMON_DIR}/kernel/locking/rtmutex.c" || \
-        die "阶段 5 rtmutex waiter_task 守卫失败"
-    log_success "阶段 5 AOSP rtmutex 安全修复检查通过"
-}
-
-verify_unicode_ignorable_fix() {
-    local patch_id changed_paths official_ext4_patch_id project_ext4_patch_id
-    [ "${ENABLE_UNICODE_IGNORABLE_FIX}" = "1" ] || return
-    git -C "${COMMON_DIR}" cat-file -e "${UNICODE_FIX_COMMIT}^" 2>/dev/null || die "AOSP Unicode 修复对象不完整"
-    patch_id="$(git -C "${COMMON_DIR}" show --format= "${UNICODE_FIX_COMMIT}" | git patch-id --stable | awk '{ print $1 }')"
-    [ "${patch_id}" = "${UNICODE_FIX_PATCH_ID}" ] || die "Unicode 官方修复 patch-id 不匹配"
-    changed_paths="$(git -C "${COMMON_DIR}" diff-tree --no-commit-id --name-only -r "${UNICODE_FIX_COMMIT}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${changed_paths}" = "fs/unicode/mkutf8data.c fs/unicode/utf8data.h_shipped" ] || die "Unicode 官方修复路径集合异常"
-    [ -s "${UNICODE_FIX_PATCH}" ] || die "Unicode 6.12.23 兼容补丁缺失"
-    [ "$(sha256sum "${UNICODE_FIX_PATCH}" | awk '{ print $1 }')" = "${UNICODE_FIX_PATCH_SHA256}" ] || die "Unicode 兼容补丁校验失败"
-    git -C "${COMMON_DIR}" apply --recount --reverse --check "${UNICODE_FIX_PATCH}" || die "Unicode 兼容修复未完整应用"
-    [ -s "${UNICODE_SELFTEST_PATCH}" ] || die "Unicode 12.1 全码点自测补丁缺失"
-    [ "$(sha256sum "${UNICODE_SELFTEST_PATCH}" | awk '{ print $1 }')" = "${UNICODE_SELFTEST_PATCH_SHA256}" ] || \
-        die "Unicode 全码点自测补丁校验失败"
-    git -C "${COMMON_DIR}" apply --recount --reverse --check "${UNICODE_SELFTEST_PATCH}" || \
-        die "Unicode 12.1 全码点自测未完整应用"
-    ! grep -Fq 'ignore_init();' "${COMMON_DIR}/fs/unicode/mkutf8data.c" || die "Unicode 生成器仍调用旧的 default-ignorable 删除逻辑"
-    grep -Fq 'ZERO WIDTH SPACE must no longer normalize to an empty name' "${COMMON_DIR}/fs/unicode/utf8-selftest.c" || \
-        die "Unicode 零宽 NFDI 自测缺失"
-    grep -Fq 'Casefold surrounding text but preserve ZERO WIDTH SPACE' "${COMMON_DIR}/fs/unicode/utf8-selftest.c" || \
-        die "Unicode 零宽 NFDICF 自测缺失"
-    grep -Fq 'checked == 4173' "${COMMON_DIR}/fs/unicode/utf8-selftest.c" || \
-        die "Unicode 12.1 Default-Ignorable 全码点覆盖缺失"
-    grep -Fq 'sb_no_casefold_compat_fallback(dir->i_sb)' "${COMMON_DIR}/fs/ext4/namei.c" || \
-        die "ext4 旧 casefold 哈希线性回退缺失"
-    git -C "${COMMON_DIR}" cat-file -e "${UNICODE_EXT4_COMPAT_COMMIT}^" 2>/dev/null || \
-        die "AOSP ext4 casefold 兼容提交对象不完整"
-    official_ext4_patch_id="$(git -C "${COMMON_DIR}" show --format= "${UNICODE_EXT4_COMPAT_COMMIT}" -- fs/ext4/namei.c | \
-        git patch-id --stable | awk '{ print $1 }')"
-    project_ext4_patch_id="$(git -C "${COMMON_DIR}" diff HEAD -- fs/ext4/namei.c | git patch-id --stable | awk '{ print $1 }')"
-    [ "${official_ext4_patch_id}" = "${UNICODE_EXT4_COMPAT_PATCH_ID}" ] || \
-        die "AOSP ext4 casefold 兼容 patch-id 不匹配"
-    [ "${project_ext4_patch_id}" = "${official_ext4_patch_id}" ] || \
-        die "项目 ext4 casefold 兼容增量与 AOSP 官方实现不一致"
-    grep -Fq 'f2fs_should_fallback_to_linear' "${COMMON_DIR}/fs/f2fs/dir.c" || \
-        die "f2fs 旧 casefold 哈希线性回退缺失"
-    grep -Fq 'f2fs_set_lookup_mode(sbi, LOOKUP_AUTO);' "${COMMON_DIR}/fs/f2fs/super.c" || \
-        die "f2fs 默认 lookup_mode 未启用安全的自动兼容回退"
-    log_success "Unicode 零宽语义、全码点自测及 ext4/f2fs 旧目录兼容检查通过"
-}
-
-run_unicode_uml_selftest() {
-    local uml_out uml_log uml_rc
-    [ "${ENABLE_UNICODE_IGNORABLE_FIX}" = "1" ] || return
-    command -v gcc >/dev/null 2>&1 || die "Unicode UML selftest 缺少主机 gcc"
-    command -v timeout >/dev/null 2>&1 || die "Unicode UML selftest 缺少 timeout"
-
-    uml_out="${BUILD_DIR}_unicode_uml"
-    uml_log="${uml_out}/unicode-selftest.log"
-    mkdir -p "${uml_out}"
-    log_step "构建并运行 Unicode 12.1 UML 全码点 selftest"
-    make -C "${COMMON_DIR}" O="${uml_out}" ARCH=um SUBARCH=x86_64 CROSS_COMPILE= CC=gcc HOSTCC=gcc LD=ld defconfig >/dev/null
-    bash "${COMMON_DIR}/scripts/config" --file "${uml_out}/.config" \
-        --enable UNICODE \
-        --enable UNICODE_NORMALIZATION_SELFTEST \
-        --disable MODULES \
-        --disable BLK_DEV_UBD \
-        --disable UML_NET \
-        --disable KSU \
-        --disable KSU_SUSFS \
-        --disable BBG \
-        --disable MQ_IOSCHED_ADIOS \
-        --disable TCP_CONG_BRUTAL \
-        --disable IP_SET
-    make -C "${COMMON_DIR}" O="${uml_out}" ARCH=um SUBARCH=x86_64 CROSS_COMPILE= CC=gcc HOSTCC=gcc LD=ld olddefconfig >/dev/null
-    make -C "${COMMON_DIR}" O="${uml_out}" ARCH=um SUBARCH=x86_64 CROSS_COMPILE= CC=gcc HOSTCC=gcc LD=ld -j"${BUILD_JOBS}" linux >/dev/null
-
-    set +e
-    {
-        timeout 30s "${uml_out}/linux" mem=256M ssl=null con0=fd:0,fd:1 >"${uml_log}" 2>&1
-        uml_rc=$?
-    } 2>/dev/null
-    set -e
-    grep -Fq "utf8_selftest: All ${UNICODE_SELFTEST_EXPECTED_TESTS} tests passed" "${uml_log}" || \
-        die "Unicode UML selftest 未通过（UML rc=${uml_rc}）"
-    ! grep -Eq 'utf8_selftest: [0-9]+ out of [0-9]+ tests failed' "${uml_log}" || \
-        die "Unicode UML selftest 报告失败"
-    log_success "Unicode UML 运行时 selftest 通过 (${UNICODE_SELFTEST_EXPECTED_TESTS} 项)"
+    grep -Fq 'unlikely(sc->proactive && signal_pending(current))' \
+        "${COMMON_DIR}/mm/vmscan.c" || \
+        die "r63 基线缺少主动回收内层扫描 freezer 检查"
+    grep -A1 -F 'if (signal_pending(current))' \
+        "${COMMON_DIR}/mm/memcontrol.c" | grep -Fq 'return -ERESTARTSYS;' || \
+        die "r63 基线主动回收 freezer 返回值语义异常"
+    log_success "Android 17 r63 基线与所选后续修复检查通过"
 }
 
 verify_lsm_slot_capacity() {
@@ -978,38 +1245,6 @@ verify_lsm_slot_capacity() {
     log_success "LSM 槽位计数已由目标配置预处理证明: ${expanded}（BBG 1 槽，KernelSU 0 槽）"
 }
 
-verify_adios_source_state() {
-    [ "${ENABLE_ADIOS}" = "1" ] || return
-    verify_repo_identity "ADIOS ${ADIOS_REF}" "${ADIOS_DIR}" "${ADIOS_REPO}" "${ADIOS_COMMIT}"
-    git -C "${COMMON_DIR}" apply --reverse --check --exclude=block/Makefile --exclude=block/Kconfig.iosched "${ADIOS_STABLE_PATCH_FILE}" || \
-        die "ADIOS 3.2.0 官方 6.12 补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check "${ADIOS_KBUILD_ADAPTATION}" || \
-        die "ADIOS AOSP 6.12.23 Kbuild 适配状态异常"
-    git -C "${COMMON_DIR}" apply --check "${ADIOS_FORCE_DEFAULT_PATCH_FILE}" || \
-        die "ADIOS 强制默认补丁不得存在"
-    grep -Fq '#define ADIOS_VERSION "3.2.0"' "${COMMON_DIR}/block/adios.c" || \
-        die "ADIOS 源码版本不是 3.2.0"
-    [ "$(grep -Fxc 'config MQ_IOSCHED_ADIOS' "${COMMON_DIR}/block/Kconfig.iosched")" = "1" ] || \
-        die "ADIOS Kconfig 主选项不是精确一处"
-    [ "$(grep -Fxc 'config MQ_IOSCHED_DEFAULT_ADIOS' "${COMMON_DIR}/block/Kconfig.iosched")" = "1" ] || \
-        die "ADIOS Kconfig 默认选项不是精确一处"
-    ! grep -Eq '^all:|^clean:|/lib/modules/' "${COMMON_DIR}/block/Makefile" || \
-        die "ADIOS 外置模块 Makefile 规则不得进入完整内核树"
-    log_success "ADIOS 3.2.0 官方来源与适配状态检查通过"
-}
-
-verify_tcp_brutal_source_state() {
-    [ "${ENABLE_TCP_BRUTAL}" = "1" ] || return
-    verify_repo_identity "TCP Brutal ${TCP_BRUTAL_REF}" "${TCP_BRUTAL_DIR}" "${TCP_BRUTAL_REPO}" "${TCP_BRUTAL_COMMIT}"
-    [ "$(sha256sum "${TCP_BRUTAL_DIR}/brutal.c" | awk '{ print $1 }')" = "${TCP_BRUTAL_SOURCE_SHA256}" ] || \
-        die "TCP Brutal 官方源码 SHA-256 不匹配"
-    cmp -s "${TCP_BRUTAL_DIR}/brutal.c" "${COMMON_DIR}/net/ipv4/tcp_brutal.c" || \
-        die "TCP Brutal 源文件不是固定官方内容"
-    git -C "${COMMON_DIR}" apply --reverse --check "${TCP_BRUTAL_INTEGRATION_PATCH}" || \
-        die "TCP Brutal AOSP 6.12.23 接入补丁状态异常"
-    log_success "TCP Brutal ${TCP_BRUTAL_COMMIT:0:12} 官方来源与接入状态检查通过"
-}
-
 verify_kernelsu_build() {
     local cmd_file="${BUILD_DIR}/drivers/kernelsu/core/.init.o.cmd"
     [ -s "${BUILD_DIR}/drivers/kernelsu/built-in.a" ] || die "KernelSU built-in archive 缺失"
@@ -1022,38 +1257,55 @@ verify_kernelsu_build() {
         "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
             grep -E "[[:space:]][Tt][[:space:]]+${symbol}$" >/dev/null || die "vmlinux 未链接 seccomp 支持符号: ${symbol}"
     done
-    log_success "KernelSU built-in、version code ${KSU_VERSION_CODE} 与标准 seccomp 支持检查通过"
+    if "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
+        awk 'tolower($NF) ~ /open_redirect/ { found = 1 } END { exit(found ? 0 : 1) }'; then
+        die "vmlinux 不得链接已关闭的 SUSFS OPEN_REDIRECT 实现"
+    fi
+    log_success "KernelSU built-in、version code ${KSU_VERSION_CODE}、标准 seccomp 与 OPEN_REDIRECT 关闭状态检查通过"
 }
 
 verify_bbg_build() {
+    local object
+
     [ -s "${BUILD_DIR}/security/baseband-guard/built-in.a" ] || die "Baseband Guard built-in archive 缺失"
     "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
         grep -E '[[:space:]][Tt][[:space:]]+bbg_init$' >/dev/null || die "vmlinux 未链接 bbg_init"
+    "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
+        grep -E '[[:space:]][Tt][[:space:]]+bbg_mark_untrusted_cred$' >/dev/null || \
+        die "vmlinux 未链接 Baseband Guard 凭据标记"
+    for object in \
+        drivers/kernelsu/policy/app_profile.o \
+        drivers/kernelsu/selinux/selinux.o; do
+        [ -s "${BUILD_DIR}/${object}" ] || die "Baseband Guard 凭据调用对象缺失: ${object}"
+        "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/${object}" | \
+            grep -E '[[:space:]]U[[:space:]]+bbg_mark_untrusted_cred$' >/dev/null || \
+            die "KernelSU 对 Baseband Guard 凭据标记的调用缺失: ${object}"
+    done
+    if awk '$2 == "bbg_mark_untrusted_cred" { found = 1 } END { exit(found ? 0 : 1) }' \
+        "${BUILD_DIR}/Module.symvers"; then
+        die "Baseband Guard 内部凭据标记不得成为 KMI 导出"
+    fi
     strings "${BUILD_DIR}/arch/arm64/boot/Image" | grep -F "${BBG_COMMIT:0:8}" >/dev/null || \
         die "Image 未包含固定 Baseband Guard 版本"
-    log_success "Baseband Guard built-in 与版本 ${BBG_COMMIT:0:8} 检查通过"
+    log_success "Baseband Guard built-in、内部凭据标记与版本 ${BBG_COMMIT:0:8} 检查通过"
 }
 
 verify_stage5_selected_build() {
-    if [ "${ENABLE_ADIOS}" = "1" ]; then
-        [ -s "${BUILD_DIR}/block/built-in.a" ] || die "block built-in archive 缺失"
-        "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
-            grep -E '[[:space:]][Tt][[:space:]]+adios_init$' >/dev/null || die "vmlinux 未链接 adios_init"
-        strings "${BUILD_DIR}/arch/arm64/boot/Image" | grep -F '3.2.0' >/dev/null || \
-            die "Image 未包含 ADIOS 3.2.0"
-    fi
     if [ "${ENABLE_STAGE5_NETWORK}" = "1" ]; then
         "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
             grep -E '[[:space:]][Tt][[:space:]]+bbr_register$' >/dev/null || die "vmlinux 未链接 BBR v1"
-        "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | \
-            grep -E '[[:space:]][Tt][[:space:]]+brutal_register$' >/dev/null || die "vmlinux 未链接 TCP Brutal"
     fi
-    log_success "阶段 5 已选调度、网络与 namespace 功能链接检查通过"
+    log_success "阶段 5 网络与 namespace 功能链接检查通过"
 }
 
 require_config_enabled() {
     local symbol="$1"
     grep -qx "CONFIG_${symbol}=y" "${BUILD_DIR}/.config" || die "KMI 配置缺失: CONFIG_${symbol}=y"
+}
+
+require_config_module() {
+    local symbol="$1"
+    grep -qx "CONFIG_${symbol}=m" "${BUILD_DIR}/.config" || die "KMI 配置必须为模块: CONFIG_${symbol}=m"
 }
 
 require_config_disabled() {
@@ -1071,18 +1323,19 @@ verify_kmi_config() {
     local config_lines config_sha256
     config_lines="$(wc -l < "${BUILD_DIR}/.config" | tr -d ' ')"
     config_sha256="$(sha256sum "${BUILD_DIR}/.config" | awk '{ print $1 }')"
-    [ "${config_lines}" -ge "${KMI_CONFIG_MIN_LINES}" ] || die "配置项数量异常: ${config_lines} < ${KMI_CONFIG_MIN_LINES}"
 
     local symbol
     for symbol in \
         ARM64_4K_PAGES PAGE_SIZE_4KB SMP PREEMPT NET \
-        MODULES MODULE_UNLOAD MODVERSIONS GENDWARFKSYMS \
+        MODULES MODULE_UNLOAD MODVERSIONS BASIC_MODVERSIONS EXTENDED_MODVERSIONS GENDWARFKSYMS \
         ANDROID_VENDOR_HOOKS GKI_HACKS_TO_FIX \
         IKCONFIG IKCONFIG_PROC CFI_CLANG RUST \
         BPF BPF_JIT BPF_JIT_ALWAYS_ON BPF_UNPRIV_DEFAULT_OFF \
         HAVE_ARCH_SECCOMP HAVE_ARCH_SECCOMP_FILTER SECCOMP SECCOMP_FILTER \
+        ANDROID_BINDER_IPC ANDROID_BINDERFS \
         DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES \
-        FUSE_BPF LTO_NONE \
+        FUSE_BPF LTO_NONE BLK_WBT_MQ MODULE_ALLOW_BTF_MISMATCH \
+        ARM_PKVM_GUEST VFIO_PKVM_IOMMU PKVM_PVIOMMU \
         TMPFS TMPFS_XATTR TMPFS_POSIX_ACL \
         EROFS_FS_ZIP EROFS_FS_ZIP_LZMA EROFS_FS_ZIP_DEFLATE EROFS_FS_ZIP_ZSTD \
         XZ_DEC_MICROLZMA WQ_POWER_EFFICIENT_DEFAULT; do
@@ -1091,9 +1344,18 @@ verify_kmi_config() {
     for symbol in \
         ARM64_16K_PAGES ARM64_64K_PAGES \
         LOCALVERSION_AUTO TRIM_UNUSED_KSYMS MODULE_SIG_FORCE SECCOMP_CACHE_DEBUG \
+        CRYPTO_AES_ARM64_NEON_BLK EFIVAR_FS PSTORE_BLK \
+        SND_AUDIO_GRAPH_CARD USB_XHCI_PCI_RENESAS NINTENDO_FF \
         LTO_CLANG_FULL LTO_CLANG_THIN; do
         require_config_disabled "${symbol}"
     done
+    for symbol in PSTORE_ZONE SND_SIMPLE_CARD_UTILS; do
+        require_config_not_enabled "${symbol}"
+    done
+    for symbol in NETFS_SUPPORT RFKILL CRYPTO_LIB_ARC4 ANDROID_BINDER_IPC_RUST; do
+        require_config_module "${symbol}"
+    done
+    require_config_disabled CIFS
     if [ "${ENABLE_KERNELSU}" = "1" ]; then
         for symbol in KSU KPROBES EXT4_FS; do require_config_enabled "${symbol}"; done
         require_config_disabled KSU_DEBUG
@@ -1103,9 +1365,10 @@ verify_kmi_config() {
                 KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME \
                 KSU_SUSFS_ENABLE_LOG KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
                 KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-                KSU_SUSFS_OPEN_REDIRECT KSU_SUSFS_SUS_MAP; do
+                KSU_SUSFS_SUS_MAP; do
                 require_config_enabled "${symbol}"
             done
+            require_config_disabled KSU_SUSFS_OPEN_REDIRECT
         fi
         if [ "${ENABLE_BBG}" = "1" ]; then
             require_config_enabled BBG
@@ -1126,7 +1389,7 @@ verify_kmi_config() {
                 F2FS_FS F2FS_FS_XATTR F2FS_FS_POSIX_ACL F2FS_FS_SECURITY \
                 F2FS_FS_COMPRESSION F2FS_FS_LZO F2FS_FS_LZORLE F2FS_FS_LZ4 \
                 F2FS_FS_LZ4HC F2FS_FS_ZSTD F2FS_IOSTAT F2FS_UNFAIR_RWSEM \
-                UNICODE NLS_UTF8 NETFS_SUPPORT CIFS OVERLAY_FS \
+                UNICODE NLS_UTF8 OVERLAY_FS \
                 OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW TMPFS TMPFS_POSIX_ACL TMPFS_XATTR \
                 INTEGRITY INTEGRITY_AUDIT; do
                 require_config_enabled "${symbol}"
@@ -1138,16 +1401,12 @@ verify_kmi_config() {
                 require_config_not_enabled "${symbol}"
             done
         fi
-        if [ "${ENABLE_ADIOS}" = "1" ]; then
-            require_config_enabled MQ_IOSCHED_ADIOS
-            require_config_not_enabled MQ_IOSCHED_DEFAULT_ADIOS
-        fi
         if [ "${ENABLE_STAGE5_NAMESPACES}" = "1" ]; then
             require_config_enabled USER_NS
             require_config_enabled PID_NS
         fi
         if [ "${ENABLE_STAGE5_NETWORK}" = "1" ]; then
-            for symbol in TCP_CONG_ADVANCED TCP_CONG_CUBIC TCP_CONG_BBR TCP_CONG_BRUTAL NET_SCH_FQ; do
+            for symbol in TCP_CONG_ADVANCED TCP_CONG_CUBIC TCP_CONG_BBR NET_SCH_FQ; do
                 require_config_enabled "${symbol}"
             done
             for symbol in TCP_CONG_BIC TCP_CONG_WESTWOOD TCP_CONG_HTCP; do
@@ -1174,102 +1433,417 @@ verify_kmi_config() {
         for symbol in DMABUF_HEAPS_SYSTEM DMABUF_HEAPS_CMA; do
             require_config_not_enabled "${symbol}"
         done
-        for symbol in GUNYAH_QCOM_PLATFORM ARM_SMMU ARM_SMMU_V3 ARM_SMMU_V3_PKVM QCOM_IOMMU PKVM_PVIOMMU; do
+        for symbol in GUNYAH_QCOM_PLATFORM ARM_SMMU ARM_SMMU_V3 ARM_SMMU_V3_PKVM QCOM_IOMMU; do
             require_config_not_enabled "${symbol}"
         done
         for symbol in GUNYAH GUNYAH_HYPERCALLS GUNYAH_PLATFORM_HOOKS GUNYAH_QCOM_TRUSTED_VM; do
             require_config_enabled "${symbol}"
         done
-        [ -n "${STAGE_CONFIG_LINES}" ] || die "阶段配置快照尚未固定: STAGE_CONFIG_LINES=${config_lines}"
-        [ "${config_lines}" = "${STAGE_CONFIG_LINES}" ] || die "阶段配置行数漂移: ${config_lines} != ${STAGE_CONFIG_LINES}"
     fi
-    [ "${config_sha256}" = "${STAGE_CONFIG_SHA256}" ] || \
-        die "阶段配置完整指纹漂移: ${config_sha256} != ${STAGE_CONFIG_SHA256}"
-    log_success "GKI/KMI 配置检查通过 (${config_lines} 行，完整指纹匹配)"
+    audit_compare "config.lines" "${STAGE_CONFIG_LINES}" "${config_lines}"
+    audit_compare "config.sha256" "${STAGE_CONFIG_SHA256}" "${config_sha256}"
+    log_success "启动与模块兼容所需的配置语义检查通过"
 }
 
 verify_symbol_list_exports() {
     local list_file="$1"
     local label="$2"
     local symvers_file="${BUILD_DIR}/Module.symvers"
-    local missing
-    missing="$(comm -23 \
-        <(awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "${list_file}" | sort -u) \
-        <(awk '{ print $2 }' "${symvers_file}" | sort -u) | sed -n '1,20p')"
-    [ -z "${missing}" ] || die "${label} KMI symbols 未导出:\n${missing}"
-    log_success "${label} KMI symbol list 导出检查通过"
+    local missing missing_count
+    missing="$(LC_ALL=C comm -23 \
+        <(awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "${list_file}" | LC_ALL=C sort -u) \
+        <(awk '{ print $2 }' "${symvers_file}" | LC_ALL=C sort -u) | sed -n '1,20p')"
+    missing_count="$(LC_ALL=C comm -23 \
+        <(awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "${list_file}" | LC_ALL=C sort -u) \
+        <(awk '{ print $2 }' "${symvers_file}" | LC_ALL=C sort -u) | wc -l | tr -d ' ')"
+    audit_compare "symbol-list.${label}.missing" "0" "${missing_count}"
+    if [ -n "${missing}" ]; then
+        printf '[AUDIT] %s symbol-list missing sample:\n%s\n' "${label}" "${missing}"
+    fi
+}
+
+verify_android17_stock_rust_binder() {
+    local requirements expected_missing actual_missing matching mismatched non_vmlinux
+    local requirement_count requirement_sha256 missing_count missing_sha256 match_count
+
+    requirements="${AUDIT_DIR}/rust-binder-requirements.tsv"
+    expected_missing="${AUDIT_DIR}/rust-binder-expected-missing.tsv"
+    actual_missing="${AUDIT_DIR}/rust-binder-actual-missing.tsv"
+    matching="${AUDIT_DIR}/rust-binder-matching.tsv"
+    mismatched="${AUDIT_DIR}/rust-binder-crc-mismatch.tsv"
+    non_vmlinux="${AUDIT_DIR}/rust-binder-non-vmlinux.tsv"
+
+    grep -Fx "# rust_binder extended requirements: entries=${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT} sha256:${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256}" \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || \
+        die "rust_binder 完整需求身份未绑定到 stock ABI 清单"
+    grep -Fx "# rust_binder target result: vmlinux-match=${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT} missing=${ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT} crc-mismatch=0 non-vmlinux=0 missing-sha256:${ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256}" \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || \
+        die "rust_binder 精确例外结果未绑定到 stock ABI 清单"
+
+    awk -F '\t' '
+        $1 == "# rust_binder-requirement" {
+            if (NF != 3 || $2 !~ /^0x[0-9a-f]{8}$/ ||
+                $3 !~ /^[A-Za-z_][A-Za-z0-9_]*$/) bad=1
+            else print $2 "\t" $3
+        }
+        END { exit bad }
+    ' "${ANDROID17_STOCK_ABI_FILE}" > "${requirements}" || \
+        die "rust_binder 完整需求记录格式非法"
+    LC_ALL=C sort -c -t "$(printf '\t')" -k2,2 "${requirements}" || \
+        die "rust_binder 完整需求未按符号排序"
+    [ -z "$(cut -f2 "${requirements}" | uniq -d | sed -n '1,20p')" ] || \
+        die "rust_binder 完整需求存在重复符号"
+    requirement_count="$(wc -l < "${requirements}" | tr -d ' ')"
+    requirement_sha256="$(sha256sum "${requirements}" | awk '{ print $1 }')"
+    [ "${requirement_count}" = "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT}" ] || \
+        die "rust_binder 完整需求数量错误: ${requirement_count}"
+    [ "${requirement_sha256}" = "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256}" ] || \
+        die "rust_binder 完整需求 SHA-256 不匹配"
+
+    awk -F '\t' '
+        $1 == "# rust_binder-missing" {
+            if (NF != 3 || $2 !~ /^0x[0-9a-f]{8}$/ ||
+                $3 !~ /^[A-Za-z_][A-Za-z0-9_]*$/) bad=1
+            else print $2 "\t" $3
+        }
+        END { exit bad }
+    ' "${ANDROID17_STOCK_ABI_FILE}" > "${expected_missing}" || \
+        die "rust_binder 缺失例外记录格式非法"
+    LC_ALL=C sort -c -t "$(printf '\t')" -k2,2 "${expected_missing}" || \
+        die "rust_binder 缺失例外未按符号排序"
+    [ -z "$(cut -f2 "${expected_missing}" | uniq -d | sed -n '1,20p')" ] || \
+        die "rust_binder 缺失例外存在重复符号"
+    missing_count="$(wc -l < "${expected_missing}" | tr -d ' ')"
+    missing_sha256="$(sha256sum "${expected_missing}" | awk '{ print $1 }')"
+    [ "${missing_count}" = "${ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT}" ] || \
+        die "rust_binder 缺失例外数量错误: ${missing_count}"
+    [ "${missing_sha256}" = "${ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256}" ] || \
+        die "rust_binder 缺失例外 SHA-256 不匹配"
+    awk -F '\t' '
+        NR == FNR { required[$2]=$1; next }
+        !($2 in required) || required[$2] != $1 { bad=1 }
+        END { exit bad }
+    ' "${requirements}" "${expected_missing}" || \
+        die "rust_binder 缺失例外不是完整需求的精确子集"
+
+    : > "${actual_missing}"
+    : > "${matching}"
+    : > "${mismatched}"
+    : > "${non_vmlinux}"
+    awk -F '\t' \
+        -v missing_file="${actual_missing}" \
+        -v matching_file="${matching}" \
+        -v mismatch_file="${mismatched}" \
+        -v non_vmlinux_file="${non_vmlinux}" '
+        NR == FNR {
+            required[$2]=$1
+            order[++count]=$2
+            next
+        }
+        NF == 5 {
+            actual_crc[$2]=$1
+            provider[$2]=$3
+        }
+        END {
+            for (i=1; i <= count; i++) {
+                symbol=order[i]
+                if (!(symbol in actual_crc))
+                    print required[symbol] "\t" symbol > missing_file
+                else if (actual_crc[symbol] != required[symbol])
+                    print symbol "\tstock=" required[symbol] "\tbuild=" actual_crc[symbol] > mismatch_file
+                else if (provider[symbol] != "vmlinux")
+                    print symbol "\tprovider=" provider[symbol] > non_vmlinux_file
+                else
+                    print required[symbol] "\t" symbol > matching_file
+            }
+        }
+    ' "${requirements}" "${BUILD_DIR}/Module.symvers"
+
+    [ ! -s "${mismatched}" ] || \
+        die "rust_binder 需求出现 CRC 不匹配:\n$(sed -n '1,20p' "${mismatched}")"
+    [ ! -s "${non_vmlinux}" ] || \
+        die "rust_binder 需求出现非 vmlinux provider:\n$(sed -n '1,20p' "${non_vmlinux}")"
+    cmp -s "${expected_missing}" "${actual_missing}" || \
+        die "rust_binder 67 项缺失例外发生变化:\n$(diff -u "${expected_missing}" "${actual_missing}" | sed -n '1,80p' || true)"
+    match_count="$(wc -l < "${matching}" | tr -d ' ')"
+    [ "${match_count}" = "${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT}" ] || \
+        die "rust_binder vmlinux 精确匹配数量错误: ${match_count}"
+
+    audit_compare "hard.rust-binder.requirements.count" \
+        "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT}" "${requirement_count}"
+    audit_compare "hard.rust-binder.requirements.sha256" \
+        "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256}" "${requirement_sha256}"
+    audit_compare "hard.rust-binder.match.count" \
+        "${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT}" "${match_count}"
+    audit_compare "hard.rust-binder.missing.count" \
+        "${ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT}" "${missing_count}"
+    audit_compare "hard.rust-binder.missing.sha256" \
+        "${ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256}" "${missing_sha256}"
+    log_success "rust_binder 精确例外硬门禁通过 (${match_count} match / ${missing_count} missing / 0 CRC mismatch / 0 non-vmlinux)"
+}
+
+verify_android17_stock_abi() {
+    local actual_count duplicate_symbols missing_symbols mismatched_symbols
+    local stock_tuples stock_tuple_count stock_tuple_sha256
+    [ -s "${ANDROID17_STOCK_ABI_FILE}" ] || die "缺少小米 17 Android 17 stock ABI 清单"
+    [ "$(sha256sum "${ANDROID17_STOCK_ABI_FILE}" | awk '{ print $1 }')" = \
+      "${ANDROID17_STOCK_ABI_SHA256}" ] || die "Android 17 stock ABI 清单 SHA-256 不匹配"
+    grep -Fx '# Luna Kernel Xiaomi 17 Android 17 stock-common ABI evidence v5' \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || die "Android 17 stock ABI 清单版本错误"
+    grep -Fx "# system_dlkm.img: bytes=${ANDROID17_STOCK_SYSTEM_DLKM_SIZE} sha256:${ANDROID17_STOCK_SYSTEM_DLKM_SHA256}" \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || die "system_dlkm 身份未绑定到 ABI 清单"
+    grep -Fx "# system_dlkm fingerprint: ${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT}" \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || die "system_dlkm fingerprint 未绑定到 ABI 清单"
+    grep -Fx "# system_dlkm unique release: ${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || die "system_dlkm release 未绑定到 ABI 清单"
+    grep -Fx "# normalized stock modules.order: entries=${ANDROID17_STOCK_MODULE_COUNT} sha256:${ANDROID17_STOCK_MODULES_ORDER_SHA256}; target module matrix is not frozen" \
+        "${ANDROID17_STOCK_ABI_FILE}" >/dev/null || die "stock modules.order 证据未绑定到 system_dlkm 清单"
+    awk -F '\t' '
+        /^#/ || NF == 0 { next }
+        NF != 2 || length($1) != 10 || substr($1, 1, 2) != "0x" ||
+        substr($1, 3) !~ /^[0-9a-f]+$/ || $2 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ { exit 1 }
+    ' "${ANDROID17_STOCK_ABI_FILE}" || die "Android 17 stock ABI 清单格式非法"
+    actual_count="$(awk -F '\t' '!/^#/ && NF { count++ } END { print count + 0 }' \
+        "${ANDROID17_STOCK_ABI_FILE}")"
+    [ "${actual_count}" = "${ANDROID17_STOCK_ABI_COUNT}" ] || \
+        die "Android 17 stock ABI 清单数量错误: ${actual_count}"
+    awk -F '\t' '!/^#/ && NF { print $2 }' "${ANDROID17_STOCK_ABI_FILE}" | \
+        LC_ALL=C sort -cu || die "Android 17 stock ABI 清单未按符号排序或存在重复"
+
+    duplicate_symbols="$(awk -F '\t' 'NF >= 3 { print $2 }' "${BUILD_DIR}/Module.symvers" | \
+        LC_ALL=C sort | uniq -d | sed -n '1,20p')"
+    [ -z "${duplicate_symbols}" ] || \
+        die "Module.symvers 存在重复符号提供者，拒绝不确定匹配:\n${duplicate_symbols}"
+    missing_symbols="$(LC_ALL=C comm -23 \
+        <(awk -F '\t' '!/^#/ && NF { print $2 }' "${ANDROID17_STOCK_ABI_FILE}" | LC_ALL=C sort) \
+        <(awk -F '\t' 'NF >= 3 && $3 == "vmlinux" { print $2 }' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort) | \
+        sed -n '1,20p')"
+    [ -z "${missing_symbols}" ] || \
+        die "Android 17 stock 模块依赖的 vmlinux 符号缺失:\n${missing_symbols}"
+    mismatched_symbols="$(LC_ALL=C join -t "$(printf '\t')" -1 1 -2 1 \
+        <(awk -F '\t' '!/^#/ && NF { print $2 "\t" $1 }' "${ANDROID17_STOCK_ABI_FILE}" | LC_ALL=C sort -k1,1) \
+        <(awk -F '\t' 'NF >= 3 && $3 == "vmlinux" { print $2 "\t" $1 }' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort -k1,1) | \
+        awk -F '\t' '$2 != $3 { print $1 " stock=" $2 " build=" $3 }' | sed -n '1,20p')"
+    [ -z "${mismatched_symbols}" ] || \
+        die "Android 17 stock 模块所需 vmlinux CRC 不兼容:\n${mismatched_symbols}"
+
+    stock_tuples="${AUDIT_DIR}/stock-required-vmlinux-tuples.tsv"
+    awk -F '\t' '
+        NR == FNR && !/^#/ && NF { required[$2]=1; next }
+        NF == 5 && $3 == "vmlinux" && ($2 in required) {
+            namespace=$5
+            if (namespace == "") namespace="-"
+            printf "%s\t%s\t%s\t%s\t%s\n", $2, $1, $3, $4, namespace
+        }
+    ' "${ANDROID17_STOCK_ABI_FILE}" "${BUILD_DIR}/Module.symvers" | \
+        LC_ALL=C sort -t "$(printf '\t')" -k1,1 > "${stock_tuples}"
+    stock_tuple_count="$(wc -l < "${stock_tuples}" | tr -d ' ')"
+    stock_tuple_sha256="$(sha256sum "${stock_tuples}" | awk '{ print $1 }')"
+    [ "${stock_tuple_count}" = "${ANDROID17_STOCK_ABI_TUPLE_COUNT}" ] || \
+        die "Android 17 stock vmlinux tuple 数量不匹配: ${stock_tuple_count}"
+    [ "${stock_tuple_sha256}" = "${ANDROID17_STOCK_ABI_TUPLE_SHA256}" ] || \
+        die "Android 17 stock 模块所需 provider/export type/namespace 不兼容: ${stock_tuple_sha256}"
+    audit_compare "hard.stock-vmlinux-tuples.count" \
+        "${ANDROID17_STOCK_ABI_TUPLE_COUNT}" "${stock_tuple_count}"
+    audit_compare "hard.stock-vmlinux-tuples.sha256" \
+        "${ANDROID17_STOCK_ABI_TUPLE_SHA256}" "${stock_tuple_sha256}"
+    verify_android17_stock_rust_binder
+    log_success "小米 17 固定 OTA 模块闭包硬门禁通过 (${actual_count} 个 vmlinux 依赖及完整 tuple)"
+}
+
+verify_android17_stock_system_dlkm_identity() {
+    [ -f "${ANDROID17_STOCK_SYSTEM_DLKM_FILE}" ] && \
+        [ ! -L "${ANDROID17_STOCK_SYSTEM_DLKM_FILE}" ] || \
+        die "缺少安全的同 OTA system_dlkm.img: ${ANDROID17_STOCK_SYSTEM_DLKM_FILE}"
+    [ "$(stat -c '%s' "${ANDROID17_STOCK_SYSTEM_DLKM_FILE}")" = \
+      "${ANDROID17_STOCK_SYSTEM_DLKM_SIZE}" ] || \
+        die "system_dlkm.img 大小与固定 OTA 不符"
+    [ "$(sha256sum "${ANDROID17_STOCK_SYSTEM_DLKM_FILE}" | awk '{ print $1 }')" = \
+      "${ANDROID17_STOCK_SYSTEM_DLKM_SHA256}" ] || \
+        die "system_dlkm.img SHA-256 与固定 OTA 不符"
+    "${AVBTOOL_PATH}" verify_image --image "${ANDROID17_STOCK_SYSTEM_DLKM_FILE}" >/dev/null || \
+        die "system_dlkm.img AVB hashtree 自洽校验失败"
+    "${FSCK_EROFS_PATH}" "${ANDROID17_STOCK_SYSTEM_DLKM_FILE}" >/dev/null || \
+        die "system_dlkm.img EROFS 完整性校验失败"
+    log_success "同 OTA system_dlkm 身份、AVB hashtree 与 EROFS 完整性校验通过"
 }
 
 verify_stage_abi() {
-    local abi_export_count
-    local abi_sha256
-    local abi_stg abi_stg_filter abi_stg_sha256 abi_stg_symbol_count stg_bin
-    local vendor_names vendor_map vendor_crc vendor_count vendor_sha256
-    local entry
-    local expected_crc
-    local symbol
-    local -a required_exports=(
-        "0x2771bc69 zone_pageset_high_and_batch_update"
-        "0x7c5aa8a7 __tracepoint_android_vh_fas_gpu_qos_update_tracer"
-        "0x83169769 ashmem_area_name"
-        "0x85fa6f3e __mmu_notifier_invalidate_range_start"
-        "0x912821da swapper_spaces"
-        "0xa8d297cc uprobe_unregister_nosync"
-        "0xb89ff97d mte_sync_tags"
-        "0xc77e41ec uprobe_register"
-        "0xf7e9b9a0 __traceiter_android_vh_f2fs_printk"
-    )
+    local abi_export_count abi_sha256 target_abi_count target_all_count
+    local abi_stg abi_stg_filter abi_stg_sha256 abi_stg_symbol_count
+    local abi_projection_stg abi_projection_filter abi_projection_stg_sha256
+    local abi_projection_stg_symbol_count stg_bin
+    local vendor_names xiaomi_names xiaomi_allowed vendor_old_names
+    local vendor_map vendor_crc vendor_count vendor_sha256 vendor_target_count
+    local xiaomi_missing_count
+    local duplicate_symbols allowed_count allowed_xiaomi_count allowed_mismatch
+    local allowed_expected_sha256 allowed_actual_sha256
+    local allowed_data allowed_expected allowed_actual
+    local all_symvers projected_all all_export_count all_export_sha256
+    local projected_vmlinux full_vmlinux
+    duplicate_symbols="$(awk -F '\t' 'NF >= 3 { print $2 }' "${BUILD_DIR}/Module.symvers" | \
+        LC_ALL=C sort | uniq -d | sed -n '1,20p')"
+    [ -z "${duplicate_symbols}" ] || \
+        die "Module.symvers 存在重复符号提供者:\n${duplicate_symbols}"
 
-    for entry in "${required_exports[@]}"; do
-        read -r expected_crc symbol <<<"${entry}"
-        grep -Eq "^${expected_crc}[[:space:]]+${symbol}[[:space:]]" "${BUILD_DIR}/Module.symvers" || \
-            die "可启动参考 ABI 不匹配: ${symbol} (${expected_crc})"
-    done
+    [ -s "${STAGE_ABI_ALLOWED_EXPORTS_FILE}" ] || die "缺少 r63 官方新增导出参考"
+    [ "$(sha256sum "${STAGE_ABI_ALLOWED_EXPORTS_FILE}" | awk '{ print $1 }')" = \
+      "${STAGE_ABI_ALLOWED_EXPORTS_SHA256}" ] || die "r63 官方新增导出参考 SHA-256 不匹配"
 
-    abi_export_count="$(awk -F '\t' '$3 == "vmlinux" { print $2 }' "${BUILD_DIR}/Module.symvers" | sort -u | wc -l | tr -d ' ')"
-    abi_sha256="$(awk -F '\t' '$3 == "vmlinux" { printf "%s\t%s\n", $1, $2 }' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort -k2,2 | sha256sum | awk '{ print $1 }')"
-    vendor_names="$(mktemp)"
-    vendor_map="$(mktemp)"
-    vendor_crc="$(mktemp)"
+    allowed_data="${AUDIT_DIR}/r63-reference-exports.tsv"
+    allowed_expected="${AUDIT_DIR}/r63-reference-tuples.tsv"
+    allowed_actual="${AUDIT_DIR}/r63-built-tuples.tsv"
+    all_symvers="${AUDIT_DIR}/module-symvers.full.tsv"
+    projected_all="${AUDIT_DIR}/module-symvers.r60-projection.tsv"
+    projected_vmlinux="${AUDIT_DIR}/vmlinux.r60-projection.tsv"
+    full_vmlinux="${AUDIT_DIR}/vmlinux.full.tsv"
+
+    awk -F '\t' '
+        /^#/ || NF == 0 { next }
+        NF != 6 || $1 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ ||
+        $2 !~ /^0x[0-9a-f]{8}$/ || $3 != "vmlinux" ||
+        $4 != "EXPORT_SYMBOL_GPL" || $5 != "-" ||
+        ($6 != "common" && $6 != "xiaomi") { bad=1; next }
+        { print }
+        END { exit bad }
+    ' "${STAGE_ABI_ALLOWED_EXPORTS_FILE}" > "${allowed_data}" || \
+        die "r63 官方新增导出参考格式非法"
+    LC_ALL=C sort -c -t "$(printf '\t')" -k1,1 "${allowed_data}" || \
+        die "r63 官方新增导出参考未按符号排序"
+    duplicate_symbols="$(cut -f1 "${allowed_data}" | uniq -d | sed -n '1,20p')"
+    [ -z "${duplicate_symbols}" ] || die "r63 官方新增导出参考存在重复符号:\n${duplicate_symbols}"
+    allowed_count="$(wc -l < "${allowed_data}" | tr -d ' ')"
+    allowed_xiaomi_count="$(awk -F '\t' '$6 == "xiaomi" { count++ } END { print count + 0 }' \
+        "${allowed_data}")"
+    [ "${allowed_count}" = "${STAGE_ABI_ALLOWED_EXPORTS_COUNT}" ] || \
+        die "r63 官方新增导出数量错误: ${allowed_count}"
+    [ "${allowed_xiaomi_count}" = "${STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT}" ] || \
+        die "r63 Xiaomi 新增导出数量错误: ${allowed_xiaomi_count}"
+    awk -F '\t' '{ printf "%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }' \
+        "${allowed_data}" > "${allowed_expected}"
+
+    LC_ALL=C awk -F '\t' '
+        NF != 5 || $1 !~ /^0x[0-9a-f]{8}$/ ||
+        $2 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ || $3 !~ /^[!-~]+$/ ||
+        ($4 != "EXPORT_SYMBOL" && $4 != "EXPORT_SYMBOL_GPL") ||
+        ($5 != "" && $5 !~ /^[!-~]+$/) { bad=1; next }
+        { printf "%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }
+        END { exit bad }
+    ' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort -t "$(printf '\t')" \
+        -k2,2 -k3,3 -k1,1 -k4,4 -k5,5 > "${all_symvers}" || \
+        die "Module.symvers 五列格式非法"
+
+    awk -F '\t' 'NR == FNR { allowed[$1]=1; next }
+        $2 in allowed {
+            namespace=$5
+            if (namespace == "") namespace="-"
+            printf "%s\t%s\t%s\t%s\t%s\n", $2, $1, $3, $4, namespace
+        }
+    ' "${allowed_data}" "${all_symvers}" > "${allowed_actual}"
+    allowed_expected_sha256="$(sha256sum "${allowed_expected}" | awk '{ print $1 }')"
+    allowed_actual_sha256="$(sha256sum "${allowed_actual}" | awk '{ print $1 }')"
+    audit_compare "module-symvers.r63-reference-tuples.sha256" \
+        "${allowed_expected_sha256}" "${allowed_actual_sha256}"
+
+    awk -F '\t' 'NR == FNR { allowed[$1]=1; next } !($2 in allowed) { print }' \
+        "${allowed_data}" "${all_symvers}" > "${projected_all}"
+    awk -F '\t' 'NR == FNR { allowed[$1]=1; next }
+        $3 == "vmlinux" && !($2 in allowed) { print $1 "\t" $2 }
+    ' "${allowed_data}" "${all_symvers}" | LC_ALL=C sort -k2,2 > "${projected_vmlinux}"
+    awk -F '\t' '$3 == "vmlinux" { print $1 "\t" $2 }' "${all_symvers}" | \
+        LC_ALL=C sort -k2,2 > "${full_vmlinux}"
+
+    all_export_count="$(wc -l < "${all_symvers}" | tr -d ' ')"
+    target_all_count="$((STAGE_ABI_ALL_EXPORT_COUNT + allowed_count))"
+    [ "${STAGE_ABI_TARGET_ALL_EXPORT_COUNT}" = "${target_all_count}" ] || \
+        die "r63 完整 Module.symvers 目标数量未由 r60 投影派生"
+    audit_compare "module-symvers.full.count" "${target_all_count}" "${all_export_count}"
+    audit_compare "module-symvers.full.sha256" "${STAGE_ABI_TARGET_ALL_SHA256}" \
+        "$(sha256sum "${all_symvers}" | awk '{ print $1 }')"
+    all_export_count="$(wc -l < "${projected_all}" | tr -d ' ')"
+    all_export_sha256="$(sha256sum "${projected_all}" | awk '{ print $1 }')"
+    audit_compare "module-symvers.r60-projection.count" \
+        "${STAGE_ABI_ALL_EXPORT_COUNT}" "${all_export_count}"
+    audit_compare "module-symvers.r60-projection.sha256" \
+        "${STAGE_ABI_ALL_SHA256}" "${all_export_sha256}"
+
+    verify_android17_stock_abi
+
+    abi_export_count="$(awk -F '\t' '$3 == "vmlinux" { count++ } END { print count + 0 }' "${all_symvers}")"
+    target_abi_count="$((STAGE_ABI_EXPORT_COUNT + allowed_count))"
+    [ "${STAGE_ABI_TARGET_EXPORT_COUNT}" = "${target_abi_count}" ] || \
+        die "r63 vmlinux 导出目标数量未由 r60 投影派生"
+    audit_compare "vmlinux.exports.full.count" "${target_abi_count}" "${abi_export_count}"
+    audit_compare "vmlinux.exports.full.sha256" "${STAGE_ABI_TARGET_SHA256}" \
+        "$(sha256sum "${full_vmlinux}" | awk '{ print $1 }')"
+    abi_export_count="$(wc -l < "${projected_vmlinux}" | tr -d ' ')"
+    abi_sha256="$(sha256sum "${projected_vmlinux}" | awk '{ print $1 }')"
+    audit_compare "vmlinux.exports.r60-projection.count" \
+        "${STAGE_ABI_EXPORT_COUNT}" "${abi_export_count}"
+    audit_compare "vmlinux.exports.r60-projection.sha256" \
+        "${STAGE_ABI_SHA256}" "${abi_sha256}"
+
+    vendor_names="${AUDIT_DIR}/vendor-symbol-list.full.txt"
+    xiaomi_names="${AUDIT_DIR}/xiaomi-symbol-list.txt"
+    xiaomi_allowed="${AUDIT_DIR}/xiaomi-r63-reference-exports.txt"
+    vendor_old_names="${AUDIT_DIR}/vendor-symbol-list.r60-projection.txt"
+    vendor_map="${AUDIT_DIR}/module-symvers.by-symbol.tsv"
+    vendor_crc="${AUDIT_DIR}/vendor-kmi.r60-projection.tsv"
     awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' \
         "${COMMON_DIR}/gki/aarch64/symbols/qcom" "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" | LC_ALL=C sort -u > "${vendor_names}"
-    awk -F '\t' '{ print $2 "\t" $1 }' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort -k1,1 -u > "${vendor_map}"
-    join -t "$(printf '\t')" -1 1 -2 1 "${vendor_names}" "${vendor_map}" | awk -F '\t' '{ print $2 "\t" $1 }' > "${vendor_crc}"
+    awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' \
+        "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" | LC_ALL=C sort -u > "${xiaomi_names}"
+    awk -F '\t' '$6 == "xiaomi" { print $1 }' "${allowed_data}" > "${xiaomi_allowed}"
+    allowed_mismatch="$(LC_ALL=C comm -23 "${xiaomi_allowed}" "${xiaomi_names}" | sed -n '1,20p')"
+    xiaomi_missing_count="$(LC_ALL=C comm -23 "${xiaomi_allowed}" "${xiaomi_names}" | wc -l | tr -d ' ')"
+    audit_compare "vendor-symbol-list.r63-xiaomi-reference-missing" "0" "${xiaomi_missing_count}"
+    if [ -n "${allowed_mismatch}" ]; then
+        printf '[AUDIT] Xiaomi r63 reference export missing sample:\n%s\n' "${allowed_mismatch}"
+    fi
+    vendor_target_count="$((VENDOR_KMI_BASELINE_COUNT + allowed_xiaomi_count))"
+    audit_compare "vendor-symbol-list.full.count" "${vendor_target_count}" \
+        "$(wc -l < "${vendor_names}" | tr -d ' ')"
+    LC_ALL=C comm -23 "${vendor_names}" "${xiaomi_allowed}" > "${vendor_old_names}"
+    awk -F '\t' '{ print $2 "\t" $1 }' "${all_symvers}" | LC_ALL=C sort -k1,1 > "${vendor_map}"
+    LC_ALL=C join -t "$(printf '\t')" -1 1 -2 1 "${vendor_old_names}" "${vendor_map}" | \
+        awk -F '\t' '{ print $2 "\t" $1 }' > "${vendor_crc}"
     vendor_count="$(wc -l < "${vendor_crc}" | tr -d ' ')"
     vendor_sha256="$(sha256sum "${vendor_crc}" | awk '{ print $1 }')"
-    rm -f "${vendor_names}" "${vendor_map}" "${vendor_crc}"
-
-    [ "${vendor_count}" = "${VENDOR_KMI_BASELINE_COUNT}" ] || die "vendor KMI CRC 数量漂移: ${vendor_count} != ${VENDOR_KMI_BASELINE_COUNT}"
-    [ "${vendor_sha256}" = "${VENDOR_KMI_BASELINE_SHA256}" ] || die "vendor KMI CRC 指纹漂移: ${vendor_sha256}"
-    log_success "阶段 1 vendor KMI CRC 保持不变 (${vendor_count} 个符号)"
-
-    if [ -z "${STAGE_ABI_EXPORT_COUNT}" ] || [ -z "${STAGE_ABI_SHA256}" ]; then
-        die "阶段 ABI 快照尚未固定: STAGE_ABI_EXPORT_COUNT=${abi_export_count} STAGE_ABI_SHA256=${abi_sha256}"
-    fi
-    [ "${abi_export_count}" = "${STAGE_ABI_EXPORT_COUNT}" ] || die "阶段 ABI 导出数量不匹配: ${abi_export_count} != ${STAGE_ABI_EXPORT_COUNT}"
-    [ "${abi_sha256}" = "${STAGE_ABI_SHA256}" ] || die "阶段 ABI/CRC 指纹不匹配: ${abi_sha256}"
-    log_success "阶段完整 ABI/CRC 检查通过 (${abi_export_count} 个导出)"
+    audit_compare "vendor-kmi.r60-projection.count" \
+        "${VENDOR_KMI_BASELINE_COUNT}" "${vendor_count}"
+    audit_compare "vendor-kmi.r60-projection.sha256" \
+        "${VENDOR_KMI_BASELINE_SHA256}" "${vendor_sha256}"
 
     stg_bin="${CI_TOOLCHAIN_DIR}/build-tools/bin/stg"
-    abi_stg_filter="${BUILD_DIR}/abi-exported-symbols"
-    abi_stg="${BUILD_DIR}/abi-exported.stg"
+    abi_projection_filter="${AUDIT_DIR}/abi-exported-r60-projection-symbols"
+    abi_projection_stg="${AUDIT_DIR}/abi-exported-r60-projection.stg"
+    abi_stg_filter="${AUDIT_DIR}/abi-exported-symbols"
+    abi_stg="${AUDIT_DIR}/abi-exported.stg"
     [ -x "${stg_bin}" ] || die "缺少 STG ABI 提取工具"
     {
         printf '[abi_symbol_list]\n'
-        awk -F '\t' '$3 == "vmlinux" { print $2 }' "${BUILD_DIR}/Module.symvers" |
-            LC_ALL=C sort -u | sed 's/^/  /'
+        cut -f2 "${projected_vmlinux}" | sed 's/^/  /'
+    } > "${abi_projection_filter}"
+    "${stg_bin}" --elf "${BUILD_DIR}/vmlinux" \
+        --symbols ":${abi_projection_filter}" --output "${abi_projection_stg}"
+    abi_projection_stg_symbol_count="$(grep -c '^elf_symbol {' "${abi_projection_stg}")"
+    abi_projection_stg_sha256="$(sha256sum "${abi_projection_stg}" | awk '{ print $1 }')"
+    audit_compare "stg.r60-projection.count" \
+        "${STAGE_ABI_EXPORT_COUNT}" "${abi_projection_stg_symbol_count}"
+    audit_compare "stg.r60-projection.sha256" \
+        "${STAGE_ABI_STG_SHA256}" "${abi_projection_stg_sha256}"
+
+    {
+        printf '[abi_symbol_list]\n'
+        awk -F '\t' '$3 == "vmlinux" { print $2 }' "${all_symvers}" | sed 's/^/  /'
     } > "${abi_stg_filter}"
     "${stg_bin}" --elf "${BUILD_DIR}/vmlinux" \
         --symbols ":${abi_stg_filter}" --output "${abi_stg}"
     abi_stg_symbol_count="$(grep -c '^elf_symbol {' "${abi_stg}")"
     abi_stg_sha256="$(sha256sum "${abi_stg}" | awk '{ print $1 }')"
-    [ "${abi_stg_symbol_count}" = "${abi_export_count}" ] || \
-        die "STG 导出符号数量不匹配: ${abi_stg_symbol_count} != ${abi_export_count}"
-    [ -n "${STAGE_ABI_STG_SHA256}" ] || \
-        die "阶段 STG ABI 快照尚未固定: STAGE_ABI_STG_SHA256=${abi_stg_sha256}"
-    [ "${abi_stg_sha256}" = "${STAGE_ABI_STG_SHA256}" ] || \
-        die "阶段 STG ABI 类型图指纹不匹配: ${abi_stg_sha256}"
-    log_success "阶段 STG ABI 类型图检查通过 (${abi_stg_symbol_count} 个导出)"
+    audit_compare "stg.full.count" "${STAGE_ABI_TARGET_EXPORT_COUNT}" "${abi_stg_symbol_count}"
+    audit_compare "stg.full.sha256" "${STAGE_ABI_TARGET_STG_SHA256}" "${abi_stg_sha256}"
+    log_success "固定 OTA 模块闭包通过；全量 ABI/KMI/STG 投影与差异审计保存在 ${AUDIT_DIR}"
 }
 
 build_ipset_userspace() {
@@ -1329,8 +1903,9 @@ build_ipset_userspace() {
     cp -f "${IPSET_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.ipset"
     cp -f "${LIBMNL_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.libmnl"
     chmod 0755 "${module_dir}/customize.sh" "${module_dir}/system/bin/ipset"
+    normalize_archive_timestamps "${module_dir}"
     module_zip="${PRODUCT_DIR}/ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
-    (cd "${module_dir}" && 7z a -tzip "${module_zip}" . >/dev/null)
+    (cd "${module_dir}" && TZ=UTC 7z a -tzip -mtc=off -mta=off "${module_zip}" . >/dev/null)
     unzip -p "${module_zip}" system/bin/ipset | sha256sum | \
         grep -Fx "$(sha256sum "${binary}" | awk '{ print $1 }')  -" >/dev/null || die "IPSet 模块内命令校验失败"
     case "${module_dir}" in "${BUILD_DIR}"/ipset-module.*) rm -rf -- "${module_dir}" ;; *) die "拒绝清理异常临时目录" ;; esac
@@ -1341,7 +1916,12 @@ SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
 
+[ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
+[ "${ENABLE_KERNELSU:-0}" = "1" ] || \
+    die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
+[ "${ENABLE_SUSFS:-0}" = "1" ] || \
+    die "Luna 固定构建只支持 ENABLE_SUSFS=1；拒绝未审计的第二套产品矩阵"
 
 WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
 WORKSPACE_NAME="${WORKSPACE_NAME:-workspace}"
@@ -1353,18 +1933,20 @@ ORB_RESULT_ARCHIVE="${SCRIPT_NAME%.sh}-result.tar"
 ARTIFACT_MANIFEST_NAME=".build-artifacts"
 
 BUILD_OUTPUT_DIR="${BUILD_OUTPUT_DIR:-kernel_out}"
-PRODUCT_DIR="${HOST_WORKSPACE_DIR}/${BUILD_OUTPUT_DIR}"
+PRODUCT_DIR=""
 
 resolve_project_identity
+prepare_product_directory "${BUILD_OUTPUT_DIR}"
+clean_previous_release_artifacts "${PRODUCT_DIR}" "${ARTIFACT_MANIFEST_NAME}"
 run_in_orb_if_needed "$@"
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git}"
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2025-06_r57}"
-COMMON_COMMIT="${COMMON_COMMIT:-a82fc641d6d2c687802606190c0a8c33a4242201}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.23_r57}")"
+COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-03_r63}"
+COMMON_COMMIT="${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-v3.2.5}"
@@ -1377,23 +1959,54 @@ KSU_SELINUX_HIDE_FIX_COMMIT="${KSU_SELINUX_HIDE_FIX_COMMIT:-3f388ef137c78e1ca0c9
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
 KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.2.5_32525-release.apk}"
 KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-1417081413bf7ab1de8e440ecbcb62685037c8f28f048f0f8b79e305b31ab916}"
+ENABLE_KSU_POST_RELEASE_FIXES="${ENABLE_KSU_POST_RELEASE_FIXES:-0}"
+KSU_POST_RELEASE_AUDIT_COMMIT="${KSU_POST_RELEASE_AUDIT_COMMIT:-62e88ca93df8affff54064e74948a37945c1865a}"
+KSU_ALLOCATION_FAILURE_COMMIT="${KSU_ALLOCATION_FAILURE_COMMIT:-e9e5b616a433b32c286dbf3f6708afd0c5ef7485}"
+KSU_ALLOCATION_FAILURE_DATE="${KSU_ALLOCATION_FAILURE_DATE:-2026-07-19}"
+KSU_ALLOCATION_FAILURE_PATCH_ID="${KSU_ALLOCATION_FAILURE_PATCH_ID:-2abefc35882130184b6399f60481c66d4261bb2b}"
+KSU_APK_SHORT_READ_COMMIT="${KSU_APK_SHORT_READ_COMMIT:-be53d75fd360a9f75231c58970bee1f20a870a4e}"
+KSU_APK_SHORT_READ_DATE="${KSU_APK_SHORT_READ_DATE:-2026-07-27}"
+KSU_APK_SHORT_READ_PATCH_ID="${KSU_APK_SHORT_READ_PATCH_ID:-1c906b1d21e4a79efaa307aa94fd73c445b09e07}"
+KSU_APK_AOSP_PARSER_COMMIT="${KSU_APK_AOSP_PARSER_COMMIT:-e6cc0ef7b0cf7a96af553dedd3282eb3f8ad8d03}"
+KSU_APK_AOSP_PARSER_DATE="${KSU_APK_AOSP_PARSER_DATE:-2026-08-07}"
+KSU_APK_AOSP_PARSER_PATCH_ID="${KSU_APK_AOSP_PARSER_PATCH_ID:-46da4ee6a88ea901ecfd58ec3a255f03b302312a}"
+KSU_APK_EOCD_VALIDATION_COMMIT="${KSU_APK_EOCD_VALIDATION_COMMIT:-aab67974f1210cad94880ce1fdc14cf63f6e30e0}"
+KSU_APK_EOCD_VALIDATION_DATE="${KSU_APK_EOCD_VALIDATION_DATE:-2026-08-11}"
+KSU_APK_EOCD_VALIDATION_PATCH_ID="${KSU_APK_EOCD_VALIDATION_PATCH_ID:-74e074cec2eb4e43467619d3dbc952e31769b39c}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-d9a486dc7197800149c31fe35a77997ea0ddaa83}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-0e43d12a6cb5e6b2814c8214466784285d64ebec}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
 SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-ef69c8322232340f43c78c7fc491b32cb9f7da86}"
 SUSFS_HELPER_SHA256="${SUSFS_HELPER_SHA256:-dfa9a11f45c2978789175c3ad15290a831639248d159c34980e27c36f92b833c}"
-SUSFS_HOOKS_ADAPTATION="${HOST_WORKSPACE_DIR}/patches/susfs/aosp-r57-selinux-hooks.patch"
+SUSFS_CONTEXT_ADAPTATION="${HOST_WORKSPACE_DIR}/${SUSFS_CONTEXT_PATCH}"
+SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
+SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
-BBG_COMMIT="${BBG_COMMIT:-1c664957da7539de860503940ee73c7447f1dfaf}"
+BBG_COMMIT="${BBG_COMMIT:-a54e0dc6cf0aff4dd87fec49644a02d2eb612905}"
 BBG_DIR="$(resolve_workspace_path "${BBG_SOURCE_DIR:-sources/baseband_guard}")"
-BBG_LSM_COUNT_PATCH="${HOST_WORKSPACE_DIR}/patches/bbg/aosp-r57-lsm-count.patch"
+BBG_LSM_COUNT_PATCH="${HOST_WORKSPACE_DIR}/${BBG_LSM_COUNT_PATCH:-patches/bbg/aosp-6.12.69-lsm-count.patch}"
+BBG_LSM_COUNT_PATCH_SHA256="${BBG_LSM_COUNT_PATCH_SHA256:-f3792ead7a5dfd1b813e3260a2840e16a2eba548ca6a7c7e72f9bf144c9b30a1}"
+BBG_LSM_COUNT_PATCH_ID="${BBG_LSM_COUNT_PATCH_ID:-d52557f81ce48d80782f0419c437de33f16c07c1}"
+BBG_LUNA_FIX_PATCH="${HOST_WORKSPACE_DIR}/${BBG_LUNA_FIX_PATCH:-patches/bbg/baseband-guard-a54e0dc-luna-fixes.patch}"
+BBG_LUNA_FIX_PATCH_SHA256="${BBG_LUNA_FIX_PATCH_SHA256:-344ed44657982ea780b946b11165255dc52be18dc1de2ac15f86d520d79a6bc4}"
+BBG_LUNA_FIX_PATCH_ID="${BBG_LUNA_FIX_PATCH_ID:-3b5c92af344640f6ea4d508709f3f491005acf90}"
+BBG_COMMON_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_COMMON_CREDENTIAL_PATCH:-patches/bbg/aosp-6.12.69-credential-api.patch}"
+BBG_COMMON_CREDENTIAL_PATCH_SHA256="${BBG_COMMON_CREDENTIAL_PATCH_SHA256:-2898be21ea20f4b80cacb12459f0e3cab25faff25921a9b81bae0d9226ab42be}"
+BBG_COMMON_CREDENTIAL_PATCH_ID="${BBG_COMMON_CREDENTIAL_PATCH_ID:-a770f38f4f9c7a1a14e7cf46b81bfa1f6a7db897}"
+BBG_KSU_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_KSU_CREDENTIAL_PATCH:-patches/bbg/kernelsu-v3.2.5-credential-marking.patch}"
+BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-5a45f53584575275f905f73c33158554a052c0a3ed6bec37ad004cb03601d1f9}"
+BBG_KSU_CREDENTIAL_PATCH_ID="${BBG_KSU_CREDENTIAL_PATCH_ID:-4e65a84b50566c8e6ebd3c73e8e474fb76801b94}"
+BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
 ENABLE_STAGE4_FS="${ENABLE_STAGE4_FS:-0}"
 AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
+LINUX_STABLE_AUDIT_COMMIT="${LINUX_STABLE_AUDIT_COMMIT:-}"
+LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
+LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
 ENABLE_FUTEX_EXITING_POINTER_FIX="${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}"
 FUTEX_EXITING_POINTER_STABLE_COMMIT="${FUTEX_EXITING_POINTER_STABLE_COMMIT:-7475dfad10a05a5bfadebf5f2499bd61b19ed293}"
 FUTEX_EXITING_POINTER_PATCH_ID="${FUTEX_EXITING_POINTER_PATCH_ID:-419d86818387f958327185e62d1581e20b357a1d}"
@@ -1414,17 +2027,17 @@ BINDER_THREAD_RELEASE_STABLE_COMMIT="${BINDER_THREAD_RELEASE_STABLE_COMMIT:-e630
 BINDER_THREAD_RELEASE_PATCH_ID="${BINDER_THREAD_RELEASE_PATCH_ID:-bf97fd8b894461ca62445978f4f6422c736611b3}"
 BINDER_FREE_TRANSACTION_STABLE_COMMIT="${BINDER_FREE_TRANSACTION_STABLE_COMMIT:-d45ef513eed1abebfec90c3cfb6ae50c2a4182db}"
 BINDER_FREE_TRANSACTION_PATCH_ID="${BINDER_FREE_TRANSACTION_PATCH_ID:-5c23abbc83c1a297d19eb039610151fb377ea188}"
-BINDER_TRANSACTION_LIFETIME_PATCH="${HOST_WORKSPACE_DIR}/${BINDER_TRANSACTION_LIFETIME_PATCH:-patches/backports/binder-transaction-lifetime-6.12.23.patch}"
-BINDER_TRANSACTION_LIFETIME_PATCH_SHA256="${BINDER_TRANSACTION_LIFETIME_PATCH_SHA256:-d3d428c044437c216bf75bbe45e01cd74e780f4685586c08a2e6b3d1d2ac83d3}"
+BINDER_TRANSACTION_LIFETIME_PATCH="${HOST_WORKSPACE_DIR}/${BINDER_TRANSACTION_LIFETIME_PATCH:-patches/backports/binder-transaction-lifetime-6.12.69.patch}"
+BINDER_TRANSACTION_LIFETIME_PATCH_SHA256="${BINDER_TRANSACTION_LIFETIME_PATCH_SHA256:-d6e052b736148f7b0434802e842ef6b54a52544eca5b59040d60e43bf1878e6f}"
 BINDER_TRANSACTION_LIFETIME_PATCH_ID="${BINDER_TRANSACTION_LIFETIME_PATCH_ID:-7d9a01598e58b1f513fcfbe481dc682bd62c1f5c}"
 ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX="${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}"
 F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT="${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT:-44480f7e3f8369671452c0d262831c51aa5a9c20}"
 F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID="${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID:-8d86d1f0ff47ad109628af8462bd4506c81dd4f6}"
 F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT="${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT:-b885c7783c19c36c7bf899492a0bffcd68afa8c7}"
 F2FS_GC_MERGE_DEADLOCK_PATCH_ID="${F2FS_GC_MERGE_DEADLOCK_PATCH_ID:-f1e7da7bf78fadbfd5f41ae8f1d1b196ee96b98d}"
-ENABLE_F2FS_ATOMIC_INODE_UAF_FIX="${ENABLE_F2FS_ATOMIC_INODE_UAF_FIX:-0}"
-F2FS_ATOMIC_INODE_UAF_STABLE_COMMIT="${F2FS_ATOMIC_INODE_UAF_STABLE_COMMIT:-56038756aae68312df00d4aa1d97e51ef3aca725}"
-F2FS_ATOMIC_INODE_UAF_PATCH_ID="${F2FS_ATOMIC_INODE_UAF_PATCH_ID:-fcedf0927ac32abbbc60de374663dc3fec18869d}"
+F2FS_FOREGROUND_GC_PATCH="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-6.12.69.patch}"
+F2FS_FOREGROUND_GC_PATCH_SHA256="${F2FS_FOREGROUND_GC_PATCH_SHA256:-f105094430a7d6c1101767b99da3dbf3d1434feba63ae4b99dec4394962947e9}"
+F2FS_FOREGROUND_GC_PATCH_ID="${F2FS_FOREGROUND_GC_PATCH_ID:-70442d9fb39ac24622e33231473817e5dc60249b}"
 ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX="${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}"
 UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT="${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT:-7ef00d3457d8c9cee0915ee0edff247031c36e0c}"
 UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID="${UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID:-d50c32d5918d030180b869f67a0ccd412b62209e}"
@@ -1432,11 +2045,12 @@ UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT="${UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT
 UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID="${UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID:-32e05876eba86a6181f7f2cbc538f2fb73e63528}"
 UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT="${UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT:-a460b437af44c3317a57e637455ee891d0ee0352}"
 UFS_ERROR_HANDLER_WLUN_PATCH_ID="${UFS_ERROR_HANDLER_WLUN_PATCH_ID:-b4ec70973aaeef49650271cffd241533d63fac57}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH="${HOST_WORKSPACE_DIR}/${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH:-patches/backports/ufs-runtime-pm-error-recovery-6.12.23.patch}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256:-2b29d2d00f657e518d28361c095e311fbd8cbb31bc6275f641c85587a164eb2a}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID:-35f93b5023c3f14d3616f1a3afc236f36c84b11f}"
+UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH="${HOST_WORKSPACE_DIR}/${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH:-patches/backports/ufs-runtime-pm-error-recovery-6.12.69.patch}"
+UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256:-270397f549faaa45827b8011e708d0d7cca5a2600dd0c2ff08423ebcf124412c}"
+UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID:-1480cec0fd66ee924f2a9488c44417709b5e3782}"
 ENABLE_TIMER_BASE_FAST_PATH="${ENABLE_TIMER_BASE_FAST_PATH:-0}"
 TIMER_BASE_FAST_PATH_COMMIT="${TIMER_BASE_FAST_PATH_COMMIT:-3ec955713d9617059d2fc8f2816d0b95ace72256}"
+TIMER_BASE_FAST_PATH_COMMIT_DATE="${TIMER_BASE_FAST_PATH_COMMIT_DATE:-2025-01-16}"
 TIMER_BASE_FAST_PATH_PATCH_ID="${TIMER_BASE_FAST_PATH_PATCH_ID:-68dca003ed5b13fb40d3b777155c6568438563ef}"
 ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH="${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH:-0}"
 F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT="${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT:-d860974a7e38d35e9e2c4dc8a9f4223b38b6ad99}"
@@ -1447,45 +2061,15 @@ EAS_CPUMASK_FAST_PATH_PATCH_ID="${EAS_CPUMASK_FAST_PATH_PATCH_ID:-26fce9484b896c
 ENABLE_BLK_WBT_DONE_FAST_PATH="${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}"
 BLK_WBT_DONE_FAST_PATH_COMMIT="${BLK_WBT_DONE_FAST_PATH_COMMIT:-d8b96a79622e03813c221450498ca9742704ebf2}"
 BLK_WBT_DONE_FAST_PATH_PATCH_ID="${BLK_WBT_DONE_FAST_PATH_PATCH_ID:-097d27325d53feb894b26bb0c7e152fca314e7b9}"
-ENABLE_F2FS_OPEN_FAST_PATH="${ENABLE_F2FS_OPEN_FAST_PATH:-0}"
-F2FS_OPEN_FAST_PATH_COMMIT="${F2FS_OPEN_FAST_PATH_COMMIT:-f6e898257b3d6a3a52d4bff5cec6237eebe1ce7d}"
-F2FS_OPEN_FAST_PATH_PATCH_ID="${F2FS_OPEN_FAST_PATH_PATCH_ID:-685b528beff90bac24b8f54e12238442363a80df}"
 ENABLE_MEMCG_RSTAT_FAST_PATH="${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}"
 MEMCG_RSTAT_FAST_PATH_COMMIT="${MEMCG_RSTAT_FAST_PATH_COMMIT:-60cada258dfe3694e15c4539259173c37bd5f1fe}"
 MEMCG_RSTAT_FAST_PATH_PATCH_ID="${MEMCG_RSTAT_FAST_PATH_PATCH_ID:-5b12701394b4f6a128f5456e3bd8fed4f8740c27}"
 ENABLE_TCP_RECV_MSTAMP_FAST_PATH="${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX="${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX:-0}"
-F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT="${F2FS_MERGE_PAGE_BIO_UAF_FIX_COMMIT:-f2f676a2f21637b39f7f2be2f6137c1d9570d3e7}"
-F2FS_MERGE_PAGE_BIO_UAF_FIX_PATCH_ID="${F2FS_MERGE_PAGE_BIO_UAF_FIX_PATCH_ID:-ae11e76a9f7b489004102506a0896e0894ae681f}"
-ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX="${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX:-0}"
-GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT="${GUNYAH_CLEAN_RESOURCES_UAF_FIX_COMMIT:-e5a17398e40d988ce7e9c79259eb8b08b5377b43}"
-GUNYAH_CLEAN_RESOURCES_UAF_FIX_PATCH_ID="${GUNYAH_CLEAN_RESOURCES_UAF_FIX_PATCH_ID:-b422a66e01ad0e4046dedafc81785fc8b4a9ff57}"
 ENABLE_IDLETIMER_DESTROY_UAF_FIX="${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}"
 IDLETIMER_DESTROY_UAF_FIX_COMMIT="${IDLETIMER_DESTROY_UAF_FIX_COMMIT:-9317fe019b5be27e888f02629a3de1f4d78cb1aa}"
 IDLETIMER_DESTROY_UAF_FIX_PATCH_ID="${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID:-2e6c62f1168d9eb5163373eac35801caa4d4a631}"
-ENABLE_EVENTPOLL_RCU_UAF_FIX="${ENABLE_EVENTPOLL_RCU_UAF_FIX:-0}"
-EVENTPOLL_RCU_UAF_FIX_COMMIT="${EVENTPOLL_RCU_UAF_FIX_COMMIT:-5b1173b165421561db29f30afc7e97d940a398a9}"
-EVENTPOLL_RCU_UAF_FIX_PATCH_ID="${EVENTPOLL_RCU_UAF_FIX_PATCH_ID:-a5abf8e11ad85b58f2924d8bd693b8b644462f6a}"
-ENABLE_CGROUP_KERNFS_UAF_FIX="${ENABLE_CGROUP_KERNFS_UAF_FIX:-0}"
-CGROUP_KERNFS_UAF_FIX_COMMIT="${CGROUP_KERNFS_UAF_FIX_COMMIT:-993047031c9fcb7f4a58389692e844f7be423cc7}"
-CGROUP_KERNFS_UAF_FIX_PATCH_ID="${CGROUP_KERNFS_UAF_FIX_PATCH_ID:-7fb683b637d0db664c6c37667692c27127a28dd1}"
-ENABLE_F2FS_SYNC_INODE_META_UAF_FIX="${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX:-0}"
-F2FS_SYNC_INODE_META_UAF_FIX_COMMIT="${F2FS_SYNC_INODE_META_UAF_FIX_COMMIT:-dea243f58a8391e76f42ad5eb59ff210519ee772}"
-F2FS_SYNC_INODE_META_UAF_FIX_PATCH_ID="${F2FS_SYNC_INODE_META_UAF_FIX_PATCH_ID:-41eeded4f38919c5bffa8aef0c8b9b2468346b9d}"
-ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX="${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX:-0}"
-TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT="${TIMER_SHUTDOWN_SYNC_RACE_FIX_COMMIT:-176725f4848376530a0f0da9023f956afcc33585}"
-TIMER_SHUTDOWN_SYNC_RACE_FIX_PATCH_ID="${TIMER_SHUTDOWN_SYNC_RACE_FIX_PATCH_ID:-e528717d3d19cb12b0d9ac96781075350fdf4dae}"
-ENABLE_FUTEX_REQUEUE_PI_UAF_FIX="${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX:-0}"
-FUTEX_REQUEUE_PI_UAF_FIX_COMMIT="${FUTEX_REQUEUE_PI_UAF_FIX_COMMIT:-a170b9c0dde83312b8b58ccc91509c7c15711641}"
-FUTEX_REQUEUE_PI_UAF_FIX_PATCH_ID="${FUTEX_REQUEUE_PI_UAF_FIX_PATCH_ID:-8a1bf4596581bd162f4acb909b7ee859ca2c7afa}"
-ENABLE_PAGE_POOL_DESTROY_RACE_FIX="${ENABLE_PAGE_POOL_DESTROY_RACE_FIX:-0}"
-PAGE_POOL_DESTROY_RACE_FIX_COMMIT="${PAGE_POOL_DESTROY_RACE_FIX_COMMIT:-e869a85acc2e60dc554579b910826a4919d8cd98}"
-PAGE_POOL_DESTROY_RACE_FIX_PATCH_ID="${PAGE_POOL_DESTROY_RACE_FIX_PATCH_ID:-dad3ca58feaaae658e77c9e001250fed18853b1e}"
-ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX="${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX:-0}"
-CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT="${CONNTRACK_UNCONFIRMED_RACE_FIX_COMMIT:-fc38c249c622ff5e3011b8845fd49dbfd9289afc}"
-CONNTRACK_UNCONFIRMED_RACE_FIX_PATCH_ID="${CONNTRACK_UNCONFIRMED_RACE_FIX_PATCH_ID:-37b80fce84a874c3917935828ffbb6b74b3a8ee6}"
 ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
 EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
 EROFS_DIR_TAIL_OOB_FIX_PATCH_ID="${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID:-86095c51c9af49433ddbba4d32f194c2d3a7a6da}"
@@ -1495,38 +2079,20 @@ EXT4_XATTR_OOB_FIX_PATCH_ID="${EXT4_XATTR_OOB_FIX_PATCH_ID:-98a7513db9abe6f0c8c0
 ENABLE_IPV6_MLD_UAF_FIX="${ENABLE_IPV6_MLD_UAF_FIX:-0}"
 IPV6_MLD_UAF_FIX_COMMIT="${IPV6_MLD_UAF_FIX_COMMIT:-791c91dc7a9dfb2457d5e29b8216a6484b9c4b40}"
 IPV6_MLD_UAF_FIX_PATCH_ID="${IPV6_MLD_UAF_FIX_PATCH_ID:-1358ebc3d619657f50c2f0f50f5408f60ea5b732}"
-ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX="${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX:-0}"
-RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT="${RTMUTEX_WAITER_ENQUEUE_FIX_COMMIT:-202a62288cb6884f0bdcea8a8d47a1a8c4d3e143}"
-RTMUTEX_WAITER_ENQUEUE_FIX_PATCH_ID="${RTMUTEX_WAITER_ENQUEUE_FIX_PATCH_ID:-0d78a126f83be68e6f97baae61550baacc3a2ecc}"
-RTMUTEX_FIX_STACK_PATCH_ID="${RTMUTEX_FIX_STACK_PATCH_ID:-91738174f7b3c38cc0cfc8f7b2157aa1fb648a2a}"
-ENABLE_STAGE5_RTMUTEX_FIX="${ENABLE_STAGE5_RTMUTEX_FIX:-0}"
-STAGE5_RTMUTEX_FIX_COMMIT="${STAGE5_RTMUTEX_FIX_COMMIT:-e7d9bd94fbdbf9842ea6f1b6d5af45758e87e3d6}"
-STAGE5_RTMUTEX_FIX_PATCH_ID="${STAGE5_RTMUTEX_FIX_PATCH_ID:-bd48afa70647e92db0e44335fbe75d2b520671a6}"
-ENABLE_UNICODE_IGNORABLE_FIX="${ENABLE_UNICODE_IGNORABLE_FIX:-0}"
-UNICODE_FIX_COMMIT="${UNICODE_FIX_COMMIT:-425419e5b2a8c88096b8bbc61d8865600d1a91c0}"
-UNICODE_FIX_PATCH_ID="${UNICODE_FIX_PATCH_ID:-8bad10993f9d6df5a0130e8394608f4550904bbd}"
-UNICODE_EXT4_COMPAT_COMMIT="${UNICODE_EXT4_COMPAT_COMMIT:-aa66603ddf1b22e65992ae893c76a0224a4dd415}"
-UNICODE_EXT4_COMPAT_PATCH_ID="${UNICODE_EXT4_COMPAT_PATCH_ID:-30a2d2ee185826e104434ab83b75c546dfd87900}"
-UNICODE_FIX_PATCH="${HOST_WORKSPACE_DIR}/${UNICODE_FIX_PATCH:-patches/unicode/aosp-6.12.23-default-ignorable-compat.patch}"
-UNICODE_FIX_PATCH_SHA256="${UNICODE_FIX_PATCH_SHA256:-7bc109d9858c14c78dfdbaadd4be3ff16188e919ee49f4f48981362529d226e3}"
-UNICODE_SELFTEST_PATCH="${HOST_WORKSPACE_DIR}/${UNICODE_SELFTEST_PATCH:-patches/unicode/unicode-12.1-default-ignorable-selftest.patch}"
-UNICODE_SELFTEST_PATCH_SHA256="${UNICODE_SELFTEST_PATCH_SHA256:-ae0613638230c51ce95563783b307f1ca96efde0e73ada540c14f037438f8acd}"
-UNICODE_SELFTEST_EXPECTED_TESTS="${UNICODE_SELFTEST_EXPECTED_TESTS:-87668}"
-ENABLE_ADIOS="${ENABLE_ADIOS:-0}"
-ADIOS_REPO="${ADIOS_REPO:-https://github.com/firelzrd/adios.git}"
-ADIOS_REF="${ADIOS_REF:-main}"
-ADIOS_COMMIT="${ADIOS_COMMIT:-08bf078aac99075a0bef73c2b2497574a82e4c41}"
-ADIOS_DIR="$(resolve_workspace_path "${ADIOS_SOURCE_DIR:-sources/adios}")"
-ADIOS_STABLE_PATCH_FILE="${ADIOS_DIR}/${ADIOS_STABLE_PATCH:-patches/stable/0001-linux6.12.44-ADIOS-3.2.0.patch}"
-ADIOS_FORCE_DEFAULT_PATCH_FILE="${ADIOS_DIR}/${ADIOS_FORCE_DEFAULT_PATCH:-patches/0002-Make-ADIOS-the-Default-I-O-scheduler.patch}"
-ADIOS_KBUILD_ADAPTATION="${HOST_WORKSPACE_DIR}/patches/adios/aosp-6.12.23-kbuild.patch"
-ENABLE_TCP_BRUTAL="${ENABLE_TCP_BRUTAL:-0}"
-TCP_BRUTAL_REPO="${TCP_BRUTAL_REPO:-https://github.com/apernet/tcp-brutal.git}"
-TCP_BRUTAL_REF="${TCP_BRUTAL_REF:-master}"
-TCP_BRUTAL_COMMIT="${TCP_BRUTAL_COMMIT:-f11e52d88c7ad2285896de018c2d96d4687f0ab6}"
-TCP_BRUTAL_DIR="$(resolve_workspace_path "${TCP_BRUTAL_SOURCE_DIR:-sources/tcp_brutal}")"
-TCP_BRUTAL_SOURCE_SHA256="${TCP_BRUTAL_SOURCE_SHA256:-171d775cc494f9378c89772ef68ad8001e093f701a35d1566ec9c7e459cb81c0}"
-TCP_BRUTAL_INTEGRATION_PATCH="${HOST_WORKSPACE_DIR}/patches/tcp_brutal/aosp-6.12.23-integration.patch"
+ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX="${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}"
+IPV6_MLD_DELAYED_WORK_STABLE_COMMIT="${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-ebbebf6cee950d7f1c81990256c0eae9e62572ae}"
+IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT="${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT:-9b26518b6896a16b809b1e42986f4ebac7bccc1e}"
+IPV6_MLD_DELAYED_WORK_COMMIT_DATE="${IPV6_MLD_DELAYED_WORK_COMMIT_DATE:-2026-07-24}"
+IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID="${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID:-4fcf3ce5ec83da4c8203e344d896802035700c78}"
+IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ipv6-mld-delayed-work-uaf-6.12.69.patch}"
+IPV6_MLD_DELAYED_WORK_PATCH_SHA256="${IPV6_MLD_DELAYED_WORK_PATCH_SHA256:-7bd3339c3a5db6b1aa034585a5bb5eb53d90a0ac98775e5bdfc941547d5c1c5b}"
+IPV6_MLD_DELAYED_WORK_PATCH_ID="${IPV6_MLD_DELAYED_WORK_PATCH_ID:-8d28904741b04eefe83489706946e55a0682fe08}"
+IPV6_MLD_DELAYED_WORK_PATCH_FILE="${HOST_WORKSPACE_DIR}/${IPV6_MLD_DELAYED_WORK_PATCH}"
+ENABLE_KVM_COMPOUND_HEAD_PIN_FIX="${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}"
+KVM_COMPOUND_HEAD_PIN_FIX_COMMIT="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-1a138e24e292579ddcf417ed09e78df667f51396}"
+KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID="${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID:-e57c8f60ba72c69067f5f1327a5b9dd9cf956e3d}"
+COMMON_BASE_TRACKED_DIFF_SHA256="${COMMON_BASE_TRACKED_DIFF_SHA256:-}"
+KSU_TRACKED_DIFF_SHA256="${KSU_TRACKED_DIFF_SHA256:-}"
 ENABLE_STAGE5_NAMESPACES="${ENABLE_STAGE5_NAMESPACES:-0}"
 ENABLE_STAGE5_NETWORK="${ENABLE_STAGE5_NETWORK:-0}"
 ENABLE_IPSET="${ENABLE_IPSET:-0}"
@@ -1545,30 +2111,25 @@ XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
 verify_repo_identity "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_COMMIT}"
-verify_repo_identity "Android 16 GKI common" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
+verify_repo_identity "Android 16 GKI common r63" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
+[ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "6.12.69" ] || \
+    die "GKI common 版本不是 6.12.69"
+[ "$(sed -n 's/^KMI_GENERATION=//p' "${COMMON_DIR}/build.config.constants")" = "6" ] || \
+    die "GKI common KMI generation 不是 6"
 verify_first_batch_linux_backports
 verify_second_batch_backports
-verify_f2fs_open_fast_path
 verify_memcg_rstat_fast_path
 verify_tcp_recv_mstamp_fast_path
-verify_f2fs_merge_page_bio_uaf_fix
-verify_gunyah_clean_resources_uaf_fix
 verify_idletimer_destroy_uaf_fix
-verify_eventpoll_rcu_uaf_fix
-verify_cgroup_kernfs_uaf_fix
-verify_f2fs_sync_inode_meta_uaf_fix
-verify_timer_shutdown_sync_race_fix
-verify_futex_requeue_pi_uaf_fix
-verify_page_pool_destroy_race_fix
-verify_conntrack_unconfirmed_race_fix
 verify_erofs_dir_tail_oob_fix
 verify_ext4_xattr_oob_fix
 verify_ipv6_mld_uaf_fix
-verify_rtmutex_waiter_enqueue_fix
-verify_stage5_rtmutex_fix
-verify_unicode_ignorable_fix
-verify_adios_source_state
-verify_tcp_brutal_source_state
+verify_ipv6_mld_delayed_work_uaf_fix
+verify_android17_selected_fixes
+[ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" != "1" ] || \
+    bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" verify-applied "${COMMON_DIR}"
+bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+    verify-applied "${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_source_state
 [ "${ENABLE_SUSFS}" != "1" ] || verify_susfs_source_state
 [ "${ENABLE_BBG}" != "1" ] || verify_bbg_source_state
@@ -1576,53 +2137,146 @@ verify_tcp_brutal_source_state
 [ "$(sed -n '2p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化"
 
 BUILD_JOBS="$(detect_cpu_count)"
-BUILD_DIR="${BUILD_DIR:-/tmp/xiaomi_sm8850_gki_61223_build_out}"
-KMI_CONFIG_MIN_LINES="${KMI_CONFIG_MIN_LINES:-8000}"
+BUILD_DIR="${BUILD_DIR:-/tmp/luna_xiaomi17_android17_aosp_6.12.69_r63_out}"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
 STAGE_MODULE_COUNT="${STAGE_MODULE_COUNT:-}"
 STAGE_MODULES_ORDER_SHA256="${STAGE_MODULES_ORDER_SHA256:-}"
-VENDOR_KMI_BASELINE_COUNT="${VENDOR_KMI_BASELINE_COUNT:-4517}"
-VENDOR_KMI_BASELINE_SHA256="${VENDOR_KMI_BASELINE_SHA256:-5980570208c7617a89e50f3b1cdf2fcd981f777cd249338fd2bec0071be8935b}"
+VENDOR_KMI_BASELINE_COUNT="${VENDOR_KMI_BASELINE_COUNT-}"
+VENDOR_KMI_BASELINE_SHA256="${VENDOR_KMI_BASELINE_SHA256-}"
 STAGE_ABI_EXPORT_COUNT="${STAGE_ABI_EXPORT_COUNT:-}"
 STAGE_ABI_SHA256="${STAGE_ABI_SHA256:-}"
 STAGE_ABI_STG_SHA256="${STAGE_ABI_STG_SHA256:-}"
+STAGE_ABI_ALL_EXPORT_COUNT="${STAGE_ABI_ALL_EXPORT_COUNT:-}"
+STAGE_ABI_ALL_SHA256="${STAGE_ABI_ALL_SHA256:-}"
+STAGE_ABI_ALLOWED_EXPORTS_FILE="$(resolve_workspace_path "${STAGE_ABI_ALLOWED_EXPORTS:-abi/android16-6.12-r60-to-r63-allowed-exports.tsv}")"
+STAGE_ABI_ALLOWED_EXPORTS_COUNT="${STAGE_ABI_ALLOWED_EXPORTS_COUNT:-}"
+STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT="${STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT:-}"
+STAGE_ABI_ALLOWED_EXPORTS_SHA256="${STAGE_ABI_ALLOWED_EXPORTS_SHA256:-}"
+STAGE_ABI_TARGET_ALL_EXPORT_COUNT="${STAGE_ABI_TARGET_ALL_EXPORT_COUNT:-}"
+STAGE_ABI_TARGET_ALL_SHA256="${STAGE_ABI_TARGET_ALL_SHA256:-}"
+STAGE_ABI_TARGET_EXPORT_COUNT="${STAGE_ABI_TARGET_EXPORT_COUNT:-}"
+STAGE_ABI_TARGET_SHA256="${STAGE_ABI_TARGET_SHA256:-}"
+STAGE_ABI_TARGET_STG_SHA256="${STAGE_ABI_TARGET_STG_SHA256:-}"
+ANDROID17_STOCK_ABI_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_ABI_MANIFEST:-abi/xiaomi17-android17-stock-common-abi.tsv}")"
+ANDROID17_STOCK_ABI_COUNT="${ANDROID17_STOCK_ABI_COUNT:-}"
+ANDROID17_STOCK_ABI_SHA256="${ANDROID17_STOCK_ABI_SHA256:-}"
+ANDROID17_STOCK_ABI_TUPLE_COUNT="${ANDROID17_STOCK_ABI_TUPLE_COUNT:-}"
+ANDROID17_STOCK_ABI_TUPLE_SHA256="${ANDROID17_STOCK_ABI_TUPLE_SHA256:-}"
+ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT="${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT:-}"
+ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256="${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256:-}"
+ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT="${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT:-}"
+ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT="${ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT:-}"
+ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256="${ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256:-}"
+ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX="${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX:-}"
+ANDROID17_STOCK_MODULE_COUNT="${ANDROID17_STOCK_MODULE_COUNT:-}"
+ANDROID17_STOCK_MODULES_ORDER_SHA256="${ANDROID17_STOCK_MODULES_ORDER_SHA256:-}"
+ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-tmp/os4/system_dlkm.img}")"
+ANDROID17_STOCK_SYSTEM_DLKM_SHA256="${ANDROID17_STOCK_SYSTEM_DLKM_SHA256:-}"
+ANDROID17_STOCK_SYSTEM_DLKM_SIZE="${ANDROID17_STOCK_SYSTEM_DLKM_SIZE:-}"
+ANDROID17_STOCK_SYSTEM_DLKM_RELEASE="${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE:-}"
+ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT:-}"
 LUNA_PROJECT_SHORT="${LUNA_PROJECT_COMMIT:0:8}"
 KERNEL_LOCALVERSION="-android16-luna-g${LUNA_PROJECT_SHORT}-4k"
 KERNEL_BUILD_USER="${KERNEL_BUILD_USER:-luna}"
 KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
-KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-06-01 18:52:16 HKT}"
+KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-08-21 02:42:48 +0800}"
 KERNEL_BUILD_VERSION="${KERNEL_BUILD_VERSION:-1}"
 AK3_BOOT_PARTITION_SIZE="${AK3_BOOT_PARTITION_SIZE:-100663296}"
+AK3_TEMPLATE_SHA256="${AK3_TEMPLATE_SHA256:-}"
 MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf793baef9804ccbe5a52ce34a8b6242725d3c77}"
 [ "${KERNEL_BUILD_USER}" = "luna" ] || die "内核构建用户必须固定为 luna"
 [ "${KERNEL_BUILD_HOST}" = "luna-build" ] || die "内核构建主机标识必须固定为 luna-build"
+[ "${KERNEL_BUILD_TIMESTAMP}" = "2026-08-21 02:42:48 +0800" ] || die "内核构建时间必须固定为 r63 提交时间"
+[ "${KERNEL_BUILD_VERSION}" = "1" ] || die "内核构建版本必须固定为 1"
 [ "${AK3_BOOT_PARTITION_SIZE}" = "100663296" ] || die "小米 17 boot 分区容量必须固定为 100663296 字节"
+[[ "${AK3_TEMPLATE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "AnyKernel3 模板 SHA-256 格式错误"
 [[ "${MAGISK_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Magisk commit 格式错误"
 [[ "${MAGISKBOOT_ARM64_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "arm64 magiskboot SHA-256 格式错误"
-[[ "${STAGE_CONFIG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "阶段配置 SHA-256 快照格式错误或尚未固定"
-[[ "${STAGE_MODULES_ORDER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "阶段模块顺序 SHA-256 快照格式错误或尚未固定"
-EXPECTED_RELEASE="6.12.23${KERNEL_LOCALVERSION}"
+[[ "${COMMON_BASE_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+    die "GKI common 基础差异快照格式错误或尚未固定"
+[[ "${KSU_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "KernelSU 精确差异快照格式错误或尚未固定"
+[[ "${ANDROID17_STOCK_ABI_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "Android 17 stock ABI 数量快照格式错误"
+[[ "${ANDROID17_STOCK_ABI_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android 17 stock ABI SHA-256 快照格式错误"
+[[ "${ANDROID17_STOCK_ABI_TUPLE_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "Android 17 stock ABI tuple 数量格式错误"
+[[ "${ANDROID17_STOCK_ABI_TUPLE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android 17 stock ABI tuple SHA-256 格式错误"
+[ "${ANDROID17_STOCK_ABI_TUPLE_COUNT}" = "${ANDROID17_STOCK_ABI_COUNT}" ] || \
+    die "Android 17 stock ABI tuple 数量未覆盖全部清单依赖"
+[[ "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT}" =~ ^[1-9][0-9]*$ ]] || \
+    die "rust_binder 完整需求数量格式错误"
+[[ "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+    die "rust_binder 完整需求 SHA-256 格式错误"
+[[ "${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT}" =~ ^[1-9][0-9]*$ ]] || \
+    die "rust_binder 匹配数量格式错误"
+[[ "${ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT}" =~ ^[1-9][0-9]*$ ]] || \
+    die "rust_binder 缺失数量格式错误"
+[[ "${ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+    die "rust_binder 缺失 SHA-256 格式错误"
+[ "$((ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT + ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT))" = \
+  "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT}" ] || \
+    die "rust_binder 匹配与缺失数量未覆盖完整需求"
+[ "${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX}" = "SMP preempt mod_unload modversions aarch64" ] || \
+    die "固定 OTA 模块 vermagic 后缀异常"
+[[ "${ANDROID17_STOCK_MODULE_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "固定 OTA modules.order 数量格式错误"
+[[ "${ANDROID17_STOCK_MODULES_ORDER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "固定 OTA modules.order SHA-256 格式错误"
+[[ "${ANDROID17_STOCK_SYSTEM_DLKM_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "system_dlkm.img SHA-256 快照格式错误"
+[[ "${ANDROID17_STOCK_SYSTEM_DLKM_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "system_dlkm.img 大小快照格式错误"
+[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "tmp/os4/system_dlkm.img" ] || \
+    die "system_dlkm 兼容性输入路径必须固定为 tmp/os4/system_dlkm.img"
+[ -n "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" ] && \
+    [[ "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" =~ ^[A-Za-z0-9._+-]+$ ]] || \
+    die "system_dlkm stock release 快照格式错误"
+[ -n "${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT}" ] && \
+    [[ "${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT}" =~ ^[A-Za-z0-9./:_+-]+$ ]] || \
+    die "system_dlkm OTA fingerprint 快照格式错误"
+[[ "${STAGE_CONFIG_LINES}" =~ ^[1-9][0-9]*$ ]] || die "阶段配置行数快照格式错误"
+[[ "${STAGE_CONFIG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "阶段配置 SHA-256 快照格式错误"
+[[ "${STAGE_MODULE_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "阶段模块数量快照格式错误"
+[[ "${STAGE_MODULES_ORDER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "阶段模块顺序 SHA-256 快照格式错误"
+[[ "${VENDOR_KMI_BASELINE_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "vendor KMI 数量快照格式错误"
+[[ "${VENDOR_KMI_BASELINE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "vendor KMI SHA-256 快照格式错误"
+[[ "${STAGE_ABI_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "vmlinux 投影数量快照格式错误"
+[[ "${STAGE_ABI_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "vmlinux 投影 SHA-256 快照格式错误"
+[[ "${STAGE_ABI_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "STG 投影 SHA-256 快照格式错误"
+[[ "${STAGE_ABI_ALL_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "Module.symvers 投影数量格式错误"
+[[ "${STAGE_ABI_ALL_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Module.symvers 投影 SHA-256 快照格式错误"
+[ "${STAGE_ABI_ALLOWED_EXPORTS:-}" = "abi/android16-6.12-r60-to-r63-allowed-exports.tsv" ] || \
+    die "r63 官方新增导出参考路径异常"
+[[ "${STAGE_ABI_ALLOWED_EXPORTS_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 官方新增导出数量格式错误"
+[[ "${STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 Xiaomi 新增导出数量格式错误"
+[[ "${STAGE_ABI_ALLOWED_EXPORTS_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 官方新增导出 SHA-256 格式错误"
+[[ "${STAGE_ABI_TARGET_ALL_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 完整 Module.symvers 目标数量格式错误"
+[[ "${STAGE_ABI_TARGET_ALL_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 完整 Module.symvers SHA-256 格式错误"
+[[ "${STAGE_ABI_TARGET_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 vmlinux 目标导出数量格式错误"
+[[ "${STAGE_ABI_TARGET_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 vmlinux 完整 SHA-256 格式错误"
+[[ "${STAGE_ABI_TARGET_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 全量 STG ABI SHA-256 格式错误"
+verify_final_source_deltas
+EXPECTED_RELEASE="6.12.69${KERNEL_LOCALVERSION}"
 EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@${KERNEL_BUILD_HOST}) (Android (14043575, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460), LLD 19.0.1) #${KERNEL_BUILD_VERSION} SMP PREEMPT ${KERNEL_BUILD_TIMESTAMP}"
 
 ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
 CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 MAGISKBOOT_ARM64_PATH="${ENVIRONMENT_DIR}/magisk/v${MAGISK_VERSION}/magiskboot-arm64"
-CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-67da74f00a801440ca7c256b028d94e6c85bf7168fbdecab62c3710384a25d5a}"
+AVBTOOL_PATH="${CI_TOOLCHAIN_DIR}/build-tools/bin/avbtool"
+FSCK_EROFS_PATH="${CI_TOOLCHAIN_DIR}/build-tools/bin/fsck.erofs"
+CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-65644bd77ed4ecde7239e3ce5a4aa53451a28c0a52b12394b88c5bd095517cc0}"
 
 [ -x "${CI_TOOLCHAIN_DIR}/bin/clang" ] || die "工具链未初始化，请先运行 ./init.sh"
 [ -x "${CI_TOOLCHAIN_DIR}/bin/rustc" ] || die "Rust 工具链未初始化，请先运行 ./init.sh"
 [ -x "${CI_TOOLCHAIN_DIR}/bindgen-cli-x86_64-unknown-linux-gnu/bindgen" ] || die "bindgen 未初始化，请先运行 ./init.sh"
 [ -d "${CI_TOOLCHAIN_DIR}/build-tools/bin" ] || die "build-tools 未初始化，请先运行 ./init.sh"
+[ -x "${AVBTOOL_PATH}" ] || die "固定 build-tools 缺少 avbtool"
+[ -x "${FSCK_EROFS_PATH}" ] || die "固定 build-tools 缺少 fsck.erofs"
 [ -x "${MAGISKBOOT_ARM64_PATH}" ] || die "arm64 magiskboot 未初始化，请先运行 ./init.sh"
 [ "$(sha256sum "${MAGISKBOOT_ARM64_PATH}" | awk '{ print $1 }')" = "${MAGISKBOOT_ARM64_SHA256}" ] || \
     die "arm64 magiskboot SHA-256 校验失败，请重新运行 ./init.sh"
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
 [ "$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" = "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
     die "工具链安装树完整性校验失败，请重新运行 ./init.sh"
+verify_android17_stock_system_dlkm_identity
 if [ "${ENABLE_IPSET}" = "1" ]; then
     [[ "${ANDROID_NDK_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK 安装树 SHA-256 格式错误"
     [ "$(tree_sha256 "${ANDROID_NDK_DIR}")" = "${ANDROID_NDK_TREE_SHA256}" ] || \
@@ -1651,14 +2305,27 @@ MAKE_ARGS=(
     KBUILD_BUILD_VERSION="${KERNEL_BUILD_VERSION}"
 )
 
-run_unicode_uml_selftest
+AUDIT_DIR="${BUILD_DIR%/}/luna-compatibility-audit"
+[ ! -L "${AUDIT_DIR}" ] || die "ABI/KMI 审计目录不得为符号链接"
+mkdir -p "${AUDIT_DIR}"
+find "${AUDIT_DIR}" -mindepth 1 -delete
+AUDIT_REPORT="${AUDIT_DIR}/summary.tsv"
+AUDIT_DRIFT_COUNT=0
+{
+    printf '# Luna Xiaomi 17 build snapshot audit\n'
+    printf '# DRIFT requires review and refreshed reference snapshots before release packaging.\n'
+    printf '# Fixed OTA module-closure failures abort immediately and cannot be reviewed away.\n'
+    printf 'status\tmetric\treference\tactual\n'
+} > "${AUDIT_REPORT}"
 
-log_step "生成 Android 16 GKI 6.12.23 配置"
+log_step "生成 Android 16 GKI 6.12.69 配置"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" gki_defconfig
 bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable WERROR \
     --disable LOCALVERSION_AUTO \
     --disable TRIM_UNUSED_KSYMS \
+    --enable BASIC_MODVERSIONS \
+    --enable EXTENDED_MODVERSIONS \
     --enable BPF_UNPRIV_DEFAULT_OFF \
     --enable SECCOMP \
     --enable SECCOMP_FILTER \
@@ -1670,6 +2337,19 @@ bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --enable TMPFS_POSIX_ACL \
     --enable XZ_DEC_MICROLZMA \
     --enable WQ_POWER_EFFICIENT_DEFAULT \
+    --enable BLK_WBT_MQ \
+    --enable MODULE_ALLOW_BTF_MISMATCH \
+    --enable ARM_PKVM_GUEST \
+    --enable VFIO_PKVM_IOMMU \
+    --enable PKVM_PVIOMMU \
+    --disable CRYPTO_AES_ARM64_NEON_BLK \
+    --disable EFIVAR_FS \
+    --disable PSTORE_BLK \
+    --disable PSTORE_ZONE \
+    --disable SND_AUDIO_GRAPH_CARD \
+    --disable SND_SIMPLE_CARD_UTILS \
+    --disable USB_XHCI_PCI_RENESAS \
+    --disable NINTENDO_FF \
     --set-str LOCALVERSION ""
 if [ "${ENABLE_KERNELSU}" = "1" ]; then
     bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
@@ -1678,7 +2358,8 @@ if [ "${ENABLE_KERNELSU}" = "1" ]; then
 fi
 if [ "${ENABLE_SUSFS}" = "1" ]; then
     bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
-        --enable KSU_SUSFS
+        --enable KSU_SUSFS \
+        --disable KSU_SUSFS_OPEN_REDIRECT
 fi
 if [ "${ENABLE_BBG}" = "1" ]; then
     bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
@@ -1728,8 +2409,8 @@ if [ "${ENABLE_STAGE4_FS}" = "1" ]; then
         --enable F2FS_UNFAIR_RWSEM \
         --enable UNICODE \
         --enable NLS_UTF8 \
-        --enable NETFS_SUPPORT \
-        --enable CIFS \
+        --module NETFS_SUPPORT \
+        --disable CIFS \
         --enable OVERLAY_FS \
         --disable OVERLAY_FS_REDIRECT_DIR \
         --enable OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW \
@@ -1746,11 +2427,6 @@ if [ "${ENABLE_STAGE4_FS}" = "1" ]; then
         --enable INTEGRITY_AUDIT \
         --enable INTEGRITY
 fi
-if [ "${ENABLE_ADIOS}" = "1" ]; then
-    bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
-        --enable MQ_IOSCHED_ADIOS \
-        --disable MQ_IOSCHED_DEFAULT_ADIOS
-fi
 if [ "${ENABLE_STAGE5_NAMESPACES}" = "1" ]; then
     bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
         --enable USER_NS \
@@ -1761,7 +2437,6 @@ if [ "${ENABLE_STAGE5_NETWORK}" = "1" ]; then
         --enable TCP_CONG_ADVANCED \
         --enable TCP_CONG_CUBIC \
         --enable TCP_CONG_BBR \
-        --enable TCP_CONG_BRUTAL \
         --enable NET_SCH_FQ \
         --enable DEFAULT_CUBIC \
         --disable TCP_CONG_BIC \
@@ -1799,6 +2474,7 @@ bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable DMABUF_HEAPS_CMA
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" olddefconfig -j"${BUILD_JOBS}"
 verify_kmi_config
+cp -f "${BUILD_DIR}/.config" "${AUDIT_DIR}/config.current"
 [ "${ENABLE_BBG}" != "1" ] || verify_lsm_slot_capacity
 
 log_step "编译 GKI arm64 Image 与模块 (并行度: ${BUILD_JOBS})"
@@ -1810,15 +2486,32 @@ IMAGE_PATH="${BUILD_DIR}/arch/arm64/boot/Image"
 [ -s "${BUILD_DIR}/modules.order" ] || die "编译完成但未找到 modules.order"
 MODULE_COUNT="$(sed '/^[[:space:]]*$/d' "${BUILD_DIR}/modules.order" | wc -l | tr -d ' ')"
 MODULES_ORDER_SHA256="$(sha256sum "${BUILD_DIR}/modules.order" | awk '{ print $1 }')"
+MODULE_SAMPLE_PATH=""
 while IFS= read -r module_path; do
-    [ -z "${module_path}" ] || [ -s "${BUILD_DIR}/${module_path}" ] || die "活动模块产物缺失: ${module_path}"
+    [ -z "${module_path}" ] && continue
+    case "${module_path}" in
+        /*|../*|*/../*|*/..) die "modules.order 含不安全路径: ${module_path}" ;;
+        *.o) ;;
+        *) die "modules.order 条目不是模块对象: ${module_path}" ;;
+    esac
+    [ -s "${BUILD_DIR}/${module_path}" ] || die "活动模块对象缺失: ${module_path}"
+    module_path="${module_path%.o}.ko"
+    [ -s "${BUILD_DIR}/${module_path}" ] || die "活动模块 ELF 缺失: ${module_path}"
+    [ -n "${MODULE_SAMPLE_PATH}" ] || MODULE_SAMPLE_PATH="${module_path}"
 done < "${BUILD_DIR}/modules.order"
-[ "${MODULE_COUNT}" -ge 100 ] || die "GKI 模块数量异常: ${MODULE_COUNT}"
-[ -n "${STAGE_MODULE_COUNT}" ] || die "阶段模块快照尚未固定: STAGE_MODULE_COUNT=${MODULE_COUNT}"
-[ "${MODULE_COUNT}" = "${STAGE_MODULE_COUNT}" ] || die "阶段模块数量漂移: ${MODULE_COUNT} != ${STAGE_MODULE_COUNT}"
-[ "${MODULES_ORDER_SHA256}" = "${STAGE_MODULES_ORDER_SHA256}" ] || \
-    die "阶段模块顺序完整指纹漂移: ${MODULES_ORDER_SHA256} != ${STAGE_MODULES_ORDER_SHA256}"
-log_success "GKI 模块构建检查通过 (${MODULE_COUNT} 个，完整指纹匹配)"
+[ -n "${MODULE_SAMPLE_PATH}" ] || die "modules.order 不含活动模块"
+cp -f "${BUILD_DIR}/modules.order" "${AUDIT_DIR}/modules.order.current"
+MODULE_SAMPLE_VERMAGIC="$("${CI_TOOLCHAIN_DIR}/bin/llvm-readelf" -p .modinfo \
+    "${BUILD_DIR}/${MODULE_SAMPLE_PATH}" | sed -n 's/^.*] vermagic=//p')"
+[ "$(printf '%s\n' "${MODULE_SAMPLE_VERMAGIC}" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] || \
+    die "无法从活动模块提取唯一 vermagic: ${MODULE_SAMPLE_PATH}"
+[ "${MODULE_SAMPLE_VERMAGIC#* }" = "${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX}" ] || \
+    die "活动模块 vermagic 后缀与固定 OTA 不兼容: ${MODULE_SAMPLE_VERMAGIC}"
+audit_compare "hard.module-vermagic.suffix" "${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX}" \
+    "${MODULE_SAMPLE_VERMAGIC#* }"
+audit_compare "modules.order.count" "${STAGE_MODULE_COUNT}" "${MODULE_COUNT}"
+audit_compare "modules.order.sha256" "${STAGE_MODULES_ORDER_SHA256}" "${MODULES_ORDER_SHA256}"
+log_success "活动模块产物与固定 OTA vermagic 后缀兼容 (${MODULE_COUNT} 个模块)"
 
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_build
 [ "${ENABLE_BBG}" != "1" ] || verify_bbg_build
@@ -1830,18 +2523,32 @@ verify_stage_abi
 
 EMBEDDED_CONFIG_LINES="$("${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" | wc -l | tr -d ' ')"
 EMBEDDED_CONFIG_SHA256="$("${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" | sha256sum | awk '{ print $1 }')"
-[ "${EMBEDDED_CONFIG_LINES}" -ge "${KMI_CONFIG_MIN_LINES}" ] || die "Image 内嵌配置异常: ${EMBEDDED_CONFIG_LINES}"
-[ "${EMBEDDED_CONFIG_LINES}" = "${STAGE_CONFIG_LINES}" ] || die "Image 内嵌配置行数漂移: ${EMBEDDED_CONFIG_LINES} != ${STAGE_CONFIG_LINES}"
-[ "${EMBEDDED_CONFIG_SHA256}" = "${STAGE_CONFIG_SHA256}" ] || \
-    die "Image 内嵌配置完整指纹漂移: ${EMBEDDED_CONFIG_SHA256} != ${STAGE_CONFIG_SHA256}"
+GENERATED_CONFIG_SHA256="$(sha256sum "${BUILD_DIR}/.config" | awk '{ print $1 }')"
+[ "${EMBEDDED_CONFIG_SHA256}" = "${GENERATED_CONFIG_SHA256}" ] || \
+    die "Image 内嵌配置与本次已审查生成配置不一致"
+audit_compare "image.config.lines" "${STAGE_CONFIG_LINES}" "${EMBEDDED_CONFIG_LINES}"
+audit_compare "image.config.sha256" "${STAGE_CONFIG_SHA256}" "${EMBEDDED_CONFIG_SHA256}"
 ACTUAL_VERSION_LINE="$(strings "${IMAGE_PATH}" | grep -Fx -- "${EXPECTED_VERSION_LINE}" | sort -u || true)"
 [ "${ACTUAL_VERSION_LINE}" = "${EXPECTED_VERSION_LINE}" ] || die "Image 缺少完整目标版本行"
 
+printf '# drift_count=%s\n' "${AUDIT_DRIFT_COUNT}" >> "${AUDIT_REPORT}"
+[ "${AUDIT_DRIFT_COUNT}" = "0" ] || \
+    die "发现 ${AUDIT_DRIFT_COUNT} 项未确认参考快照漂移；本次 Image 保留在构建目录，审查 ${AUDIT_DIR} 后更新参考摘要再打包"
+
+log_success "同 OTA 模块闭包已固定：102 个 system_dlkm 模块严格兼容，rust_binder.ko 为 C Binder 默认路径下的精确例外"
+
 mkdir -p "${PRODUCT_DIR}"
 ARTIFACT_MANIFEST="${PRODUCT_DIR}/${ARTIFACT_MANIFEST_NAME}"
-clean_previous_release_artifacts "${PRODUCT_DIR}" "${ARTIFACT_MANIFEST_NAME}"
 RELEASE_ARTIFACTS=()
 RELEASE_DATE="$(TZ=Asia/Shanghai date +%Y%m%d)"
+AUDIT_ARTIFACT="luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}-audit.zip"
+normalize_archive_timestamps "${AUDIT_DIR}"
+(cd "${AUDIT_DIR}" && \
+    TZ=UTC 7z a -tzip -mtc=off -mta=off "${PRODUCT_DIR}/${AUDIT_ARTIFACT}" . >/dev/null)
+unzip -tq "${PRODUCT_DIR}/${AUDIT_ARTIFACT}" >/dev/null || die "兼容性审计归档损坏"
+[ "$(unzip -Z1 "${PRODUCT_DIR}/${AUDIT_ARTIFACT}" | grep -Fxc 'summary.tsv')" = "1" ] || \
+    die "兼容性审计归档缺少唯一 summary.tsv"
+RELEASE_ARTIFACTS+=("${AUDIT_ARTIFACT}")
 build_ipset_userspace
 if [ "${ENABLE_IPSET}" = "1" ]; then
     RELEASE_ARTIFACTS+=(
@@ -1872,20 +2579,71 @@ if [ "${ENABLE_SUSFS}" = "1" ]; then
         die "官方 ksu_susfs arm64 helper SHA-256 校验失败"
     grep -Fx 'version=v2.2.0' "${SUSFS_DIR}/ksu_module_susfs/module.prop" >/dev/null || \
         die "SUSFS module.prop 版本不是 v2.2.0"
-    (cd "${SUSFS_DIR}/ksu_module_susfs" && 7z a -tzip "${PRODUCT_DIR}/${SUSFS_MODULE_NAME}" . >/dev/null)
+    SUSFS_MODULE_STAGE="$(mktemp -d "${BUILD_DIR}/susfs-module.XXXXXX")"
+    cp -a "${SUSFS_DIR}/ksu_module_susfs/." "${SUSFS_MODULE_STAGE}/"
+    normalize_archive_timestamps "${SUSFS_MODULE_STAGE}"
+    (cd "${SUSFS_MODULE_STAGE}" && \
+        TZ=UTC 7z a -tzip -mtc=off -mta=off "${PRODUCT_DIR}/${SUSFS_MODULE_NAME}" . >/dev/null)
     unzip -p "${PRODUCT_DIR}/${SUSFS_MODULE_NAME}" tools/ksu_susfs_arm64 | sha256sum | \
         grep -Fx "${SUSFS_HELPER_SHA256}  -" >/dev/null || die "SUSFS 模块内 helper 校验失败"
+    case "${SUSFS_MODULE_STAGE}" in
+        "${BUILD_DIR}"/susfs-module.*) rm -rf -- "${SUSFS_MODULE_STAGE}" ;;
+        *) die "拒绝清理异常 SUSFS 模块暂存目录" ;;
+    esac
     cp -f "${SUSFS_HELPER}" "${PRODUCT_DIR}/ksu_susfs_arm64"
     RELEASE_ARTIFACTS+=("${SUSFS_MODULE_NAME}" "ksu_susfs_arm64")
     log_success "官方 SUSFS helper 与模块已输出: ${SUSFS_MODULE_NAME}"
 fi
 
 if [ -f "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" ]; then
+    [ "$(sha256sum "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" | awk '{ print $1 }')" = \
+      "${AK3_TEMPLATE_SHA256}" ] || die "AnyKernel3 模板 SHA-256 校验失败"
     unzip -tq "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" >/dev/null || die "AnyKernel3 模板 ZIP 损坏"
     unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | grep -Fx 'do.devicecheck=0' >/dev/null || die "AnyKernel3 模板未禁用 do.devicecheck"
+    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | grep -Fx 'do.modules=0' >/dev/null || \
+        die "AnyKernel3 模板不得安装或替换模块"
+    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | grep -Fx 'do.systemless=0' >/dev/null || \
+        die "AnyKernel3 模板不得修改 ramdisk"
     unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
         grep -Fx 'kernel.string=Luna Kernel for Xiaomi 17' >/dev/null || \
         die "AnyKernel3 模板品牌或设备标识不正确"
+    for AK3_SHELL_SCRIPT in META-INF/com/google/android/update-binary tools/ak3-core.sh anykernel.sh; do
+        unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${AK3_SHELL_SCRIPT}" | \
+            bash -n || die "AnyKernel3 模板脚本语法错误: ${AK3_SHELL_SCRIPT}"
+    done
+    for AK3_SLOT_SCRIPT in META-INF/com/google/android/update-binary tools/ak3-core.sh; do
+        unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${AK3_SLOT_SCRIPT}" | \
+            grep -Fq 'find_slot_from_bootconfig() {' || \
+            die "AnyKernel3 模板缺少 bootconfig 槽位检测: ${AK3_SLOT_SCRIPT}"
+        unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${AK3_SLOT_SCRIPT}" | \
+            grep -Fq '  slot=$(find_slot_from_bootconfig);' || \
+            die "AnyKernel3 模板未优先使用 bootconfig 槽位: ${AK3_SLOT_SCRIPT}"
+        unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${AK3_SLOT_SCRIPT}" | \
+            grep -Fq 'bootctl get-current-slot' || \
+            die "AnyKernel3 模板缺少 boot control 当前槽检测: ${AK3_SLOT_SCRIPT}"
+        unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${AK3_SLOT_SCRIPT}" | \
+            grep -Fq '_a|_b) echo "$1";;' || \
+            die "AnyKernel3 模板未将槽位限制为 _a/_b: ${AK3_SLOT_SCRIPT}"
+        if unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${AK3_SLOT_SCRIPT}" | \
+            grep -Eq 'ak3-slot-compat\.env|find_slot_from_propfiles'; then
+            die "AnyKernel3 模板仍包含不可信的临时文件或静态属性槽位猜测: ${AK3_SLOT_SCRIPT}"
+        fi
+    done
+    [ "$(unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" tools/ak3-core.sh | \
+        grep -Fxc '      slot=$(find_slot);')" = "1" ] || \
+        die "AnyKernel3 模板未唯一使用受检槽位解析入口"
+    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
+        grep -Fx 'slot_select=active;' >/dev/null || \
+        die "AnyKernel3 模板未固定刷写当前启动槽"
+    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
+        grep -Fx '[ ! -d /postinstall/tmp ] || abort "OTA post-install is not supported. Aborting...";' >/dev/null || \
+        die "AnyKernel3 模板未拒绝语义不同的 OTA post-install 环境"
+    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
+        grep -Fx 'luna_expected_boot="/dev/block/by-name/boot$slot";' >/dev/null || \
+        die "AnyKernel3 模板未绑定带槽位后缀的 boot 目标"
+    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
+        grep -Fx '[ "$block" = "$luna_expected_boot" ] || \' >/dev/null || \
+        die "AnyKernel3 模板未拒绝无后缀或错槽 boot 目标"
     unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
         grep -Fx "boot_partition_size=${AK3_BOOT_PARTITION_SIZE};" >/dev/null || \
         die "AnyKernel3 模板未固定小米 17 boot 分区容量"
@@ -1905,35 +2663,60 @@ if [ -f "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" ]; then
         grep -F 'wc -c < boot.img' >/dev/null; then
         die "AnyKernel3 模板仍按原 boot 镜像文件长度拒绝刷写"
     fi
+    AK3_BOOT_FLOW="$(unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
+        sed 's/[[:space:]]*#.*$//' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
+        grep -E '^(split_boot|flash_boot|dump_boot|write_boot|flash_generic);$')"
+    [ "${AK3_BOOT_FLOW}" = $'split_boot;\nflash_boot;' ] || \
+        die "AnyKernel3 模板不是严格的 Image-only boot 流程"
     log_step "打包 AnyKernel3 刷机包"
     ZIP_NAME="${PRODUCT_DIR}/luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}.zip"
     AK3_STAGE="$(mktemp -d "${BUILD_DIR}/ak3-package.XXXXXX")"
     mkdir -p "${AK3_STAGE}/tools"
     cp -f "${MAGISKBOOT_ARM64_PATH}" "${AK3_STAGE}/tools/magiskboot"
+    cp -f "${IMAGE_PATH}" "${AK3_STAGE}/Image"
     chmod 0755 "${AK3_STAGE}/tools/magiskboot"
+    normalize_archive_timestamps "${AK3_STAGE}"
     cp -f "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${ZIP_NAME}"
-    (cd "${AK3_STAGE}" && 7z u -tzip "${ZIP_NAME}" tools/magiskboot >/dev/null)
-    (cd "${PRODUCT_DIR}" && 7z u -tzip "${ZIP_NAME}" Image >/dev/null)
+    (cd "${AK3_STAGE}" && TZ=UTC 7z u -tzip -mtc=off -mta=off "${ZIP_NAME}" tools/magiskboot >/dev/null)
+    (cd "${AK3_STAGE}" && TZ=UTC 7z u -tzip -mtc=off -mta=off "${ZIP_NAME}" Image >/dev/null)
     unzip -p "${ZIP_NAME}" anykernel.sh | grep -Fx 'do.devicecheck=0' >/dev/null || die "刷机包 do.devicecheck 校验失败"
     unzip -p "${ZIP_NAME}" anykernel.sh | grep -Fx 'kernel.string=Luna Kernel for Xiaomi 17' >/dev/null || \
         die "刷机包品牌或设备标识校验失败"
     [ "$(unzip -p "${ZIP_NAME}" tools/magiskboot | sha256sum | awk '{ print $1 }')" = \
       "${MAGISKBOOT_ARM64_SHA256}" ] || die "刷机包 arm64 magiskboot SHA-256 校验失败"
+    [ "$(unzip -p "${ZIP_NAME}" Image | sha256sum | awk '{ print $1 }')" = \
+      "$(sha256sum "${IMAGE_PATH}" | awk '{ print $1 }')" ] || \
+        die "刷机包 Image 与本次构建产物不一致"
     unzip -tq "${ZIP_NAME}" >/dev/null || die "刷机包 ZIP 完整性校验失败"
+    [ "$(unzip -Z1 "${ZIP_NAME}" | grep -Fxc 'Image')" = "1" ] || \
+        die "刷机包必须且只能携带一个顶层 Image"
+    if unzip -Z1 "${ZIP_NAME}" | awk -F/ '
+        /\/$/ { next }
+        $NF ~ /\.img$/ || $NF ~ /(^|[-.])dtbo?$/ || $NF ~ /\.ko$/ ||
+        ($NF != "Image" && $NF ~ /^(Image|zImage)([-.]|$)/) { found=1 }
+        END { exit !found }
+    '; then
+        die "刷机包夹带了 Image-only 边界之外的镜像、设备树或模块"
+    fi
     rm -rf -- "${AK3_STAGE}"
     RELEASE_ARTIFACTS+=("$(basename "${ZIP_NAME}")")
     log_success "AnyKernel3 刷机包已生成: ${ZIP_NAME}"
 fi
 rm -f -- "${PRODUCT_DIR}/Image"
 
+: > "${ARTIFACT_MANIFEST}"
 for artifact in "${RELEASE_ARTIFACTS[@]}"; do
     case "${artifact}" in
-        ''|*/*|.|..) die "拒绝记录非法产物名: ${artifact}" ;;
+        ''|*/*|.|..|*[!A-Za-z0-9._-]*) die "拒绝记录非法产物名: ${artifact}" ;;
     esac
-    [ -f "${PRODUCT_DIR}/${artifact}" ] || die "当前构建产物缺失: ${artifact}"
-    printf '%s\n' "${artifact}" >> "${ARTIFACT_MANIFEST}"
+    [ -f "${PRODUCT_DIR}/${artifact}" ] && [ ! -L "${PRODUCT_DIR}/${artifact}" ] || \
+        die "当前构建产物缺失或不安全: ${artifact}"
+    artifact_sha256="$(sha256sum "${PRODUCT_DIR}/${artifact}")"
+    printf '%s  %s\n' "${artifact_sha256%% *}" "${artifact}" >> "${ARTIFACT_MANIFEST}"
 done
 [ -s "${ARTIFACT_MANIFEST}" ] || die "当前构建产物清单为空"
-log_success "当前构建产物清单已固定 (${#RELEASE_ARTIFACTS[@]} 项)"
+(cd "${PRODUCT_DIR}" && sha256sum --strict --status -c "${ARTIFACT_MANIFEST_NAME}") || \
+    die "当前构建产物清单摘要自检失败"
+log_success "当前构建产物名称与 SHA-256 已固定 (${#RELEASE_ARTIFACTS[@]} 项)"
 
-log_success "Luna Kernel for Xiaomi 17 构建与 ABI/KMI 校验完成"
+log_success "Luna Kernel for Xiaomi 17 构建、固定 OTA 可启动门禁与全量差异审计完成"

@@ -1,0 +1,80 @@
+Subject: [PATCH] f2fs: 合并上游前台 GC 死锁修复并适配 AOSP 6.12.69
+
+diff --git a/fs/f2fs/data.c b/fs/f2fs/data.c
+index f19b0a2b335ed4ba8df95dd4cc8521ce07276ba7..2bbc53a09651a41f526911db0d3329b34729d3e3 100644
+--- a/fs/f2fs/data.c
++++ b/fs/f2fs/data.c
+@@ -921,6 +921,35 @@ void f2fs_submit_merged_ipu_write(struct f2fs_sb_info *sbi,
+ 	}
+ }
+ 
++void f2fs_submit_all_merged_ipu_writes(struct f2fs_sb_info *sbi)
++{
++	struct bio_entry *be, *tmp;
++	struct f2fs_bio_info *io;
++	enum temp_type temp;
++
++	for (temp = HOT; temp < NR_TEMP_TYPE; temp++) {
++		LIST_HEAD(list);
++
++		io = sbi->write_io[DATA] + temp;
++
++		/* A lockless list_empty() check is safe here: any bios from
++		 * other kworkers that we miss will be submitted by those
++		 * kworkers accordingly.
++		 */
++		if (list_empty(&io->bio_list))
++			continue;
++
++		f2fs_down_write(&io->bio_list_lock);
++		list_splice_init(&io->bio_list, &list);
++		f2fs_up_write(&io->bio_list_lock);
++
++		list_for_each_entry_safe(be, tmp, &list, list) {
++			f2fs_submit_write_bio(sbi, be->bio, DATA);
++			del_bio_entry(be);
++		}
++	}
++}
++
+ int f2fs_merge_page_bio(struct f2fs_io_info *fio)
+ {
+ 	struct bio *bio = *fio->bio;
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+index f79cff10a022857502639e73af94f18f1b4a432a..afce4449dd02d15af5e21402e253ecded6766a07 100644
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -4027,6 +4027,7 @@ void f2fs_submit_merged_write_cond(struct f2fs_sb_info *sbi,
+ 				nid_t ino, enum page_type type);
+ void f2fs_submit_merged_ipu_write(struct f2fs_sb_info *sbi,
+ 					struct bio **bio, struct page *page);
++void f2fs_submit_all_merged_ipu_writes(struct f2fs_sb_info *sbi);
+ void f2fs_flush_merged_writes(struct f2fs_sb_info *sbi);
+ int f2fs_submit_page_bio(struct f2fs_io_info *fio);
+ int f2fs_merge_page_bio(struct f2fs_io_info *fio);
+diff --git a/fs/f2fs/segment.c b/fs/f2fs/segment.c
+index 05627bb064ed70c75f2bcdbba1ecfd8bfc67d004..adcdde6a072d61404549eb9f1dfc6be9a855ff37 100644
+--- a/fs/f2fs/segment.c
++++ b/fs/f2fs/segment.c
+@@ -446,6 +446,13 @@ void f2fs_balance_fs(struct f2fs_sb_info *sbi, bool need)
+ 	if (has_enough_free_secs(sbi, 0, 0))
+ 		return;
+ 
++	/*
++	 * Submit all cached OPU/IPU DATA bios before triggering
++	 * foreground GC to avoid potential deadlocks.
++	 */
++	f2fs_submit_merged_write(sbi, DATA);
++	f2fs_submit_all_merged_ipu_writes(sbi);
++
+ 	if (test_opt(sbi, GC_MERGE) && sbi->gc_thread &&
+ 				sbi->gc_thread->f2fs_gc_task) {
+ 		DEFINE_WAIT(wait);
+@@ -464,6 +471,7 @@ void f2fs_balance_fs(struct f2fs_sb_info *sbi, bool need)
+ 			.should_migrate_blocks = false,
+ 			.err_gc_skipped = false,
+ 			.nr_free_secs = 1 };
++
+ 		f2fs_down_write_trace(&sbi->gc_lock, &gc_control.lc);
+ 		stat_inc_gc_call_count(sbi, FOREGROUND);
+ 		f2fs_gc(sbi, &gc_control);

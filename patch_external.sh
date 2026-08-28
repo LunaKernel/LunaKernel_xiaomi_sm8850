@@ -3,11 +3,42 @@
 # patch_external.sh - authorized external-project kernel patch stage
 #
 set -euo pipefail
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat
 
 die() { printf '[FAIL] %s\n' "$1" >&2; exit 1; }
 log_info() { printf '[INFO] %s\n' "$1"; }
 log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
+
+reject_git_environment_overrides() {
+    local name
+    while IFS= read -r name; do
+        case "${name}" in
+            GIT_CONFIG_GLOBAL)
+                [ "${!name}" = "/dev/null" ] || die "Git 全局配置隔离值异常"
+                ;;
+            GIT_CONFIG_COUNT)
+                [ "${!name}" = "1" ] || die "Git 命令配置数量异常"
+                ;;
+            GIT_CONFIG_KEY_0)
+                [ "${!name}" = "core.hooksPath" ] || die "Git 命令配置键异常"
+                ;;
+            GIT_CONFIG_VALUE_0)
+                [ "${!name}" = "/dev/null" ] || die "Git hooks 隔离值异常"
+                ;;
+            GIT_CONFIG_NOSYSTEM|GIT_NO_LAZY_FETCH|GIT_NO_REPLACE_OBJECTS)
+                [ "${!name}" = "1" ] || die "Git 隔离值异常: ${name}"
+                ;;
+            GIT_PAGER)
+                [ "${!name}" = "cat" ] || die "Git pager 隔离值异常"
+                ;;
+            GIT_*) die "拒绝 Git 环境覆盖: ${name}" ;;
+        esac
+    done < <(compgen -e)
+}
+reject_git_environment_overrides
 
 load_env_file() {
     local env_file="$1"
@@ -17,11 +48,41 @@ load_env_file() {
     set -a
     . "${env_file}"
     [ "${had_allexport}" = "1" ] || set +a
+    reject_git_environment_overrides
 }
 
 sanitize_path_component() { printf '%s' "$1" | LC_ALL=C tr -cs 'A-Za-z0-9._-' '_'; }
 resolve_workspace_path() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${HOST_WORKSPACE_DIR}" "$1" ;; esac; }
 normalize_git_url() { printf '%s' "$1" | sed -e 's#/$##' -e 's#\.git$##'; }
+reject_git_object_overrides() {
+    local label="$1" repo_dir="$2" git_dir replace_refs unexpected_config
+    local hooks_path is_bare top_level
+    git_dir="$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null)" || die "${label} 不是 Git 仓库"
+    replace_refs="$(git -C "${repo_dir}" for-each-ref --format='%(refname)' refs/replace/)"
+    [ -z "${replace_refs}" ] || die "${label} 存在 refs/replace 对象替换:\n${replace_refs}"
+    [ ! -s "${git_dir}/info/grafts" ] || die "${label} 存在 info/grafts 对象替换"
+    [ ! -s "${git_dir}/info/attributes" ] || die "${label} 存在 info/attributes 工作树过滤覆盖"
+    unexpected_config="$(git -C "${repo_dir}" config --name-only --list | LC_ALL=C sort -u | awk '
+        /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|hookspath|sparsecheckout|sparsecheckoutcone|ignorecase|precomposeunicode)$/ { next }
+        /^extensions\.worktreeconfig$/ { next }
+        /^remote\.origin\.(url|fetch|promisor|partialclonefilter|tagopt)$/ { next }
+        /^branch\..+\.(remote|merge)$/ { next }
+        /^(fetch|transfer)\.fsckobjects$/ { next }
+        /^backport\.[a-z0-9.]+$/ { next }
+        { print }
+    ')"
+    [ -z "${unexpected_config}" ] || \
+        die "${label} 存在非白名单 Git 配置:\n${unexpected_config}"
+    hooks_path="$(git -C "${repo_dir}" config --path --get core.hooksPath 2>/dev/null || true)"
+    [ -z "${hooks_path}" ] || [ "${hooks_path}" = "/dev/null" ] || \
+        die "${label} 存在非隔离 Git hooks 路径: ${hooks_path}"
+    is_bare="$(git -C "${repo_dir}" rev-parse --is-bare-repository)"
+    if [ "${is_bare}" = "false" ]; then
+        top_level="$(git -C "${repo_dir}" rev-parse --show-toplevel)"
+        [ "$(realpath -e "${repo_dir}")" = "$(realpath -e "${top_level}")" ] || \
+            die "${label} Git worktree 与预期目录不一致: ${top_level}"
+    fi
+}
 orbctl_run() { local cmd=(orbctl run); [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}"); "${cmd[@]}" "$@"; }
 orbctl_run_host_path() { local cmd=(orbctl run -p); [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}"); "${cmd[@]}" "$@"; }
 
@@ -29,6 +90,7 @@ sync_control_files_to_orb() {
     local items="init.sh patch.sh patch_external.sh build.sh"
     [ ! -f "${HOST_WORKSPACE_DIR}/.env" ] || items="${items} .env"
     [ ! -d "${HOST_WORKSPACE_DIR}/patches" ] || items="${items} patches"
+    [ ! -d "${HOST_WORKSPACE_DIR}/tools" ] || items="${items} tools"
     orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; mkdir -p \"\$target\"; tar -cf - ${items} | tar -xf - -C \"\$target\""
 }
 
@@ -48,6 +110,8 @@ verify_repo_identity() {
     local label="$1" repo_dir="$2" expected_url="$3" expected_commit="$4"
     local actual_url actual_commit
     git -C "${repo_dir}" rev-parse --git-dir >/dev/null 2>&1 || die "${label} 未初始化，请先运行 ./init.sh"
+    reject_git_object_overrides "${label}" "${repo_dir}"
+    verify_no_hidden_index_flags "${label}" "${repo_dir}"
     actual_url="$(git -C "${repo_dir}" remote get-url origin 2>/dev/null || true)"
     actual_commit="$(git -C "${repo_dir}" rev-parse HEAD)"
     [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${expected_url}")" ] || die "${label} remote 不匹配: ${actual_url}"
@@ -67,6 +131,119 @@ apply_patch_once() {
     fi
 }
 
+verify_project_patch() {
+    local label="$1" patch_file="$2" expected_sha256="$3" expected_patch_id="$4"
+    local actual_sha256 actual_patch_id
+    [ -s "${patch_file}" ] || die "${label}缺失"
+    actual_sha256="$(sha256sum "${patch_file}" | awk '{ print $1 }')"
+    [ "${actual_sha256}" = "${expected_sha256}" ] || die "${label} SHA-256 不匹配"
+    actual_patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
+    [ "${actual_patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
+}
+
+verify_kernelsu_backport_metadata() {
+    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
+    local expected_paths="$5"
+    local patch_file patch_id actual_date actual_paths
+    patch_file="$(mktemp)"
+    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" rev-parse \
+        refs/backport-audit/kernelsu-post-release 2>/dev/null || true)" = \
+        "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || \
+        die "KernelSU 固定修复快照引用缺失，请先运行 ./init.sh"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
+        cat-file -e "${commit}^{commit}" 2>/dev/null || \
+        die "${label}对象缺失，请先运行 ./init.sh"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${KSU_COMMIT}" "${commit}" || die "${label} 不在 KernelSU ${KSU_REF} 之后"
+    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
+        "${commit}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
+        die "${label} 不属于固定 KernelSU main 快照"
+    actual_date="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
+        -C "${KSU_DIR}" show -s --format=%cs "${commit}")"
+    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
+    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
+        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
+    [ "${actual_paths}" = "${expected_paths}" ] || die "${label} 触及非预期路径: ${actual_paths}"
+    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${KSU_DIR}" \
+        show --format= "${commit}" > "${patch_file}"
+    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
+    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
+    rm -f "${patch_file}"
+}
+
+apply_kernelsu_backport_once() {
+    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
+    local expected_paths="$5" patch_file
+
+    verify_kernelsu_backport_metadata "${label}" "${commit}" "${commit_date}" \
+        "${expected_patch_id}" "${expected_paths}"
+    patch_file="$(mktemp)"
+    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${KSU_DIR}" \
+        show --format= "${commit}" > "${patch_file}"
+    apply_patch_once "${label}" "${KSU_DIR}" "${patch_file}"
+    rm -f "${patch_file}"
+}
+
+apply_kernelsu_post_release_fixes() {
+    [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ] || return
+    apply_kernelsu_backport_once "KernelSU 分配失败处理修复" \
+        "${KSU_ALLOCATION_FAILURE_COMMIT}" "${KSU_ALLOCATION_FAILURE_DATE}" \
+        "${KSU_ALLOCATION_FAILURE_PATCH_ID}" \
+        "kernel/manager/throne_tracker.c kernel/selinux/sepolicy.c"
+    verify_kernelsu_backport_metadata "KernelSU APK 签名块短读修复" \
+        "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
+        "${KSU_APK_SHORT_READ_PATCH_ID}" "kernel/manager/apk_sign.c"
+    verify_kernelsu_backport_metadata "KernelSU AOSP APK 签名块解析修复" \
+        "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
+        "${KSU_APK_AOSP_PARSER_PATCH_ID}" "kernel/manager/apk_sign.c"
+    verify_kernelsu_backport_metadata "KernelSU APK EOCD 边界验证修复" \
+        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
+        "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" "kernel/manager/apk_sign.c"
+    if kernelsu_file_matches_commit \
+        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "kernel/manager/apk_sign.c"; then
+        log_info "KernelSU APK 签名验证完整修复链 已存在"
+    else
+        apply_kernelsu_backport_once "KernelSU APK 签名块短读修复" \
+            "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
+            "${KSU_APK_SHORT_READ_PATCH_ID}" "kernel/manager/apk_sign.c"
+        apply_kernelsu_backport_once "KernelSU AOSP APK 签名块解析修复" \
+            "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
+            "${KSU_APK_AOSP_PARSER_PATCH_ID}" "kernel/manager/apk_sign.c"
+        apply_kernelsu_backport_once "KernelSU APK EOCD 边界验证修复" \
+            "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
+            "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" "kernel/manager/apk_sign.c"
+    fi
+}
+
+kernelsu_file_matches_commit() {
+    local commit="$1" path="$2" expected status
+    expected="$(mktemp)"
+    if env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" show \
+        "${commit}:${path}" > "${expected}" 2>/dev/null &&
+        cmp -s "${expected}" "${KSU_DIR}/${path}"; then
+        status=0
+    else
+        status=1
+    fi
+    rm -f "${expected}"
+    return "${status}"
+}
+
+verify_kernelsu_file_at_commit() {
+    local label="$1" commit="$2" path="$3"
+    kernelsu_file_matches_commit "${commit}" "${path}" || die "${label}最终源码不匹配"
+}
+
+verify_kernelsu_post_release_fixes() {
+    [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ] || return
+    verify_kernelsu_file_at_commit "KernelSU Manager 扫描分配失败修复" \
+        "${KSU_ALLOCATION_FAILURE_COMMIT}" "kernel/manager/throne_tracker.c"
+    verify_kernelsu_file_at_commit "KernelSU SELinux 分配失败修复" \
+        "${KSU_ALLOCATION_FAILURE_COMMIT}" "kernel/selinux/sepolicy.c"
+    verify_kernelsu_file_at_commit "KernelSU APK 签名验证完整链" \
+        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "kernel/manager/apk_sign.c"
+}
+
 verify_allowed_paths() {
     local label="$1" repo_dir="$2" allowed_file="$3"
     local status_line path
@@ -79,54 +256,187 @@ verify_allowed_paths() {
     done < <(git -C "${repo_dir}" status --porcelain --untracked-files=all)
 }
 
-verify_kernelsu_integration() {
+patch_paths_excluding() {
+    local patch_file="$1" excluded path skip
+    shift
+    while IFS= read -r path; do
+        skip=0
+        for excluded in "$@"; do
+            if [ "${path}" = "${excluded}" ]; then
+                skip=1
+                break
+            fi
+        done
+        [ "${skip}" = "1" ] || printf '%s\n' "${path}"
+    done < <(awk '$1 == "diff" && $2 == "--git" { sub(/^a\//, "", $3); print $3 }' "${patch_file}")
+}
+
+verify_rejected_susfs_fdinfo_hunk() {
+    local official_patch="$1" repo_dir="$2" patch_file status
+    local patch_header='diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c'
+    shift 2
+
+    # The official hunk receives the inotify anon_inode file, not the watched
+    # path.  Its d_path() lookup cannot identify the watched mount and its
+    # three-argument callback also breaks a FANOTIFY-enabled configuration.
+    [ "$(grep -Fxc "${patch_header}" "${official_patch}")" = "1" ] || \
+        die "SUSFS 官方 fdinfo hunk 结构已变化，必须重新审计"
+    for patch_file in "$@"; do
+        ! grep -Fqx "${patch_header}" "${patch_file}" || \
+            die "经审计拒绝的 SUSFS fdinfo hunk 被项目补丁重新引入"
+    done
+    status="$(git -C "${repo_dir}" status --porcelain --untracked-files=all -- fs/notify/fdinfo.c)"
+    [ -z "${status}" ] || die "fs/notify/fdinfo.c 必须保持 AOSP 基线实现"
+}
+
+verify_no_trailing_whitespace() {
+    local label="$1" source_file="$2" bad_lines
+    bad_lines="$(LC_ALL=C grep -nE '[[:blank:]]+$' "${source_file}" || true)"
+    [ -z "${bad_lines}" ] || die "${label} 存在行尾空白:\n${bad_lines}"
+}
+
+verify_no_hidden_index_flags() {
+    local label="$1" repo_dir="$2" hidden
+    hidden="$(git -C "${repo_dir}" ls-files -v | LC_ALL=C awk '
+        substr($0, 1, 1) == "S" || substr($0, 1, 1) ~ /[a-z]/ { print }
+    ')"
+    [ -z "${hidden}" ] || \
+        die "${label} 存在 skip-worktree/assume-unchanged 标记，无法证明源码差异:\n${hidden}"
+}
+
+tracked_diff_sha256() {
+    local repo_dir="$1"
+    env GIT_NO_LAZY_FETCH=1 LC_ALL=C git -c color.ui=false -C "${repo_dir}" diff \
+        --binary --full-index --no-ext-diff --no-textconv --no-renames --no-color \
+        --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
+        HEAD -- . | sha256sum | awk '{ print $1 }'
+}
+
+verify_final_source_deltas() {
+    local ksu_sha256
+    verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
+    verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
+    ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
+    [[ "${COMMON_BASE_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+        die "GKI common 基础差异快照尚未固定"
+    [[ "${KSU_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+        die "KernelSU 精确差异快照尚未固定: ${ksu_sha256}"
+    bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+        verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
+    [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
+        die "KernelSU 出现非预期补丁差异: ${ksu_sha256}"
+    log_success "GKI common 基础差异、独立回移层与 KernelSU 精确差异指纹匹配"
+}
+
+verify_kernelsu_overlay() {
     local kconfig_line='source "drivers/kernelsu/Kconfig"'
     local makefile_line='obj-$(CONFIG_KSU) += kernelsu/'
-    local unexpected
-    [ "$(grep -Fxc "${kconfig_line}" "${COMMON_DIR}/drivers/Kconfig")" = "1" ] || die "KernelSU Kconfig 接入不是精确一处"
-    [ "$(tail -n 2 "${COMMON_DIR}/drivers/Kconfig" | head -n 1)" = "${kconfig_line}" ] || die "KernelSU Kconfig 接入位置异常"
-    [ "$(grep -Fxc "${makefile_line}" "${COMMON_DIR}/drivers/Makefile")" = "1" ] || die "KernelSU Kbuild 接入不是精确一处"
+
+    [ "$(grep -Fxc "${kconfig_line}" "${COMMON_DIR}/drivers/Kconfig")" = "1" ] || \
+        die "KernelSU Kconfig 接入不是精确一处"
+    [ "$(tail -n 2 "${COMMON_DIR}/drivers/Kconfig")" = "${kconfig_line}"$'\nendmenu' ] || \
+        die "KernelSU Kconfig 接入位置异常"
+    [ "$(grep -Fxc "${makefile_line}" "${COMMON_DIR}/drivers/Makefile")" = "1" ] || \
+        die "KernelSU Kbuild 接入不是精确一处"
     [ -L "${COMMON_DIR}/drivers/kernelsu" ] || die "KernelSU drivers 链接缺失"
-    [ "$(readlink -f "${COMMON_DIR}/drivers/kernelsu")" = "${KSU_DIR}/kernel" ] || die "KernelSU drivers 链接目标错误"
-    unexpected="$(git -C "${COMMON_DIR}" status --porcelain --untracked-files=all | grep -Ev '^( M drivers/(Kconfig|Makefile)|\?\? drivers/kernelsu)$' || true)"
-    [ -z "${unexpected}" ] || die "GKI common 存在未授权差异:\n${unexpected}"
-    git -C "${COMMON_DIR}" diff --check
-    log_success "KernelSU 外部补丁状态校验通过"
+    [ "$(readlink -f "${COMMON_DIR}/drivers/kernelsu")" = "${KSU_DIR}/kernel" ] || \
+        die "KernelSU drivers 链接目标错误"
 }
 
 verify_susfs_integration() {
     local allowed_common allowed_ksu
-    local source_file target_file
-    git -C "${KSU_DIR}" apply --reverse --check "${KSU_SUSFS_PATCH_FILE}" || die "KernelSU SUSFS 补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check --exclude=security/selinux/hooks.c "${COMMON_SUSFS_PATCH_FILE}" || \
-        die "AOSP SUSFS 主补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_HOOKS_ADAPTATION}" || \
-        die "AOSP r57 SELinux 适配补丁状态异常"
+    local actual_sha256 source_file target_file
+    verify_rejected_susfs_fdinfo_hunk \
+        "${COMMON_SUSFS_PATCH_FILE}" "${COMMON_DIR}" \
+        "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_COMMON_FIX_PATCH_FILE}"
+    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
+        refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
+        "${SUSFS_KSU_PATCH_COMMIT}" ] || \
+        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
+    git -C "${KSU_DIR}" apply --reverse --check \
+        --exclude=kernel/Kconfig \
+        --exclude=kernel/policy/app_profile.c \
+        --exclude=kernel/runtime/boot_event.c \
+        --exclude=kernel/runtime/ksud_integration.c \
+        --exclude=kernel/selinux/selinux.c \
+        --exclude=kernel/sulog/event.c \
+        --exclude=kernel/supercall/dispatch.c \
+        "${KSU_SUSFS_PATCH_FILE}" || die "KernelSU SUSFS 官方补丁状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check \
+        --exclude=fs/exec.c \
+        --exclude=fs/namespace.c \
+        --exclude=fs/proc/base.c \
+        --exclude=fs/proc/task_mmu.c \
+        --exclude=security/selinux/hooks.c \
+        --exclude=fs/namei.c \
+        --exclude=fs/notify/fdinfo.c \
+        --exclude=fs/proc/fd.c \
+        --exclude=fs/stat.c \
+        --exclude=mm/memory.c \
+        "${COMMON_SUSFS_PATCH_FILE}" || \
+        die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_CONTEXT_ADAPTATION}" || \
+        die "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
+        die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
+    git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
+        die "基于 SUSFS 官方补丁的 KernelSU Luna 修正版状态异常"
 
     for source_file in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
         target_file="${COMMON_DIR}/${source_file}"
+        if [ "${source_file}" = "fs/susfs.c" ]; then
+            actual_sha256="$(sha256sum "${target_file}" | awk '{ print $1 }')"
+            [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
+                die "SUSFS Luna 修正源码摘要不匹配: ${source_file}"
+            verify_no_trailing_whitespace "SUSFS Luna 修正源码" "${target_file}"
+            grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${target_file}" || \
+                die "SUSFS 日志必须默认关闭"
+            [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "2" ] || \
+                die "SUSFS 日志静态分支提示异常"
+            continue
+        fi
         cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${target_file}" || \
             die "SUSFS 源文件不是固定上游内容: ${source_file}"
     done
 
     allowed_ksu="$(mktemp)"
     allowed_common="$(mktemp)"
-    awk '$1 == "diff" && $2 == "--git" { sub(/^a\//, "", $3); print $3 }' "${KSU_SUSFS_PATCH_FILE}" | sort -u > "${allowed_ksu}"
+    {
+        patch_paths_excluding "${KSU_SUSFS_PATCH_FILE}" \
+            kernel/Kconfig \
+            kernel/policy/app_profile.c \
+            kernel/runtime/boot_event.c \
+            kernel/runtime/ksud_integration.c \
+            kernel/selinux/selinux.c \
+            kernel/sulog/event.c \
+            kernel/supercall/dispatch.c
+        patch_paths_excluding "${SUSFS_KSU_FIX_PATCH_FILE}"
+        if [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ]; then
+            printf '%s\n' \
+                kernel/manager/apk_sign.c \
+                kernel/manager/throne_tracker.c \
+                kernel/selinux/sepolicy.c
+        fi
+        if [ "${ENABLE_BBG}" = "1" ]; then
+            patch_paths_excluding "${BBG_KSU_CREDENTIAL_PATCH}"
+        fi
+    } | sort -u > "${allowed_ksu}"
     {
         printf '%s\n' drivers/Kconfig drivers/Makefile drivers/kernelsu
-        awk '$1 == "diff" && $2 == "--git" { sub(/^a\//, "", $3); print $3 }' "${COMMON_SUSFS_PATCH_FILE}"
+        patch_paths_excluding "${COMMON_SUSFS_PATCH_FILE}" \
+            fs/exec.c \
+            fs/namei.c \
+            fs/namespace.c \
+            fs/notify/fdinfo.c \
+            fs/proc/base.c \
+            fs/proc/task_mmu.c \
+            security/selinux/hooks.c
+        patch_paths_excluding "${SUSFS_CONTEXT_ADAPTATION}"
+        patch_paths_excluding "${SUSFS_COMMON_FIX_PATCH_FILE}"
         printf '%s\n' fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h
         if [ "${ENABLE_BBG}" = "1" ]; then
             printf '%s\n' security/Kconfig security/Makefile security/baseband-guard include/linux/lsm_count.h
-        fi
-        if [ "${ENABLE_STAGE5_RTMUTEX_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/locking/rtmutex.c
-        fi
-        if [ "${ENABLE_F2FS_MERGE_PAGE_BIO_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/f2fs/data.c
-        fi
-        if [ "${ENABLE_F2FS_OPEN_FAST_PATH:-0}" = "1" ]; then
-            printf '%s\n' fs/f2fs/file.c
+            patch_paths_excluding "${BBG_COMMON_CREDENTIAL_PATCH}"
         fi
         if [ "${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' mm/memcontrol.c
@@ -134,32 +444,44 @@ verify_susfs_integration() {
         if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' net/ipv4/tcp.c net/ipv4/tcp_input.c
         fi
-        if [ "${ENABLE_GUNYAH_CLEAN_RESOURCES_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' drivers/virt/gunyah/vm_mgr.c
-        fi
         if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}" = "1" ]; then
             printf '%s\n' net/netfilter/xt_IDLETIMER.c
         fi
-        if [ "${ENABLE_EVENTPOLL_RCU_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/eventpoll.c
+        if [ "${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}" = "1" ]; then
+            printf '%s\n' kernel/futex/pi.c
         fi
-        if [ "${ENABLE_CGROUP_KERNFS_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/cgroup/cgroup.c
-        fi
-        if [ "${ENABLE_F2FS_SYNC_INODE_META_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/f2fs/inode.c
-        fi
-        if [ "${ENABLE_TIMER_SHUTDOWN_SYNC_RACE_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/time/timer.c
-        fi
-        if [ "${ENABLE_FUTEX_REQUEUE_PI_UAF_FIX:-0}" = "1" ]; then
+        if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}" = "1" ]; then
             printf '%s\n' kernel/futex/requeue.c
         fi
-        if [ "${ENABLE_PAGE_POOL_DESTROY_RACE_FIX:-0}" = "1" ]; then
-            printf '%s\n' net/core/page_pool.c
+        if [ "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}" = "1" ]; then
+            printf '%s\n' fs/f2fs/acl.c
         fi
-        if [ "${ENABLE_CONNTRACK_UNCONFIRMED_RACE_FIX:-0}" = "1" ]; then
-            printf '%s\n' include/net/netfilter/nf_conntrack.h net/netfilter/nf_conntrack_core.c
+        if [ "${ENABLE_F2FS_LISTXATTR_BOUNDS_FIX:-0}" = "1" ]; then
+            printf '%s\n' fs/f2fs/xattr.c
+        fi
+        if [ "${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}" = "1" ]; then
+            printf '%s\n' block/blk-cgroup.c
+        fi
+        if [ "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}" = "1" ]; then
+            printf '%s\n' drivers/android/binder.c
+        fi
+        if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}" = "1" ]; then
+            printf '%s\n' fs/f2fs/data.c fs/f2fs/f2fs.h fs/f2fs/segment.c
+        fi
+        if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}" = "1" ]; then
+            printf '%s\n' drivers/ufs/core/ufshcd.c
+        fi
+        if [ "${ENABLE_TIMER_BASE_FAST_PATH:-0}" = "1" ]; then
+            printf '%s\n' kernel/time/timer.c
+        fi
+        if [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH:-0}" = "1" ]; then
+            printf '%s\n' fs/f2fs/data.c
+        fi
+        if [ "${ENABLE_EAS_CPUMASK_FAST_PATH:-0}" = "1" ]; then
+            printf '%s\n' kernel/sched/fair.c
+        fi
+        if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}" = "1" ]; then
+            printf '%s\n' block/blk-wbt.c
         fi
         if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}" = "1" ]; then
             printf '%s\n' fs/erofs/dir.c
@@ -170,27 +492,25 @@ verify_susfs_integration() {
         if [ "${ENABLE_IPV6_MLD_UAF_FIX:-0}" = "1" ]; then
             printf '%s\n' net/ipv6/mcast.c
         fi
-        if [ "${ENABLE_RTMUTEX_WAITER_ENQUEUE_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/locking/rtmutex.c kernel/locking/rtmutex_api.c
+        if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
+            printf '%s\n' include/net/addrconf.h net/ipv6/mcast.c
         fi
-        if [ "${ENABLE_UNICODE_IGNORABLE_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/ext4/namei.c fs/f2fs/super.c fs/unicode/mkutf8data.c fs/unicode/utf8-norm.c \
-                fs/unicode/utf8-selftest.c fs/unicode/utf8n.h include/linux/unicode.h
+        if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}" = "1" ]; then
+            printf '%s\n' virt/kvm/kvm_main.c
         fi
-        if [ "${ENABLE_ADIOS:-0}" = "1" ]; then
-            printf '%s\n' block/Kconfig.iosched block/Makefile block/adios.c block/elevator.c
+        if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+            bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" list-paths
         fi
-        if [ "${ENABLE_TCP_BRUTAL:-0}" = "1" ]; then
-            printf '%s\n' net/ipv4/Kconfig net/ipv4/Makefile net/ipv4/tcp_brutal.c
-        fi
+        bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" list-paths
     } | sort -u > "${allowed_common}"
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
     rm -f "${allowed_ksu}" "${allowed_common}"
-    # The pinned official patches contain a handful of upstream whitespace
-    # defects. Reverse-apply checks above prove the tracked diff byte-for-byte;
-    # do not rewrite upstream code merely to silence git diff --check.
-    log_success "SUSFS v2.2.0 官方补丁与 r57 最小适配状态校验通过"
+    git -C "${COMMON_DIR}" diff --check
+    git -C "${KSU_DIR}" diff --check
+    verify_kernelsu_overlay
+    verify_kernelsu_post_release_fixes
+    log_success "SUSFS v2.2.0 官方补丁、经审计拒绝项与 Luna 修正版状态校验通过"
 }
 
 verify_bbg_integration() {
@@ -201,41 +521,90 @@ verify_bbg_integration() {
     [ -L "${COMMON_DIR}/security/baseband-guard" ] || die "Baseband Guard security 链接缺失"
     [ "$(readlink -f "${COMMON_DIR}/security/baseband-guard")" = "${BBG_DIR}" ] || die "Baseband Guard security 链接目标错误"
     git -C "${COMMON_DIR}" apply --reverse --check "${BBG_LSM_COUNT_PATCH}" || die "Baseband Guard LSM 计数适配状态异常"
+    git -C "${COMMON_DIR}" apply --reverse --check "${BBG_COMMON_CREDENTIAL_PATCH}" || \
+        die "Baseband Guard 内部凭据接口状态异常"
+    git -C "${KSU_DIR}" apply --reverse --check "${BBG_KSU_CREDENTIAL_PATCH}" || \
+        die "KernelSU Baseband Guard 凭据标记状态异常"
     [ "$(grep -Ec '^#define BASEBAND_GUARD_ENABLED( |$)' "${COMMON_DIR}/include/linux/lsm_count.h")" = "2" ] || die "Baseband Guard LSM 计数宏异常"
     [ "$(grep -Ec '^[[:space:]]*BASEBAND_GUARD_ENABLED\)?[[:space:]]*\\?$' "${COMMON_DIR}/include/linux/lsm_count.h")" = "1" ] || die "Baseband Guard LSM 计数入口异常"
-    log_success "Baseband Guard overlay 与 AOSP r57 LSM 计数适配检查通过"
+    verify_bbg_source_fix
+    log_success "Baseband Guard overlay 与 AOSP 6.12.69 LSM 计数适配检查通过"
 }
 
-verify_adios_integration() {
-    git -C "${COMMON_DIR}" apply --reverse --check --exclude=block/Makefile --exclude=block/Kconfig.iosched "${ADIOS_STABLE_PATCH_FILE}" || \
-        die "ADIOS 3.2.0 官方 6.12 补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check "${ADIOS_KBUILD_ADAPTATION}" || \
-        die "ADIOS AOSP 6.12.23 Kbuild 适配状态异常"
-    git -C "${COMMON_DIR}" apply --check "${ADIOS_FORCE_DEFAULT_PATCH_FILE}" || \
-        die "ADIOS 强制默认补丁不得存在"
-    grep -Fq '#define ADIOS_VERSION "3.2.0"' "${COMMON_DIR}/block/adios.c" || \
-        die "ADIOS 源码版本不是 3.2.0"
-    [ "$(grep -Fxc 'config MQ_IOSCHED_ADIOS' "${COMMON_DIR}/block/Kconfig.iosched")" = "1" ] || \
-        die "ADIOS Kconfig 主选项不是精确一处"
-    [ "$(grep -Fxc 'config MQ_IOSCHED_DEFAULT_ADIOS' "${COMMON_DIR}/block/Kconfig.iosched")" = "1" ] || \
-        die "ADIOS Kconfig 默认选项不是精确一处"
-    grep -A3 -F 'config MQ_IOSCHED_DEFAULT_ADIOS' "${COMMON_DIR}/block/Kconfig.iosched" | \
-        grep -Fqx $'\tdefault n' || die "ADIOS 默认选项没有保持关闭"
-    [ "$(grep -Ec '^obj-\$\(CONFIG_MQ_IOSCHED_ADIOS\)[[:space:]]*\+= adios\.o$' "${COMMON_DIR}/block/Makefile")" = "1" ] || \
-        die "ADIOS Kbuild 接入不是精确一处"
-    ! grep -Eq '^all:|^clean:|/lib/modules/' "${COMMON_DIR}/block/Makefile" || \
-        die "ADIOS 外置模块 Makefile 规则不得进入完整内核树"
-    log_success "ADIOS 3.2.0 官方补丁与 AOSP 6.12.23 适配检查通过"
-}
+verify_bbg_source_fix() {
+    local allowed actual_sha256 marker_count token
 
-verify_tcp_brutal_integration() {
-    cmp -s "${TCP_BRUTAL_DIR}/brutal.c" "${COMMON_DIR}/net/ipv4/tcp_brutal.c" || \
-        die "TCP Brutal 源文件不是固定官方内容"
-    git -C "${COMMON_DIR}" apply --reverse --check "${TCP_BRUTAL_INTEGRATION_PATCH}" || \
-        die "TCP Brutal AOSP 6.12.23 接入补丁状态异常"
-    [ "$(grep -Fxc 'obj-$(CONFIG_TCP_CONG_BRUTAL) += tcp_brutal.o' "${COMMON_DIR}/net/ipv4/Makefile")" = "1" ] || \
-        die "TCP Brutal Kbuild 接入不是精确一处"
-    log_success "TCP Brutal ${TCP_BRUTAL_COMMIT:0:12} 官方源码接入检查通过"
+    verify_project_patch "Baseband Guard 保护边界修复" \
+        "${BBG_LUNA_FIX_PATCH}" "${BBG_LUNA_FIX_PATCH_SHA256}" \
+        "${BBG_LUNA_FIX_PATCH_ID}"
+    git -C "${BBG_DIR}" apply --reverse --check "${BBG_LUNA_FIX_PATCH}" || \
+        die "Baseband Guard 保护边界修复状态异常"
+    allowed="$(mktemp)"
+    printf '%s\n' \
+        baseband_guard.c \
+        blkdev_helper.c \
+        blkdev_helper.h \
+        tracing/tracing.c > "${allowed}"
+    verify_allowed_paths "Baseband Guard" "${BBG_DIR}" "${allowed}"
+    rm -f "${allowed}"
+    actual_sha256="$(tracked_diff_sha256 "${BBG_DIR}")"
+    [ "${actual_sha256}" = "${BBG_TRACKED_DIFF_SHA256}" ] || \
+        die "Baseband Guard 出现非预期源码差异: ${actual_sha256}"
+    ! grep -Eq 'allowed_devs|allow_add|allow_has|security_secctx_to_secid|get_cmdline|argv=|path=%s' \
+        "${BBG_DIR}/baseband_guard.c" \
+        "${BBG_DIR}/blkdev_helper.c" \
+        "${BBG_DIR}/tracing/tracing.c" || \
+        die "Baseband Guard 仍含失效缓存、SID 推断或敏感拒绝日志"
+    grep -Fq 'IS_ERR_OR_NULL(bdev)' "${BBG_DIR}/blkdev_helper.c" || \
+        die "Baseband Guard block_device 获取未同时处理 NULL 与 ERR_PTR"
+    ! grep -Fq 'slot_suffix_from_cmdline' "${BBG_DIR}/blkdev_helper.c" || \
+        die "Baseband Guard 仍依赖不必要的活动槽解析"
+    grep -Fq 'partition_name_matches(name, name_len,' "${BBG_DIR}/blkdev_helper.c" || \
+        die "Baseband Guard A/B 分区名匹配缺失"
+    for hook in file_ioctl_compat uring_cmd mmap_file file_mprotect; do
+        grep -Fq "LSM_HOOK_INIT(${hook}," "${BBG_DIR}/baseband_guard.c" || \
+            die "Baseband Guard 缺少 ${hook} 写入口保护"
+    done
+    grep -Fq 'static inline bool is_destructive_ioctl(unsigned int cmd)' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard 缺少明确破坏性 ioctl 判定"
+    grep -Fq 'if (!inode || !is_destructive_ioctl(cmd))' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 未默认放行非破坏性 block ioctl"
+    grep -Fq 'return deny("destructive ioctl on protected partition", inode, cmd);' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 缺少受保护分区破坏性 ioctl 拒绝路径"
+    grep -Fq 'return bb_file_ioctl(file, cmd, arg);' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard compat ioctl 未复用同一策略"
+    ! grep -Eq 'is_read_only_block_ioctl|is_partition_scoped_block_ioctl|normalize_compat_block_ioctl|case (LOOP_SET_FD|BLKFLSBUF|BLKROSET):' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 仍含默认拒绝或非破坏性 ioctl 特判"
+    for token in 'case BLKDISCARD:' 'case BLKSECDISCARD:' 'case BLKZEROOUT:' \
+        'case BLKRRPART:' 'cmd == SG_IO' 'cmd == SCSI_IOCTL_SEND_COMMAND' \
+        'S_ISCHR(inode->i_mode)'; do
+        grep -Fq "${token}" "${BBG_DIR}/baseband_guard.c" || \
+            die "Baseband Guard ioctl 或原始存储入口保护缺失: ${token}"
+    done
+    grep -Fq 'if (!inode || ioucmd->cmd_op != BLOCK_URING_CMD_DISCARD)' \
+        "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 未将 io_uring 拒绝边界收敛到 discard"
+    marker_count="$(grep -RhcF 'bbg_mark_untrusted_cred(cred);' \
+        "${KSU_DIR}/kernel/policy/app_profile.c" \
+        "${KSU_DIR}/kernel/selinux/selinux.c" | awk '{ total += $1 } END { print total + 0 }')"
+    [ "${marker_count}" = "3" ] || die "KernelSU root 凭据标记数量异常: ${marker_count}"
+    grep -Fq 'void bbg_mark_untrusted_cred(struct cred *cred)' \
+        "${COMMON_DIR}/include/linux/baseband_guard.h" || \
+        die "Baseband Guard 内部凭据接口缺失"
+    grep -Fq '#include <linux/baseband_guard.h>' \
+        "${BBG_DIR}/tracing/tracing.c" || \
+        die "Baseband Guard 未通过公共内部头文件声明凭据接口"
+    [ "$(grep -Fxc 'void bbg_mark_untrusted_cred(struct cred *cred);' \
+        "${BBG_DIR}/tracing/tracing.c")" = "0" ] || \
+        die "Baseband Guard 仍含重复的本地凭据接口声明"
+    ! grep -Eq 'EXPORT_SYMBOL.*bbg_mark_untrusted_cred' \
+        "${COMMON_DIR}/include/linux/baseband_guard.h" \
+        "${BBG_DIR}/tracing/tracing.c" || \
+        die "Baseband Guard 内部凭据接口不得导出"
+    log_success "Baseband Guard 无缓存设备判定、最小 ioctl 拒绝、写入口与 KernelSU 凭据标记状态正确"
 }
 
 apply_bbg_integration() {
@@ -264,58 +633,63 @@ apply_bbg_integration() {
     if [ ! -L "${COMMON_DIR}/security/baseband-guard" ]; then
         ln -s "$(realpath --relative-to="${COMMON_DIR}/security" "${BBG_DIR}")" "${COMMON_DIR}/security/baseband-guard"
     fi
-    apply_patch_once "AOSP r57 Baseband Guard LSM 计数适配" \
+    apply_patch_once "AOSP 6.12.69 Baseband Guard LSM 计数适配" \
         "${COMMON_DIR}" "${BBG_LSM_COUNT_PATCH}"
-}
-
-apply_adios_integration() {
-    if git -C "${COMMON_DIR}" apply --check --exclude=block/Makefile "${ADIOS_STABLE_PATCH_FILE}" >/dev/null 2>&1; then
-        git -C "${COMMON_DIR}" apply --exclude=block/Makefile "${ADIOS_STABLE_PATCH_FILE}"
-        log_success "已应用 ADIOS 3.2.0 官方 Linux 6.12 补丁"
-    elif git -C "${COMMON_DIR}" apply --reverse --check --exclude=block/Makefile --exclude=block/Kconfig.iosched "${ADIOS_STABLE_PATCH_FILE}" >/dev/null 2>&1; then
-        log_info "ADIOS 3.2.0 官方 Linux 6.12 补丁 已存在"
-    else
-        die "ADIOS 3.2.0 官方 Linux 6.12 补丁无法干净应用或识别为已应用状态"
-    fi
-    apply_patch_once "ADIOS AOSP 6.12.23 Kbuild 最小适配" \
-        "${COMMON_DIR}" "${ADIOS_KBUILD_ADAPTATION}"
-    if git -C "${COMMON_DIR}" apply --reverse --check "${ADIOS_FORCE_DEFAULT_PATCH_FILE}" >/dev/null 2>&1; then
-        git -C "${COMMON_DIR}" apply --reverse "${ADIOS_FORCE_DEFAULT_PATCH_FILE}"
-        log_success "已撤销 ADIOS 强制默认补丁，恢复小米多队列 none 默认策略"
-    elif git -C "${COMMON_DIR}" apply --check "${ADIOS_FORCE_DEFAULT_PATCH_FILE}" >/dev/null 2>&1; then
-        log_info "ADIOS 强制默认补丁未应用"
-    else
-        die "ADIOS 强制默认补丁无法精确识别为已应用或未应用状态"
-    fi
-}
-
-apply_tcp_brutal_integration() {
-    if [ -e "${COMMON_DIR}/net/ipv4/tcp_brutal.c" ]; then
-        cmp -s "${TCP_BRUTAL_DIR}/brutal.c" "${COMMON_DIR}/net/ipv4/tcp_brutal.c" || \
-            die "目标已存在不同的 TCP Brutal 源文件"
-    else
-        cp "${TCP_BRUTAL_DIR}/brutal.c" "${COMMON_DIR}/net/ipv4/tcp_brutal.c"
-    fi
-    apply_patch_once "TCP Brutal AOSP 6.12.23 最小接入" \
-        "${COMMON_DIR}" "${TCP_BRUTAL_INTEGRATION_PATCH}"
+    apply_patch_once "AOSP 6.12.69 Baseband Guard 内部凭据接口" \
+        "${COMMON_DIR}" "${BBG_COMMON_CREDENTIAL_PATCH}"
 }
 
 apply_susfs_integration() {
-    local source_file
-    apply_patch_once "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁" \
-        "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}"
-    apply_patch_once "SUSFS Android 16/6.12 主补丁" \
-        "${COMMON_DIR}" "${COMMON_SUSFS_PATCH_FILE}" --exclude=security/selinux/hooks.c
-    apply_patch_once "AOSP r57 SELinux hooks 最小上下文适配" \
-        "${COMMON_DIR}" "${SUSFS_HOOKS_ADAPTATION}"
+    local actual_sha256 source_file
+
+    if git -C "${KSU_DIR}" apply --reverse --check \
+        "${SUSFS_KSU_FIX_PATCH_FILE}" >/dev/null 2>&1; then
+        log_info "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁与 Luna fixup 已存在"
+    else
+        apply_patch_once "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁" \
+            "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}"
+        apply_patch_once "基于 SUSFS v2.2.0 官方补丁的 KernelSU Luna fixup" \
+            "${KSU_DIR}" "${SUSFS_KSU_FIX_PATCH_FILE}"
+    fi
+
+    if git -C "${COMMON_DIR}" apply --reverse --check \
+        "${SUSFS_CONTEXT_ADAPTATION}" >/dev/null 2>&1 && \
+       git -C "${COMMON_DIR}" apply --reverse --check \
+        "${SUSFS_COMMON_FIX_PATCH_FILE}" >/dev/null 2>&1; then
+        log_info "SUSFS common 官方补丁与 Luna 最小修正已存在"
+        return
+    fi
+
+    # fdinfo hunk is deliberately excluded; verify_susfs_integration() proves
+    # both its official presence and the untouched AOSP target afterwards.
+    apply_patch_once "SUSFS Android 16/6.12 官方主补丁（排除替代与拒绝项）" \
+        "${COMMON_DIR}" "${COMMON_SUSFS_PATCH_FILE}" \
+        --exclude=fs/exec.c \
+        --exclude=fs/namei.c \
+        --exclude=fs/notify/fdinfo.c \
+        --exclude=fs/proc/base.c \
+        --exclude=fs/proc/task_mmu.c \
+        --exclude=security/selinux/hooks.c
+    apply_patch_once "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
+        "${COMMON_DIR}" "${SUSFS_CONTEXT_ADAPTATION}"
+
     for source_file in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-        if [ -e "${COMMON_DIR}/${source_file}" ]; then
-            cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}" || \
-                die "目标已存在不同的 SUSFS 源文件: ${source_file}"
-        else
+        if [ ! -e "${COMMON_DIR}/${source_file}" ]; then
             cp "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}"
+            continue
         fi
+        if cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}"; then
+            continue
+        fi
+        [ "${source_file}" = "fs/susfs.c" ] || \
+            die "目标已存在不同的 SUSFS 源文件: ${source_file}"
+        actual_sha256="$(sha256sum "${COMMON_DIR}/${source_file}" | awk '{ print $1 }')"
+        [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
+            die "目标已存在未授权的 SUSFS 修正源码: ${source_file}"
     done
+
+    apply_patch_once "基于 SUSFS v2.2.0 官方补丁的 common Luna 修正版" \
+        "${COMMON_DIR}" "${SUSFS_COMMON_FIX_PATCH_FILE}"
 }
 
 apply_kernelsu_integration() {
@@ -338,104 +712,129 @@ apply_kernelsu_integration() {
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+[ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
+[ "${ENABLE_KERNELSU:-0}" = "1" ] || \
+    die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
+[ "${ENABLE_SUSFS:-0}" = "1" ] || \
+    die "Luna 固定构建只支持 ENABLE_SUSFS=1；拒绝未审计的第二套产品矩阵"
 WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
 ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
 ORB_LINUX_WORKSPACE="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME:-workspace}/workspace"
 run_in_orb_if_needed "$@"
 
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
-if [ "${ENABLE_KERNELSU}" != "1" ]; then
-    log_info "当前阶段未启用外部项目补丁"
-    log_success "外部 patch 阶段完成 (no-op)"
-    exit 0
-fi
 
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-a82fc641d6d2c687802606190c0a8c33a4242201}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.23_r57}")"
+COMMON_COMMIT="${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-v3.2.5}"
 KSU_COMMIT="${KSU_COMMIT:-b0bc817b4e966aa6aa830834eaf6ef765d821d40}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
+ENABLE_KSU_POST_RELEASE_FIXES="${ENABLE_KSU_POST_RELEASE_FIXES:-0}"
+KSU_POST_RELEASE_AUDIT_COMMIT="${KSU_POST_RELEASE_AUDIT_COMMIT:-62e88ca93df8affff54064e74948a37945c1865a}"
+KSU_ALLOCATION_FAILURE_COMMIT="${KSU_ALLOCATION_FAILURE_COMMIT:-e9e5b616a433b32c286dbf3f6708afd0c5ef7485}"
+KSU_ALLOCATION_FAILURE_DATE="${KSU_ALLOCATION_FAILURE_DATE:-2026-07-19}"
+KSU_ALLOCATION_FAILURE_PATCH_ID="${KSU_ALLOCATION_FAILURE_PATCH_ID:-2abefc35882130184b6399f60481c66d4261bb2b}"
+KSU_APK_SHORT_READ_COMMIT="${KSU_APK_SHORT_READ_COMMIT:-be53d75fd360a9f75231c58970bee1f20a870a4e}"
+KSU_APK_SHORT_READ_DATE="${KSU_APK_SHORT_READ_DATE:-2026-07-27}"
+KSU_APK_SHORT_READ_PATCH_ID="${KSU_APK_SHORT_READ_PATCH_ID:-1c906b1d21e4a79efaa307aa94fd73c445b09e07}"
+KSU_APK_AOSP_PARSER_COMMIT="${KSU_APK_AOSP_PARSER_COMMIT:-e6cc0ef7b0cf7a96af553dedd3282eb3f8ad8d03}"
+KSU_APK_AOSP_PARSER_DATE="${KSU_APK_AOSP_PARSER_DATE:-2026-08-07}"
+KSU_APK_AOSP_PARSER_PATCH_ID="${KSU_APK_AOSP_PARSER_PATCH_ID:-46da4ee6a88ea901ecfd58ec3a255f03b302312a}"
+KSU_APK_EOCD_VALIDATION_COMMIT="${KSU_APK_EOCD_VALIDATION_COMMIT:-aab67974f1210cad94880ce1fdc14cf63f6e30e0}"
+KSU_APK_EOCD_VALIDATION_DATE="${KSU_APK_EOCD_VALIDATION_DATE:-2026-08-11}"
+KSU_APK_EOCD_VALIDATION_PATCH_ID="${KSU_APK_EOCD_VALIDATION_PATCH_ID:-74e074cec2eb4e43467619d3dbc952e31769b39c}"
 [ "${KSU_INTEGRATION_MODE}" = "builtin" ] || die "本阶段只允许经批准的 KernelSU built-in 模式"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-d9a486dc7197800149c31fe35a77997ea0ddaa83}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-0e43d12a6cb5e6b2814c8214466784285d64ebec}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
 SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-ef69c8322232340f43c78c7fc491b32cb9f7da86}"
-SUSFS_HOOKS_ADAPTATION="${HOST_WORKSPACE_DIR}/patches/susfs/aosp-r57-selinux-hooks.patch"
+SUSFS_CONTEXT_ADAPTATION="${HOST_WORKSPACE_DIR}/${SUSFS_CONTEXT_PATCH}"
+SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
+SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
-BBG_COMMIT="${BBG_COMMIT:-1c664957da7539de860503940ee73c7447f1dfaf}"
+BBG_COMMIT="${BBG_COMMIT:-a54e0dc6cf0aff4dd87fec49644a02d2eb612905}"
 BBG_DIR="$(resolve_workspace_path "${BBG_SOURCE_DIR:-sources/baseband_guard}")"
-BBG_LSM_COUNT_PATCH="${HOST_WORKSPACE_DIR}/patches/bbg/aosp-r57-lsm-count.patch"
-ENABLE_ADIOS="${ENABLE_ADIOS:-0}"
-ADIOS_REPO="${ADIOS_REPO:-https://github.com/firelzrd/adios.git}"
-ADIOS_REF="${ADIOS_REF:-main}"
-ADIOS_COMMIT="${ADIOS_COMMIT:-08bf078aac99075a0bef73c2b2497574a82e4c41}"
-ADIOS_DIR="$(resolve_workspace_path "${ADIOS_SOURCE_DIR:-sources/adios}")"
-ADIOS_STABLE_PATCH_FILE="${ADIOS_DIR}/${ADIOS_STABLE_PATCH:-patches/stable/0001-linux6.12.44-ADIOS-3.2.0.patch}"
-ADIOS_FORCE_DEFAULT_PATCH_FILE="${ADIOS_DIR}/${ADIOS_FORCE_DEFAULT_PATCH:-patches/0002-Make-ADIOS-the-Default-I-O-scheduler.patch}"
-ADIOS_KBUILD_ADAPTATION="${HOST_WORKSPACE_DIR}/patches/adios/aosp-6.12.23-kbuild.patch"
-ENABLE_TCP_BRUTAL="${ENABLE_TCP_BRUTAL:-0}"
-TCP_BRUTAL_REPO="${TCP_BRUTAL_REPO:-https://github.com/apernet/tcp-brutal.git}"
-TCP_BRUTAL_REF="${TCP_BRUTAL_REF:-master}"
-TCP_BRUTAL_COMMIT="${TCP_BRUTAL_COMMIT:-f11e52d88c7ad2285896de018c2d96d4687f0ab6}"
-TCP_BRUTAL_DIR="$(resolve_workspace_path "${TCP_BRUTAL_SOURCE_DIR:-sources/tcp_brutal}")"
-TCP_BRUTAL_SOURCE_SHA256="${TCP_BRUTAL_SOURCE_SHA256:-171d775cc494f9378c89772ef68ad8001e093f701a35d1566ec9c7e459cb81c0}"
-TCP_BRUTAL_INTEGRATION_PATCH="${HOST_WORKSPACE_DIR}/patches/tcp_brutal/aosp-6.12.23-integration.patch"
+BBG_LSM_COUNT_PATCH="${HOST_WORKSPACE_DIR}/${BBG_LSM_COUNT_PATCH:-patches/bbg/aosp-6.12.69-lsm-count.patch}"
+BBG_LSM_COUNT_PATCH_SHA256="${BBG_LSM_COUNT_PATCH_SHA256:-f3792ead7a5dfd1b813e3260a2840e16a2eba548ca6a7c7e72f9bf144c9b30a1}"
+BBG_LSM_COUNT_PATCH_ID="${BBG_LSM_COUNT_PATCH_ID:-d52557f81ce48d80782f0419c437de33f16c07c1}"
+BBG_LUNA_FIX_PATCH="${HOST_WORKSPACE_DIR}/${BBG_LUNA_FIX_PATCH:-patches/bbg/baseband-guard-a54e0dc-luna-fixes.patch}"
+BBG_LUNA_FIX_PATCH_SHA256="${BBG_LUNA_FIX_PATCH_SHA256:-344ed44657982ea780b946b11165255dc52be18dc1de2ac15f86d520d79a6bc4}"
+BBG_LUNA_FIX_PATCH_ID="${BBG_LUNA_FIX_PATCH_ID:-3b5c92af344640f6ea4d508709f3f491005acf90}"
+BBG_COMMON_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_COMMON_CREDENTIAL_PATCH:-patches/bbg/aosp-6.12.69-credential-api.patch}"
+BBG_COMMON_CREDENTIAL_PATCH_SHA256="${BBG_COMMON_CREDENTIAL_PATCH_SHA256:-2898be21ea20f4b80cacb12459f0e3cab25faff25921a9b81bae0d9226ab42be}"
+BBG_COMMON_CREDENTIAL_PATCH_ID="${BBG_COMMON_CREDENTIAL_PATCH_ID:-a770f38f4f9c7a1a14e7cf46b81bfa1f6a7db897}"
+BBG_KSU_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_KSU_CREDENTIAL_PATCH:-patches/bbg/kernelsu-v3.2.5-credential-marking.patch}"
+BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-5a45f53584575275f905f73c33158554a052c0a3ed6bec37ad004cb03601d1f9}"
+BBG_KSU_CREDENTIAL_PATCH_ID="${BBG_KSU_CREDENTIAL_PATCH_ID:-4e65a84b50566c8e6ebd3c73e8e474fb76801b94}"
+BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
+COMMON_BASE_TRACKED_DIFF_SHA256="${COMMON_BASE_TRACKED_DIFF_SHA256:-}"
+KSU_TRACKED_DIFF_SHA256="${KSU_TRACKED_DIFF_SHA256:-}"
 
-verify_repo_identity "Android 16 GKI common" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}"
+verify_repo_identity "Android 16 GKI common r63" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}"
 verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}"
-[ "${ENABLE_SUSFS}" = "1" ] || [ -z "$(git -C "${KSU_DIR}" status --porcelain)" ] || die "KernelSU 工作树不干净"
+[ "$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" rev-parse \
+    refs/backport-audit/kernelsu-post-release 2>/dev/null || true)" = \
+    "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || \
+    die "KernelSU 固定修复快照引用缺失，请先运行 ./init.sh"
+verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
+[ -z "$(git -C "${SUSFS_DIR}" status --porcelain)" ] || die "SUSFS 上游工作树不干净"
+[ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
+    refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
+    "${SUSFS_KSU_PATCH_COMMIT}" ] || \
+    die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
+verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
+    "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_CONTEXT_PATCH_SHA256}" \
+    "${SUSFS_CONTEXT_PATCH_ID}"
+verify_project_patch "基于 SUSFS v2.2.0 官方补丁的 common Luna 修正版" \
+    "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
+    "${SUSFS_COMMON_FIX_PATCH_ID}"
+verify_project_patch "基于 SUSFS v2.2.0 官方补丁的 KernelSU Luna 修正版" \
+    "${SUSFS_KSU_FIX_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_SHA256}" \
+    "${SUSFS_KSU_FIX_PATCH_ID}"
 
 log_step "应用 KernelSU ${KSU_REF} built-in 外部补丁"
 apply_kernelsu_integration
-if [ "${ENABLE_SUSFS}" = "1" ]; then
-    verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
-    [ -z "$(git -C "${SUSFS_DIR}" status --porcelain)" ] || die "SUSFS 上游工作树不干净"
-    [ -s "${SUSFS_HOOKS_ADAPTATION}" ] || die "缺少 AOSP r57 SUSFS SELinux 适配补丁"
-    KSU_SUSFS_PATCH_FILE="$(mktemp)"
-    COMMON_SUSFS_PATCH_FILE="$(mktemp)"
-    trap 'rm -f "${KSU_SUSFS_PATCH_FILE:-}" "${COMMON_SUSFS_PATCH_FILE:-}"' EXIT
-    git -C "${SUSFS_DIR}" show "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${KSU_SUSFS_PATCH_FILE}"
-    cp "${SUSFS_DIR}/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" "${COMMON_SUSFS_PATCH_FILE}"
-    log_step "应用 SUSFS v2.2.0 官方 Android 16/6.12 补丁"
-    apply_susfs_integration
-    verify_susfs_integration
-else
-    verify_kernelsu_integration
-fi
+apply_kernelsu_post_release_fixes
+KSU_SUSFS_PATCH_FILE="$(mktemp)"
+COMMON_SUSFS_PATCH_FILE="$(mktemp)"
+trap 'rm -f "${KSU_SUSFS_PATCH_FILE:-}" "${COMMON_SUSFS_PATCH_FILE:-}"' EXIT
+git -C "${SUSFS_DIR}" show "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${KSU_SUSFS_PATCH_FILE}"
+cp "${SUSFS_DIR}/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" "${COMMON_SUSFS_PATCH_FILE}"
+log_step "应用 SUSFS v2.2.0 官方 Android 16/6.12 补丁"
+apply_susfs_integration
+verify_susfs_integration
 if [ "${ENABLE_BBG}" = "1" ]; then
     verify_repo_identity "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_COMMIT}"
-    [ -z "$(git -C "${BBG_DIR}" status --porcelain)" ] || die "Baseband Guard 上游工作树不干净"
-    [ -s "${BBG_LSM_COUNT_PATCH}" ] || die "缺少 AOSP r57 Baseband Guard LSM 计数适配"
+    if [ -n "$(git -C "${BBG_DIR}" status --porcelain --untracked-files=all)" ]; then
+        verify_bbg_source_fix
+    fi
+    verify_project_patch "Baseband Guard 保护边界修复" \
+        "${BBG_LUNA_FIX_PATCH}" "${BBG_LUNA_FIX_PATCH_SHA256}" \
+        "${BBG_LUNA_FIX_PATCH_ID}"
+    apply_patch_once "Baseband Guard 保护边界修复" \
+        "${BBG_DIR}" "${BBG_LUNA_FIX_PATCH}"
+    verify_project_patch "KernelSU Baseband Guard 凭据标记补丁" \
+        "${BBG_KSU_CREDENTIAL_PATCH}" "${BBG_KSU_CREDENTIAL_PATCH_SHA256}" \
+        "${BBG_KSU_CREDENTIAL_PATCH_ID}"
+    apply_patch_once "KernelSU Baseband Guard 凭据标记" \
+        "${KSU_DIR}" "${BBG_KSU_CREDENTIAL_PATCH}"
+    verify_project_patch "AOSP 6.12.69 Baseband Guard LSM 计数适配补丁" \
+        "${BBG_LSM_COUNT_PATCH}" "${BBG_LSM_COUNT_PATCH_SHA256}" \
+        "${BBG_LSM_COUNT_PATCH_ID}"
+    verify_project_patch "AOSP 6.12.69 Baseband Guard 内部凭据接口补丁" \
+        "${BBG_COMMON_CREDENTIAL_PATCH}" "${BBG_COMMON_CREDENTIAL_PATCH_SHA256}" \
+        "${BBG_COMMON_CREDENTIAL_PATCH_ID}"
     log_step "应用 Baseband Guard ${BBG_COMMIT:0:12} overlay"
     apply_bbg_integration
     verify_bbg_integration
 fi
-if [ "${ENABLE_ADIOS}" = "1" ]; then
-    verify_repo_identity "ADIOS ${ADIOS_REF}" "${ADIOS_DIR}" "${ADIOS_REPO}" "${ADIOS_COMMIT}"
-    [ -z "$(git -C "${ADIOS_DIR}" status --porcelain)" ] || die "ADIOS 上游工作树不干净"
-    [ -s "${ADIOS_STABLE_PATCH_FILE}" ] || die "缺少 ADIOS 6.12 stable 补丁"
-    [ -s "${ADIOS_FORCE_DEFAULT_PATCH_FILE}" ] || die "缺少 ADIOS 强制默认补丁审计输入"
-    [ -s "${ADIOS_KBUILD_ADAPTATION}" ] || die "缺少 ADIOS AOSP 6.12.23 Kbuild 适配"
-    log_step "应用 ADIOS 3.2.0 官方补丁"
-    apply_adios_integration
-    verify_adios_integration
-fi
-if [ "${ENABLE_TCP_BRUTAL}" = "1" ]; then
-    verify_repo_identity "TCP Brutal ${TCP_BRUTAL_REF}" "${TCP_BRUTAL_DIR}" "${TCP_BRUTAL_REPO}" "${TCP_BRUTAL_COMMIT}"
-    [ -z "$(git -C "${TCP_BRUTAL_DIR}" status --porcelain)" ] || die "TCP Brutal 上游工作树不干净"
-    [ "$(sha256sum "${TCP_BRUTAL_DIR}/brutal.c" | awk '{ print $1 }')" = "${TCP_BRUTAL_SOURCE_SHA256}" ] || \
-        die "TCP Brutal 官方源码 SHA-256 不匹配"
-    [ -s "${TCP_BRUTAL_INTEGRATION_PATCH}" ] || die "缺少 TCP Brutal AOSP 6.12.23 接入补丁"
-    log_step "应用 TCP Brutal ${TCP_BRUTAL_COMMIT:0:12} 官方源码"
-    apply_tcp_brutal_integration
-    verify_tcp_brutal_integration
-fi
+verify_final_source_deltas
 log_success "KernelSU ${KSU_REF} built-in 接入完成"

@@ -1,12 +1,34 @@
 #!/usr/bin/env bash
 #
-# Enumerate fixed post-r57 official histories without modifying kernel sources.
+# Enumerate official histories after the pinned common baseline without
+# modifying kernel sources.
 #
 set -euo pipefail
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat
 
 die() { printf '[FAIL] %s\n' "$1" >&2; exit 1; }
 log_info() { printf '[INFO] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
+
+reject_git_environment_overrides() {
+    local name
+    while IFS= read -r name; do
+        case "${name}" in
+            GIT_CONFIG_GLOBAL) [ "${!name}" = "/dev/null" ] || die "Git 全局配置隔离值异常" ;;
+            GIT_CONFIG_COUNT) [ "${!name}" = "1" ] || die "Git 命令配置数量异常" ;;
+            GIT_CONFIG_KEY_0) [ "${!name}" = "core.hooksPath" ] || die "Git 命令配置键异常" ;;
+            GIT_CONFIG_VALUE_0) [ "${!name}" = "/dev/null" ] || die "Git hooks 隔离值异常" ;;
+            GIT_CONFIG_NOSYSTEM|GIT_NO_LAZY_FETCH|GIT_NO_REPLACE_OBJECTS)
+                [ "${!name}" = "1" ] || die "Git 隔离值异常: ${name}"
+                ;;
+            GIT_PAGER) [ "${!name}" = "cat" ] || die "Git pager 隔离值异常" ;;
+            GIT_*) die "拒绝 Git 环境覆盖: ${name}" ;;
+        esac
+    done < <(compgen -e)
+}
+reject_git_environment_overrides
 
 load_env_file() {
     local env_file="$1" had_allexport=0
@@ -15,6 +37,7 @@ load_env_file() {
     set -a
     . "${env_file}"
     [ "${had_allexport}" = "1" ] || set +a
+    reject_git_environment_overrides
 }
 
 resolve_workspace_path() {
@@ -30,9 +53,21 @@ normalize_git_url() {
 
 verify_bare_repo() {
     local label="$1" repo_dir="$2" expected_url="$3"
-    local actual_url
+    local actual_url git_dir replace_refs unexpected_config
     [ "$(git -C "${repo_dir}" rev-parse --is-bare-repository 2>/dev/null)" = "true" ] || \
         die "${label} 不是 bare 审计仓库，请先运行 ./init.sh"
+    git_dir="$(git -C "${repo_dir}" rev-parse --absolute-git-dir)"
+    replace_refs="$(git -C "${repo_dir}" for-each-ref --format='%(refname)' refs/replace/)"
+    [ -z "${replace_refs}" ] || die "${label} 存在 refs/replace 对象替换:\n${replace_refs}"
+    [ ! -s "${git_dir}/info/grafts" ] || die "${label} 存在 info/grafts 对象替换"
+    unexpected_config="$(git -C "${repo_dir}" config --name-only --list | LC_ALL=C sort -u | awk '
+        /^core\.(repositoryformatversion|filemode|bare|hookspath)$/ { next }
+        /^remote\.origin\.(url|fetch|promisor|partialclonefilter)$/ { next }
+        /^backport\.[a-z0-9.]+$/ { next }
+        { print }
+    ')"
+    [ -z "${unexpected_config}" ] || \
+        die "${label} 存在非白名单 Git 配置:\n${unexpected_config}"
     actual_url="$(git -C "${repo_dir}" remote get-url origin 2>/dev/null || true)"
     [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${expected_url}")" ] || \
         die "${label} remote 不匹配: ${actual_url}"
@@ -59,20 +94,22 @@ list_paths() {
 }
 
 classify_paths() {
-    local paths="$1" path any_relevant=0 abi_risk=0
+    local paths="$1" path any_relevant=0 interface_risk=0
     while IFS= read -r path; do
         [ -n "${path}" ] || continue
         case "${path}" in
-            Documentation/*|tools/testing/*|tools/perf/*|samples/*|scripts/*) continue ;;
+            Documentation/*|tools/testing/*|tools/perf/*|samples/*) continue ;;
+            scripts/*) case "${path}" in scripts/syscall*) ;; *) continue ;; esac ;;
             arch/*) case "${path}" in arch/arm64/*) ;; *) continue ;; esac ;;
         esac
         any_relevant=1
         case "${path}" in
             include/uapi/*|arch/arm64/include/uapi/*|*/Kconfig|*/Kconfig.*|*/Makefile|\
-            arch/arm64/tools/syscall*|scripts/syscall*) abi_risk=1 ;;
+            */abi|*/abi/*|*/abi.*|*/abi_*|gki/*/symbols/*|\
+            arch/arm64/tools/syscall*|scripts/syscall*) interface_risk=1 ;;
         esac
     done <<<"${paths}"
-    printf '%s\t%s\n' "${any_relevant}" "${abi_risk}"
+    printf '%s\t%s\n' "${any_relevant}" "${interface_risk}"
 }
 
 current_tree_has_path() {
@@ -97,7 +134,7 @@ extract_upstream_id() {
 
 write_candidate() {
     local source="$1" repo_dir="$2" commit="$3" date="$4" subject="$5" body="$6"
-    local message class evidence path_flags relevant abi_risk status upstream_id
+    local message class evidence path_flags relevant interface_risk status upstream_id
     local correctness_re='CVE-|Fixes:|KASAN|KMSAN|UBSAN|syzbot|use[- ]after[- ]free|UAF|out[- ]of[- ]bounds|OOB|double[- ]free|deadlock|data (loss|corruption)|corrupt|panic|crash|hang|NULL pointer|null deref|uninitiali[sz]ed|integer overflow|security|privilege|bypass|race condition'
     local dynamic_re='CVE-|KASAN|KMSAN|UBSAN|syzbot'
     local severe_subject_re='use[- ]after[- ]free|UAF|out[- ]of[- ]bounds|OOB|double[- ]free|deadlock|data (loss|corruption)|corrupt|panic|crash|hang|NULL pointer|null deref|uninitiali[sz]ed|integer overflow|security|privilege|bypass|race'
@@ -136,11 +173,11 @@ write_candidate() {
         [ -n "${paths}" ] || paths="-"
         path_flags="$(classify_paths "${paths}")"
         relevant="${path_flags%%$'\t'*}"
-        abi_risk="${path_flags#*$'\t'}"
+        interface_risk="${path_flags#*$'\t'}"
         if [ "${relevant}" != "1" ] || ! current_tree_has_path "${paths}"; then
             status="REJECT_RELEVANCE"
-        elif [ "${abi_risk}" = "1" ]; then
-            status="REJECT_ABI_STATIC_RISK"
+        elif [ "${interface_risk}" = "1" ]; then
+            status="REVIEW_INTERFACE_STATIC_RISK"
         elif [ "${class}" = "performance" ]; then
             status="DEEP_REVIEW_PERFORMANCE"
         else
@@ -200,11 +237,17 @@ mkdir -p "${OUTPUT_DIR}"
 verify_bare_repo "AOSP common 审计源" "${AOSP_DIR}" "${COMMON_REPO}"
 verify_bare_repo "Linux stable 审计源" "${STABLE_DIR}" "${LINUX_STABLE_AUDIT_REPO}"
 verify_bare_repo "Linux mainline 审计源" "${MAINLINE_DIR}" "${LINUX_MAINLINE_AUDIT_REPO}"
-verify_local_commit "AOSP r57" "${AOSP_DIR}" "${COMMON_COMMIT}"
+verify_local_commit "AOSP ${COMMON_BRANCH}" "${AOSP_DIR}" "${COMMON_COMMIT}"
 verify_local_commit "Linux stable 起点" "${STABLE_DIR}" "${LINUX_STABLE_AUDIT_BASE_COMMIT}"
 verify_local_commit "Linux stable 终点" "${STABLE_DIR}" "${LINUX_STABLE_AUDIT_COMMIT}"
 verify_local_commit "Linux mainline 起点" "${MAINLINE_DIR}" "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}"
 verify_local_commit "Linux mainline 终点" "${MAINLINE_DIR}" "${LINUX_MAINLINE_AUDIT_COMMIT}"
+git -C "${STABLE_DIR}" merge-base --is-ancestor \
+    "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
+    die "Linux stable 固定范围不是完整祖先链，请重新运行 ./init.sh"
+git -C "${MAINLINE_DIR}" merge-base --is-ancestor \
+    "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "${LINUX_MAINLINE_AUDIT_COMMIT}" || \
+    die "Linux mainline 固定范围不是完整祖先链，请重新运行 ./init.sh"
 AOSP_BASE_DATE="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_DIR}" \
     show -s --format=%cs "${COMMON_COMMIT}")"
 
@@ -243,18 +286,18 @@ CANDIDATE_TOTAL="$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "${CANDIDATES_FILE}
 {
     printf '# 后续改进审计自动筛选摘要\n\n'
     printf -- '- 快照日期：`%s`\n' "${BACKPORT_AUDIT_SNAPSHOT}"
-    printf -- '- AOSP r57 基线日期：`%s`\n' "${AOSP_BASE_DATE}"
+    printf -- '- AOSP `%s` 基线日期：`%s`\n' "${COMMON_BRANCH}" "${AOSP_BASE_DATE}"
     printf -- '- 候选年龄门槛：无；仅拒绝晚于固定快照的提交\n'
     printf -- '- AOSP 分支并集：%s 个非 merge 提交\n' "${AOSP_TOTAL}"
     printf -- '- Linux stable 范围：%s 个非 merge 提交\n' "${STABLE_TOTAL}"
     printf -- '- Linux mainline 范围：%s 个非 merge 提交\n' "${MAINLINE_TOTAL}"
     printf -- '- 关键词初筛：%s 个\n\n' "${CANDIDATE_TOTAL}"
     printf '## 初筛状态\n\n'
-    for status in SCREEN_FIXES_ONLY REJECT_RELEVANCE REJECT_ABI_STATIC_RISK \
+    for status in SCREEN_FIXES_ONLY REJECT_RELEVANCE REVIEW_INTERFACE_STATIC_RISK \
         DEEP_REVIEW_CORRECTNESS DEEP_REVIEW_PERFORMANCE; do
         printf -- '- `%s`: %s\n' "${status}" "$(count_status "${status}")"
     done
-    printf '\n自动筛选不构成合入结论；所有 deep-review 项仍须证明当前缺陷、收益、依赖闭包和零 ABI/KMI。\n'
+    printf '\n自动筛选不构成合入结论；接口风险项不得仅凭路径拒绝，所有 review 项仍须证明当前缺陷、收益、用户态兼容和目标 OTA 必需模块闭包。\n'
 } > "${SUMMARY_FILE}"
 
 log_success "审计结果已生成: ${OUTPUT_DIR}"

@@ -1,0 +1,169 @@
+diff --git a/kernel/Kconfig b/kernel/Kconfig
+index 5c169f595e4707e3a9ac996d2ebdeca75882fba7..dd7b3420a419432ed3a19ecb41f945da8d755a57 100644
+--- a/kernel/Kconfig
++++ b/kernel/Kconfig
+@@ -51,7 +51,7 @@ config KSU_SUSFS_SUS_PATH
+ 	  - Allow hiding the user-defined path and all its sub-paths from various system calls.
+ 	  - Use "add_sus_path_loop" instead of "add_sus_path" if the user-defined path is frequently modified.
+ 	  - Use with cautious as it may cause performance loss and will be vulnerable to side channel attacks,
+-	  	just disable this feature if it doesn't work for you or you don't need it at all.
++	    just disable this feature if it doesn't work for you or you don't need it at all.
+ 	  - Effective only on zygote spawned user app process with uid >= 10000.
+ 
+ config KSU_SUSFS_SUS_MOUNT
+diff --git a/kernel/manager/pkg_observer.c b/kernel/manager/pkg_observer.c
+index 512b99296fead6d86282f2a199e4d20fabda0806..5b89858612742a362e0482530eeb069f05f74c96 100644
+--- a/kernel/manager/pkg_observer.c
++++ b/kernel/manager/pkg_observer.c
+@@ -35,8 +35,14 @@ static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask, struct i
+     return 0;
+ }
+ 
++static void ksu_free_mark(struct fsnotify_mark *mark)
++{
++    kfree(mark);
++}
++
+ static const struct fsnotify_ops ksu_ops = {
+     .handle_inode_event = ksu_handle_inode_event,
++    .free_mark = ksu_free_mark,
+ };
+ 
+ static int add_mark_on_inode(struct inode *inode, u32 mask, struct fsnotify_mark **out)
+@@ -121,4 +127,4 @@ void __exit ksu_observer_exit(void)
+     unwatch_one_dir(&g_watch);
+     fsnotify_put_group(g);
+     pr_info("observer exit done\n");
+-}
+\ No newline at end of file
++}
+diff --git a/kernel/runtime/boot_event.c b/kernel/runtime/boot_event.c
+index 99dcb7dd1fc682824657c47067dbc291312808f8..04cc1ae09da8f4b86af0513b289f4359aea8f70b 100644
+--- a/kernel/runtime/boot_event.c
++++ b/kernel/runtime/boot_event.c
+@@ -1,4 +1,5 @@
+ #include "feature/selinux_hide.h"
++#include <linux/atomic.h>
+ #include <linux/err.h>
+ #include <linux/fs.h>
+ #include <linux/namei.h>
+@@ -17,14 +18,13 @@ extern struct static_key_true ksu_is_input_hook_enabled;
+ 
+ void on_post_fs_data(void)
+ {
+-    static bool done = false;
++    static atomic_t done = ATOMIC_INIT(0);
+ 
+-    if (done) {
++    if (atomic_cmpxchg(&done, 0, 1)) {
+         pr_info("on_post_fs_data already done\n");
+         return;
+     }
+ 
+-    done = true;
+     pr_info("on_post_fs_data!\n");
+ 
+     ksu_load_allow_list();
+diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
+index 24e1b361cd6bdfb9dc0893065415ee54e461e0ad..51417a09c13a923fc27359fb62144bbdf565e828 100644
+--- a/kernel/runtime/ksud_integration.c
++++ b/kernel/runtime/ksud_integration.c
+@@ -488,12 +488,6 @@ int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *v
+         if (val) {
+             // key pressed, count it
+             volumedown_pressed_count += 1;
+-            if (is_volumedown_enough(volumedown_pressed_count)) {
+-                if (static_key_enabled(&ksu_is_input_hook_enabled)) {
+-                    static_branch_disable(&ksu_is_input_hook_enabled);
+-                    pr_info("ksu_input_hook is disabled\n");
+-                }
+-            }
+         }
+     }
+ 
+diff --git a/kernel/selinux/selinux.c b/kernel/selinux/selinux.c
+index dda45d8b553fcc92828312b0dce172b8fed00ae8..fe3feeb199f6a676cb01d0d6b6879354426557a7 100644
+--- a/kernel/selinux/selinux.c
++++ b/kernel/selinux/selinux.c
+@@ -233,7 +233,7 @@ u32 susfs_priv_app_sid __read_mostly = 0;
+ static inline void susfs_set_sid(const char *secctx_name, u32 *out_sid)
+ {
+     int err;
+-    
++
+     if (!secctx_name || !out_sid) {
+         pr_err("secctx_name || out_sid is NULL\n");
+         return;
+@@ -265,7 +265,7 @@ u32 susfs_get_sid_from_name(const char *secctx_name)
+ {
+     u32 out_sid = 0;
+     int err;
+-    
++
+     if (!secctx_name) {
+         pr_err("secctx_name is NULL\n");
+         return 0;
+diff --git a/kernel/sulog/event.c b/kernel/sulog/event.c
+index 9f996cc00b43853bd3e8f25e9023bb6ca842d662..0c732d912f8190ee644bad805d2253e2e676b514 100644
+--- a/kernel/sulog/event.c
++++ b/kernel/sulog/event.c
+@@ -114,14 +114,11 @@ static __u32 ksu_sulog_copy_filename_kernel(const char *filename, char *dst, __u
+     if (!filename)
+         return ksu_sulog_copy_empty_string(dst);
+ 
+-    ret = strncpy(dst, filename, dst_len);
+-    if (ret <= 0)
+-        return ksu_sulog_copy_empty_string(dst);
+-
+-    if (ret >= dst_len) {
+-        dst[dst_len - 1] = '\0';
++    ret = strscpy(dst, filename, dst_len);
++    if (ret == -E2BIG)
+         return dst_len;
+-    }
++    if (ret < 0)
++        return ksu_sulog_copy_empty_string(dst);
+ 
+     return ret + 1;
+ }
+diff --git a/kernel/supercall/dispatch.c b/kernel/supercall/dispatch.c
+index e340fc7401513770565e99eae73f2d8f6714c564..c43aa771670d65472351f2305b729d6570cad16e 100644
+--- a/kernel/supercall/dispatch.c
++++ b/kernel/supercall/dispatch.c
+@@ -1,3 +1,4 @@
++#include <linux/atomic.h>
+ #include <linux/capability.h>
+ #include <linux/cred.h>
+ #include <linux/slab.h>
+@@ -97,18 +98,16 @@ static int do_report_event(void __user *arg)
+ 
+     switch (cmd.event) {
+     case EVENT_POST_FS_DATA: {
+-        static bool post_fs_data_lock = false;
+-        if (!post_fs_data_lock) {
+-            post_fs_data_lock = true;
++        static atomic_t post_fs_data_once = ATOMIC_INIT(0);
++        if (atomic_cmpxchg(&post_fs_data_once, 0, 1) == 0) {
+             pr_info("post-fs-data triggered\n");
+             on_post_fs_data();
+         }
+         break;
+     }
+     case EVENT_BOOT_COMPLETED: {
+-        static bool boot_complete_lock = false;
+-        if (!boot_complete_lock) {
+-            boot_complete_lock = true;
++        static atomic_t boot_complete_once = ATOMIC_INIT(0);
++        if (atomic_cmpxchg(&boot_complete_once, 0, 1) == 0) {
+             pr_info("boot_complete triggered\n");
+             on_boot_completed();
+             susfs_start_sdcard_monitor_fn();
+@@ -470,7 +469,7 @@ static int do_manage_mark(void __user *arg)
+ int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
+ {
+     if (magic1 != KSU_INSTALL_MAGIC1) {
+-        return -EINVAL; 
++        return -EINVAL;
+     }
+ 
+     // If magic2 is susfs and current process is root

@@ -4,12 +4,12 @@
 
 ## 1. 项目与基线
 
-Luna Kernel 面向小米 17（当前真机代号 `pudding`），从小米官方 SM8850 `popsicle` 公开源码与官方 AOSP Android 16 GKI common 构建 4 KiB `Image`。月亮小巧、克制、纯净；项目也坚持最小改动、来源清晰和可验证，不以堆叠功能为目标。
+Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）ROM，从小米官方 SM8850 `popsicle` 公开源码与官方 AOSP `android16-6.12` KMI generation 6 common 构建 4 KiB `Image`。固定目标 OTA 为 `OS4.0.0.9.XPCCNXM`，其 metadata `post-build` 为 `Xiaomi/pudding/pudding:17/CP2A.260605.016/17OS4.0.260809.194304611.QCPECN.S:user/release-keys`。`android16` 是 GKI 分支/KMI 名称，不代表目标 Android 版本。该 OTA 复用的 `system_dlkm` fingerprint 仍保留 Android 16 与 `OS4.0.0.8.XPCCN` 字段，这是该官方分区的原始构建元数据，MUST 如实固定，不得改写或据此单独推翻整套 OTA 的目标版本。月亮小巧、克制、纯净；项目也坚持最小改动、来源清晰和可验证，不以堆叠功能为目标。
 
 内核发布字符串必须由干净的项目提交派生：
 
 ```text
-6.12.23-android16-luna-g<项目提交前8位>-4k
+6.12.69-android16-luna-g<项目提交前8位>-4k
 ```
 
 两个基线仓库 MUST 独立存在、独立校验，禁止互相覆盖：
@@ -17,7 +17,7 @@ Luna Kernel 面向小米 17（当前真机代号 `pudding`），从小米官方 
 | 职责 | 项目内路径 | 上游 | 分支 | 固定提交 |
 | --- | --- | --- | --- | --- |
 | 小米 SoC/vendor 公开基线与完整性元数据 | `sources/xiaomi_sm8850_soc/` | `https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git` | `popsicle-w-oss` | `45705be1220b4cfa8100516ad86711656c0b634e` |
-| 实际 GKI Image 源码 | `sources/aosp_common_6.12.23_r57/` | `https://android.googlesource.com/kernel/common` | `android16-6.12-2025-06_r57` | `a82fc641d6d2c687802606190c0a8c33a4242201` |
+| 实际 GKI Image 源码 | `sources/aosp_common_6.12.69_kmi6_r63/` | `https://android.googlesource.com/kernel/common` | `android16-6.12-2026-03_r63` | `625bef5cf43deeb3fca2e75202bcf958b6b976e5` |
 
 小米仓库 `android/ACK_SHA` 中的 r8 / `f1bdb13583da85a47fcf1632a78ef52d6e6da651` 只用于完整性检查，不是 Image 构建源。MUST 从 AOSP common 构建，MUST NOT 用小米仓库同名目录覆盖 common，也不得复制目录伪造单仓源码树。
 
@@ -27,27 +27,41 @@ Luna Kernel 面向小米 17（当前真机代号 `pudding`），从小米官方 
 
 当前固定组件：
 
-- KernelSU v3.2.5：`b0bc817b4e966aa6aa830834eaf6ef765d821d40`，built-in，version code `32525`。
-- SUSFS v2.2.0：`d9a486dc7197800149c31fe35a77997ea0ddaa83`；KernelSU 兼容补丁 `ef69c8322232340f43c78c7fc491b32cb9f7da86`。
-- Baseband Guard：`1c664957da7539de860503940ee73c7447f1dfaf`，boot/recovery 分区保护关闭，其余能力启用。
-- ADIOS 3.2.0：`08bf078aac99075a0bef73c2b2497574a82e4c41`，built-in 供运行时选择，不得应用其强制默认补丁；小米 17 多硬件队列存储保持基线默认的 `none`。
-- TCP Brutal：`f11e52d88c7ad2285896de018c2d96d4687f0ab6`，仅提供运行时选择，CUBIC 保持默认。
+- KernelSU v3.2.5：`b0bc817b4e966aa6aa830834eaf6ef765d821d40`，built-in，version code `32525`；只选择性回移经审计的 `e9e5b616` 与 `be53d75f` → `e6cc0ef7` → `aab67974` 官方修复链，不整体追随 main。`c20d48a` 修改的 object 已被 SUSFS 官方兼容层从 Kbuild 移除，不得作为当前组合的有效回移项。
+- SUSFS v2.2.0：`0e43d12a6cb5e6b2814c8214466784285d64ebec`；KernelSU 兼容补丁 `ef69c8322232340f43c78c7fc491b32cb9f7da86`。`OPEN_REDIRECT` MUST 在编译期关闭；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
+- Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r29：固定归档摘要和解压树摘要。
 
-已授权的内核直接修复仅包括 `patch.sh` 可精确证明的 AOSP/Linux 官方修复、Unicode default-ignorable 兼容补丁及其测试。新增候选 MUST 先证明当前路径可达、问题真实、修复稳定且收益足够；理论优化、来源不清或无法单独验证的改动一律拒绝。
+已授权的内核直接修复仅包括 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 有清晰机制、与小米 17 实际路径相关、来自稳定官方历史、没有回退或明显回归证据，并通过第 3、5 节的可启动兼容性硬门禁及完整差异审计；收益极小、路径无关、来源不清或逻辑证据不足的改动一律拒绝。缺少实机性能数据本身不构成否决，但不得把无法说明机制的猜测包装成优化。r63 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得再作为项目回移重复应用。
 
-TCP Brutal 上游采用 GPL-3.0，而内核主体为 GPL-2.0-only。当前 built-in 产物仅用于授权测试；公开分发前 MUST 完成专项许可证兼容审查。
+r63 后续回移由 `patches/backports/r63-selected-backports.tsv` 固定为一个有序、不可拆分的集合：29 项逻辑修复、34 个实际应用提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r63-independent/`，每个清单只承载一个可独立回退的逻辑项；不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
 
-## 3. ABI/KMI 绝对红线
+## 3. 小米 17 可启动兼容性硬门禁
 
-任何后续修复或改进都 MUST 同时保持：
+实际放行以固定小米 17 同一 OTA 的可启动兼容性为准，而不是要求全量 ABI/KMI 快照逐字节不变。任何待放行版本都 MUST 同时满足：
 
-- `vmlinux` 导出数：`18137`
-- 完整 CRC 摘要：`65a6a73e3a16ff05c41dfe3d6916438200d8dde03a50fa9198bcd7301c893db3`
-- QCOM/Xiaomi 4517 项 vendor KMI 摘要：`5980570208c7617a89e50f3b1cdf2fcd981f777cd249338fd2bec0071be8935b`
-- 18137 项导出的 STG 类型图摘要：`ce67a05c7c522f62122c1322ebe65aced724dcf355ba42774144e5529fc2bc46`
+- 覆盖固定 OTA 的 `boot`、`vendor_boot`、`vendor_dlkm` 与 `system_dlkm` 中全部实际使用及可能按硬件、服务或运行时路径加载的内核模块；不得只验证当前一次启动碰巧加载的子集。
+- 对上述目标模块闭包中的每个依赖，验证符号存在、CRC、provider、导出类型、namespace、依赖顺序、vermagic 和相关 ABI 类型兼容；不得出现 unknown symbol、CRC disagreement、namespace 拒绝、vermagic/CFI/BTF 不兼容或伪造 provider。
+- 保持 arm64、4 KiB、对应 GKI/KMI generation、模块版本机制以及启动、存储、显示、Binder、SELinux/LSM、seccomp、BPF 和设备安全路径所需的关键配置与语义。
+- 项目新增的 built-in 能力或 `.ko` 不得破坏 stock 闭包；新增 `.ko` 必须随对应 `Image` 同次构建，并独立证明可加载、依赖完整及功能正常。
+- 真机完成启动、全部预期模块加载、关键硬件和项目功能验证，并排除 panic、Oops、watchdog、关键模块加载失败及持续性严重错误。
 
-导出集合、任一 CRC、类型图、UAPI、syscall、配置或模块矩阵发生变化即触发红线，MUST 拒绝，安全性或性能收益不能豁免。禁止伪造导出、硬编码跳过或以空模块掩盖失败。
+任一目标闭包符号被删除、CRC/provider/namespace/相关类型变得不兼容，或关键启动配置被破坏，均为绝对拒绝项。安全性或性能收益不能豁免这一门禁。禁止删除验证对象、伪造导出、硬编码跳过、扩大例外或以空模块掩盖失败。
+
+本文后续所称 ABI/KMI 硬门禁，仅指目标 OTA 模块闭包实际消费的接口及相关类型兼容性；不得再把全量导出集合、全量 STG 图、配置文件哈希或模块数量完全相等称为 ABI/KMI 绝对红线。
+
+以下全量快照保留为 r63 当前参考基线，构建 MUST 生成结构化漂移摘要并保留本次完整快照，但哈希、项目数或顺序变化本身不再构成补丁拒绝理由：
+
+- 剔除固定 r63 新增项后的完整 `Module.symvers`：`19344` 项，五列摘要 `527bbb7992ac077f67be5161bd769223cc8483533d0b35a75dd5f8e2228e2f7a`
+- 剔除固定 r63 新增项后的 `vmlinux`：`18746` 项导出，CRC 摘要 `c8f36343016f4d329ccb1fdcdd832137d28e0fe65b90ed1fa7fd51d9e07055fa`
+- 剔除 8 项 Xiaomi 新增后的 QCOM/Xiaomi vendor KMI：`4699` 项，摘要 `6c91f68b3efc6fae08101b9e75a95b062a0c38e4bbd8ac7e3665f27c1398e7e7`
+- 上述 `18746` 项旧导出的 STG 类型图摘要：`1ae8a8dcecf6084aba75cb9e2e6d51411080867c94d95b2ee63b62da8711dc3c`
+- r63 完整目标参考：`19377` 项 `Module.symvers`、`18779` 项 `vmlinux` 导出、`4707` 项 QCOM/Xiaomi 并集；完整 STG 类型图摘要 `3dd1fec588ab0920500207ff755a8723aa08fbe92a60b9174e21b3ce1ed1f2cb`。
+- `abi/android16-6.12-r60-to-r63-allowed-exports.tsv` 记录 r60 到 r63 的 33 项官方新增，用于解释基线差异，不再作为禁止第 34 项正当项目导出的数量上限。
+
+差异审计必须把目标闭包硬门禁结果与全量参考快照漂移分开记录；目标闭包消费者相关变化只有证明完全兼容才能放行。无目标消费者的变化允许在有明确用途且不产生回归时保留，例如新增项目模块、其必要导出或没有目标消费者的全量快照漂移。出现 `DRIFT` 时必须先保留本次快照、完成影响审查，并在同一变更中更新参考摘要；未确认漂移不得进入发布闭包。这是审查门槛，不得把快照不同本身误写成兼容性失败，也不得据此放宽 UAPI、syscall 或用户态语义审查。
+
+固定 `rust_binder.ko` 例外仍仅限第 5 节载明的 67 个 Rust 构建上下文符号，并以 stock 启动输入未选择 Rust Binder、该模块无导出、无模块依赖且无反向依赖为前提；它不是一般性的模块加载失败豁免。
 
 ## 4. 脚本职责
 
@@ -64,22 +78,24 @@ TCP Brutal 上游采用 GPL-3.0，而内核主体为 GPL-2.0-only。当前 built
 - `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK 和只读官方审计仓库；不应用补丁、不编译。
 - `patch.sh`：仅应用项目维护的直接内核修复；必须幂等。
 - `patch_external.sh`：仅接入已准备的外部组件；不得下载。
-- `build.sh`：生成配置、编译、执行 ABI/KMI/专项门禁并打包；不得准备源码。
+- `build.sh`：生成配置、编译，执行目标 OTA 可启动模块闭包硬门禁，输出全量 ABI/KMI、配置和模块矩阵的漂移摘要并保留本次审计快照；仅在发布闭包齐全且不存在未确认漂移后打包，不得准备源码。
 
 固定源码仓库必须保持干净，或其差异能被补丁脚本用允许路径和 reverse-apply 精确证明。`sources/`、`environment/`、`kernel_out/`、日志、转储和测试包不得提交。不得在输出目录手工修改 `.config`、`Module.symvers` 或包内容绕过守卫。
 
 ## 5. 构建与发布门槛
 
-- `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh` 必须通过。
-- common 版本必须为 6.12.23，QCOM/Xiaomi symbol list 必须存在。
-- 最终配置固定 8132 行，`modules.order` 固定 102 个活动模块；变化必须审查，不得降低门槛放行。
-- 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、FUSE BPF 必须启用。
+- `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/r63_backports.sh tools/r63_independent_backports.sh` 必须通过。
+- common 版本必须为 6.12.69，QCOM/Xiaomi symbol list 必须存在。
+- 当前参考配置为 8198 行、摘要 `802a5f160d470e5b07b638db65a13c6ce7a52d93bd5796035e8d831b2e61a423`；当前参考 `modules.order` 为 103 个活动模块、摘要 `23542e351835f1dca3b80cbaa975f86d7144a32c329d42efa7b502a8ca5033fb`。构建 MUST 报告参考值与本次值并保留本次配置及模块清单；经审查的必要配置变化、项目新增模块或排序变化可接受，不得仅以行数、数量或摘要不同拒绝，也不得以此绕过下一项关键配置和模块闭包门禁。
+- 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
-- `BPF_UNPRIV_DEFAULT_OFF=y`；DMA-BUF system/CMA heaps 和项目锁定的 SMMU/IOMMU 配置必须保持关闭。
+- `BPF_UNPRIV_DEFAULT_OFF=y`；DMA-BUF system/CMA heaps、GUNYAH_QCOM_PLATFORM、ARM_SMMU、ARM_SMMU_V3、ARM_SMMU_V3_PKVM 与 QCOM_IOMMU 必须保持关闭。ARM_PKVM_GUEST、VFIO_PKVM_IOMMU 与 PKVM_PVIOMMU 必须启用。
 - seccomp 内核能力必须启用。KernelSU Manager 或获准 root 进程因官方 `disable_seccomp()` 显示 `Seccomp: 0` 属于预期；普通 Android 应用应为 `2`。
-- Unicode UML 测试必须覆盖 Unicode 12.1 全部 4173 个 Default-Ignorable 码点并精确通过 87668 项。f2fs 使用 `LOOKUP_AUTO`，兼顾现有目录与新语义。
-- LSM 展开后的 `MAX_LSM_COUNT` 必须精确为 4。
-- 工具链归档必须来自固定 AOSP Gitiles 提交并先校验 SHA-256；重建安装树摘要必须保持 `67da74f00a801440ca7c256b028d94e6c85bf7168fbdecab62c3710384a25d5a`。
+- 保留 AOSP r63 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。
+- LSM 展开后的 `MAX_LSM_COUNT` 必须与实际启用的 LSM 数量精确一致；当前参考值为 6，BBG 占 1 槽，KernelSU 不得额外注册 LSM。
+- clang 归档必须来自固定 AOSP Gitiles 提交并先校验 SHA-256，Rust 与 build-tools 必须来自固定 Git subtree；完整工具链安装树摘要必须保持 `65644bd77ed4ecde7239e3ce5a4aa53451a28c0a52b12394b88c5bd095517cc0`。
+- stock 清单覆盖 HyperOS 4 `OS4.0.0.9.XPCCNXM` 同一 OTA 的 boot/vendor_boot/vendor_dlkm/system_dlkm，可证明 4083 项实际 vmlinux 依赖，v5 清单摘要为 `866afc7ea549ff8aa13a53f28d242396f1a8fa356ead345709cc1b7f7a16136a`；对应五列硬门禁 tuple 摘要为 `d3add92d15233b79b94c354ad6bd74a254c8be94eba2b2c199369dc80f6a6555`。固定 system_dlkm 输入含 103 个 stock 模块，其中 102 个必须严格闭包；固定 `rust_binder.ko` 的 234 项需求必须精确保持 167 项 vmlinux/CRC 匹配、67 项缺失、0 项 CRC 或 provider 异常。该模块仅在固定启动输入未选择 Rust Binder、无导出、无模块依赖且无反向依赖的前提下作为精确例外。例外不得扩大到其他模块或更多缺失项。项目自身新增模块不计入这 103 个 stock 模块，但必须通过第 3 节所述加载与依赖门禁。
+- 同 OTA `tmp/os4/system_dlkm.img` 固定为 17281024 字节、SHA-256 `7918f34b6ae9210b8470abbe1ee52f2fc72da04bfa241627ab0c66f340ab9816`。`build.sh` 必须校验整镜像身份、AVB hashtree 自洽、EROFS 完整性以及与 stock 清单绑定关系；镜像缺失或不匹配时 MUST 在打包前失败。重建 stock 清单还需固定的 Xiaomi 四个分区镜像以及脚本校验过的 `unpack_bootimg`、`bsdtar`、kmod 和 EROFS 工具。
 
 发布产物名称：
 
@@ -90,14 +106,16 @@ Image-luna-xiaomi17-g<项目提交前8位>-YYYYMMDD
 
 AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
 
+当前 KernelSU 仍为 built-in，本轮不得借门禁重构改变交付边界。若后续经专项审计切换为 LKM，面向用户必须保持单一安装入口，不得要求分别管理或手工刷入两个分区镜像；该专项还必须新增模块交付、逐项依赖与真机加载门禁，不能把 `modules.order` 中存在 `.ko` 当成已完成验证。首次安装后只有在驻留 LKM 与新 `Image` 的完整依赖闭包通过同等硬门禁时，才允许仅更新或直接刷入已组装的 boot 镜像。
+
 ## 6. 真机验证
 
-当前仅确认 `pudding` 范围，不得外推其他设备。发布前必须记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore，并排除 panic、Oops、watchdog、关键 vendor 模块 ABI 失败以及显示/存储启动故障。
+Android 17 分支尚未完成真机启动与功能验证；`pudding` 是唯一候选目标，不代表已经验证，更不得外推其他设备。发布前必须先完成同一 OTA 的 `system_dlkm` 闭包证明，再记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore，并排除 panic、Oops、watchdog、关键 vendor 模块 ABI 失败以及显示/存储启动故障。
 
-必须分别验证 KernelSU/SUSFS/BBG、SELinux/LSM、IPSet 和 ext4/f2fs casefold 旧目录兼容。Unicode UML 通过不替代真实磁盘目录迁移测试。环境隐藏可使属性显示为 green/locked；验收时必须结合 bootconfig 和测试环境说明，不能把预期隐藏行为误判为内核失败。
+必须分别验证 KernelSU/SUSFS/BBG、SELinux/LSM 和 IPSet。环境隐藏可使属性显示为 green/locked；验收时必须结合 bootconfig 和测试环境说明，不能把预期隐藏行为误判为内核失败。
 
 ## 7. 提交规范
 
-提交标题采用 `<type>: <准确精炼中文描述>`，类型限 `chore`、`feat`、`fix`、`refactor`、`docs`。每个提交只回答一个问题；pin、功能、ABI 守卫、打包和文档应独立审查。提交前执行 `git diff --check`、脚本语法检查和与风险相称的构建验证。
+提交标题采用 `<type>: <准确精炼中文描述>`，类型限 `chore`、`feat`、`fix`、`refactor`、`docs`。每个提交只回答一个问题；pin、功能、可启动兼容性硬门禁、全量差异审计、打包和文档应独立审查。提交前执行 `git diff --check`、脚本语法检查和与风险相称的构建验证。
 
-遇到不确定项，先以固定上游、`Module.symvers`、IKCONFIG、已验证 Image 和日志建立证据。任何放宽 ABI 守卫、关闭安全/调试能力、扩大来源或改变 Image-only 边界的动作都必须暂停并向用户说明。
+遇到不确定项，先以固定上游、stock 模块闭包、`Module.symvers`、IKCONFIG、已验证 Image 和日志建立证据。任何放宽目标 OTA 可启动闭包硬门禁、关闭安全/调试能力、扩大来源或改变 Image-only 边界的动作都必须暂停并向用户说明；全量 ABI/KMI、配置或模块矩阵快照变化则必须完整报告和审查，不得静默接受。

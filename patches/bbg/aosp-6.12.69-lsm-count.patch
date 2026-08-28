@@ -1,8 +1,10 @@
+Subject: [PATCH] Baseband Guard: 接入 AOSP 6.12.69 LSM 计数
+
 diff --git a/include/linux/lsm_count.h b/include/linux/lsm_count.h
-index 1fc8d13f9..c97649ca1 100644
+index 16eb49761b253e64e4fc72cdc99eb7381c0c07e9..85bdcbdacf4885960dfa79d74fcea82ad28d1e79 100644
 --- a/include/linux/lsm_count.h
 +++ b/include/linux/lsm_count.h
-@@ -94,6 +94,12 @@
+@@ -102,6 +102,12 @@
  #define IPE_ENABLED
  #endif
  
@@ -15,7 +17,7 @@ index 1fc8d13f9..c97649ca1 100644
  /*
   *  There is a trailing comma that we need to be accounted for. This is done by
   *  using a skipped argument in __COUNT_LSMS
-@@ -118,7 +124,8 @@
+@@ -124,7 +130,8 @@
  		LANDLOCK_ENABLED	\
  		IMA_ENABLED		\
  		EVM_ENABLED		\

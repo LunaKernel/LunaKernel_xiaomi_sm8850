@@ -1,7 +1,10 @@
+Subject: [PATCH] binder: 合并上游 transaction 生命周期修复并适配 AOSP 6.12.69
+
 diff --git a/drivers/android/binder.c b/drivers/android/binder.c
+index 47b3bfeb6f8ce216cda8e1bc2769f63d7b142bc8..ee17787fe6b460af2d2959e7572297175094be1e 100644
 --- a/drivers/android/binder.c
 +++ b/drivers/android/binder.c
-@@ -1843,7 +1843,20 @@ static void binder_txn_latency_free(struct binder_transaction *t)
+@@ -1837,7 +1837,20 @@ static void binder_txn_latency_free(struct binder_transaction *t)
  
  static void binder_free_transaction(struct binder_transaction *t)
  {
@@ -23,7 +26,7 @@ diff --git a/drivers/android/binder.c b/drivers/android/binder.c
  
  	trace_android_vh_free_oem_binder_struct(t);
  	if (target_proc) {
-@@ -1858,6 +1871,10 @@ static void binder_free_transaction(struct binder_transaction *t)
+@@ -1852,6 +1865,10 @@ static void binder_free_transaction(struct binder_transaction *t)
  			t->buffer->transaction = NULL;
  		binder_inner_proc_unlock(target_proc);
  	}
