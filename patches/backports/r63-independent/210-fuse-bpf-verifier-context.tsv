@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	fuse_bpf_verifier_context	direct	aosp	android16-6.12	a3d06921ce7506e56eb9b3444a70dbbe9c69cac4	2026-08-27	84156c566a84f2cf6445521cf57dd69a6ca8ba12	kernel/bpf/bpf_fuse.c	-	-	-
