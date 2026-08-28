@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	schedutil_hook_init_race	direct	stable	linux-6.12.y	0504d52d05299c1177f2086884343430cdca1f5c	2026-08-09	e3c7ef2374c6ede39acfd8700028b4280408b31e	kernel/sched/cpufreq_schedutil.c	-	-	-
