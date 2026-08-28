@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	unix_peek_uaf	direct	stable	linux-6.12.y	38bccb927d83d7d52e5b20015a172a0b6101d11e	2026-06-01	d76c3ebe93bbf8fe7d2fef6b5c6465816b70f784	net/unix/af_unix.c	-	-	-
