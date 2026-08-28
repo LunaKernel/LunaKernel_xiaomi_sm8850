@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	erofs_verity_noio_deadlock	adapt	stable	linux-6.12.y	378949f46e897204384f3f5f91e42e93e3f87568	2026-04-02	643a65c0861defa354aea26248fcfad2090a76d7	fs/erofs/zdata.c	patches/backports/erofs-verity-noio-deadlock-r63.patch	c1c85daae528104d84760905917a092f4b34a1fd3cda73c49129a1345e11c429	4dd3a7ec1b7cc29eb4c50d133869a95e31c7b4ac

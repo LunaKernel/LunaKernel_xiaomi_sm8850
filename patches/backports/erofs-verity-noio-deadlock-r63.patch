@@ -1,0 +1,16 @@
+diff --git a/fs/erofs/zdata.c b/fs/erofs/zdata.c
+--- a/fs/erofs/zdata.c
++++ b/fs/erofs/zdata.c
+@@ -1455,4 +1455,5 @@ static void z_erofs_decompress_kickoff(struct z_erofs_decompressqueue *io,
+ 				       int bios)
+ {
+ 	struct erofs_sb_info *const sbi = EROFS_SB(io->sb);
++	int gfp_flag;
+ 
+@@ -1490,4 +1491,6 @@ static void z_erofs_decompress_kickoff(struct z_erofs_decompressqueue *io,
+ 		return;
+ 	}
++	gfp_flag = memalloc_noio_save();
+ 	z_erofs_decompressqueue_work(&io->u.work);
++	memalloc_noio_restore(gfp_flag);
+ }
