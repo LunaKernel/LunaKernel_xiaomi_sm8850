@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	dm_bow_teardown_uaf	direct	aosp	android16-6.12-2026-03	2f412e10bbd6f854148f7a58fbaa341e745f1cc8	2026-08-24	0c93b8140ae1daf938936a4a2071a72f4bd67f7d	drivers/md/dm-bow.c	-	-	-
