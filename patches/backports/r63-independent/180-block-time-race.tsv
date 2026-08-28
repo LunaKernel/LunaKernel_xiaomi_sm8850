@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	block_time_race	direct	stable	linux-6.12.y	5b029dd854f8a6a2f5b6b9c338ae3cc3cbfc0213	2026-07-24	54d7ea77c0f3ca2a46f3f07d04899e39c4b75e0f	block/blk.h	-	-	-
