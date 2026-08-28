@@ -55,8 +55,8 @@ r63 后续回移由 `patches/backports/r63-selected-backports.tsv` 固定为一�
 - 剔除固定 r63 新增项后的完整 `Module.symvers`：`19344` 项，五列摘要 `527bbb7992ac077f67be5161bd769223cc8483533d0b35a75dd5f8e2228e2f7a`
 - 剔除固定 r63 新增项后的 `vmlinux`：`18746` 项导出，CRC 摘要 `c8f36343016f4d329ccb1fdcdd832137d28e0fe65b90ed1fa7fd51d9e07055fa`
 - 剔除 8 项 Xiaomi 新增后的 QCOM/Xiaomi vendor KMI：`4699` 项，摘要 `6c91f68b3efc6fae08101b9e75a95b062a0c38e4bbd8ac7e3665f27c1398e7e7`
-- 上述 `18746` 项旧导出的 STG 类型图摘要：`1ae8a8dcecf6084aba75cb9e2e6d51411080867c94d95b2ee63b62da8711dc3c`
-- r63 完整目标参考：`19377` 项 `Module.symvers`、`18779` 项 `vmlinux` 导出、`4707` 项 QCOM/Xiaomi 并集；完整 STG 类型图摘要 `3dd1fec588ab0920500207ff755a8723aa08fbe92a60b9174e21b3ce1ed1f2cb`。
+- 上述 `18746` 项旧导出的 STG 类型图摘要：`9d915f3833302d3f5202ddd2230cded1e1a3f73c2269f064c23165559c2105af`
+- r63 完整目标参考：`19377` 项 `Module.symvers`、`18779` 项 `vmlinux` 导出、`4707` 项 QCOM/Xiaomi 并集；完整 STG 类型图摘要 `e0b9e69a3f60ca2c5364493d330e7010e9b7808910d23bc7c10d8af7c5ade7c2`。
 - `abi/android16-6.12-r60-to-r63-allowed-exports.tsv` 记录 r60 到 r63 的 33 项官方新增，用于解释基线差异，不再作为禁止第 34 项正当项目导出的数量上限。
 
 差异审计必须把目标闭包硬门禁结果与全量参考快照漂移分开记录；目标闭包消费者相关变化只有证明完全兼容才能放行。无目标消费者的变化允许在有明确用途且不产生回归时保留，例如新增项目模块、其必要导出或没有目标消费者的全量快照漂移。出现 `DRIFT` 时必须先保留本次快照、完成影响审查，并在同一变更中更新参考摘要；未确认漂移不得进入发布闭包。这是审查门槛，不得把快照不同本身误写成兼容性失败，也不得据此放宽 UAPI、syscall 或用户态语义审查。
