@@ -1,0 +1,11 @@
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -4982,7 +4982,3 @@ static bool should_abort_scan(struct lruvec *lruvec, struct scan_control *sc)
+ #endif
+-	/* don't abort memcg reclaim to ensure fairness */
+-	if (!root_reclaim(sc) && !bypass)
+-		return false;
+-
+ 	if (unlikely(sc->proactive && signal_pending(current)))
+ 		return true;
