@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	uhid_safe_report	direct	aosp	android16-6.12-2026-03	61dd6b4a95d70ab76d56dce529b25d7f24f4c951	2026-08-26	02863cfab1193270fe25a68fa12db1a6220efcb7	drivers/hid/uhid.c	-	-	-
