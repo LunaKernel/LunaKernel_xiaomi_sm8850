@@ -1,11 +1,11 @@
 # order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
 001	f2fs_compress_write_end_io_uaf	direct	stable	linux-6.12.y	f5154cf3ce1c8193f0c1891d3769f62740cfe6fe	2026-04-27	0dc5708b497c3598d69da0580d8c50dd7126efc1	fs/f2fs/compress.c	-	-	-
-002	f2fs_write_end_io_uaf	proof	mainline	snapshot-2026-08-23	2d9c4a4ed4eef1f82c5b16b037aee8bad819fd53	2026-03-24	c75ac690dd89c1f1c47ad8df33c59919a1e7c200	fs/f2fs/data.c	-	-	-
+002	f2fs_write_end_io_uaf	proof	mainline	snapshot-2026-08-28	2d9c4a4ed4eef1f82c5b16b037aee8bad819fd53	2026-03-24	c75ac690dd89c1f1c47ad8df33c59919a1e7c200	fs/f2fs/data.c	-	-	-
 003	f2fs_write_end_io_uaf	adapt	stable	linux-6.12.y	7be222de96c0f9eee6e65eeb017ef855ee185cfa	2026-05-07	85bc2abbd3e4f5d07183b286ed213e974abbfce2	fs/f2fs/data.c	patches/backports/f2fs-write-end-io-uaf-6.12.69.patch	9202c631d2e21036d1e011cdcf5b76b4458ba825cf45ed62e0cb7e497557f7d3	bf213a0451b82f17797654457a7af87cfe73a772
 004	f2fs_cleancache_condition	direct	aosp	android16-6.12	66b8d2a9700a7cf3c1a5f4089bb4a93d1bcbc144	2026-06-02	9b879798ae1d2446f51884b5f1fb53b81b86bd22	fs/f2fs/data.c	-	-	-
 005	ufs_pm_qos_mutex_init	direct	aosp	android16-6.12	aa134d3a49c4dc0e951026377c44b567a488d223	2026-03-30	f8e21c20822003928315f8ae1e97f637026fabdf	drivers/ufs/core/ufshcd.c	-	-	-
 006	ufs_mcq_trace_null	direct	stable	linux-6.12.y	be730f9ee92ae08f2bc4b336967bcfd8183c06fe	2026-03-25	141f4acb8f1897ab9b60d835146713060e244dbe	drivers/ufs/core/ufshcd.c	-	-	-
-007	blk_mq_cached_request	direct	mainline	snapshot-2026-08-23	44e41381591dc5b4ea67a9f170b4ec85c817586e	2025-01-14	d75bdcc73e946ddea4bb8e042f8e62b13fa59ff7	block/blk-mq.c	-	-	-
+007	blk_mq_cached_request	direct	mainline	snapshot-2026-08-28	44e41381591dc5b4ea67a9f170b4ec85c817586e	2025-01-14	d75bdcc73e946ddea4bb8e042f8e62b13fa59ff7	block/blk-mq.c	-	-	-
 008	blk_mq_cached_request	direct	stable	linux-6.12.y	23d8ea1e303b5f32d883757a4a707e791dbc9808	2026-08-19	6a67555bb8698c1d92ec67aeb211a68b59264797	block/blk-mq.c	-	-	-
 009	blk_mq_cached_request	direct	stable	linux-6.12.y	8e23114b89e28549393351afde3c87e7b43a0c97	2026-08-19	4c7172bc6ab0ed867beed74ca6529197687ddc7b	block/blk-mq.c	-	-	-
 010	blkcg_writeback_uaf	direct	stable	linux-6.12.y	dfc8292a1d6782c76b626315605e0585a5a18447	2026-04-22	6fac7a7d82b5455611f4a1a209f41ffe23e2b437	mm/backing-dev.c	-	-	-
