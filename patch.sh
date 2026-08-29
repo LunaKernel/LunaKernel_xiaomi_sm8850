@@ -141,9 +141,6 @@ reject_git_object_overrides "Linux mainline 审计仓库" "${LINUX_MAINLINE_AUDI
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
-ENABLE_FUTEX_EXITING_POINTER_FIX="${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}"
-FUTEX_EXITING_POINTER_STABLE_COMMIT="${FUTEX_EXITING_POINTER_STABLE_COMMIT:-7475dfad10a05a5bfadebf5f2499bd61b19ed293}"
-FUTEX_EXITING_POINTER_PATCH_ID="${FUTEX_EXITING_POINTER_PATCH_ID:-419d86818387f958327185e62d1581e20b357a1d}"
 ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX="${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}"
 FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT="${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT:-0aacb6d18f76552e3e0ee25d9f40d21b3486f4cf}"
 FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID="${FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID:-88d19e4a03bfc1fdc6b126a65489e9d62eae2780}"
@@ -156,29 +153,13 @@ F2FS_LISTXATTR_BOUNDS_PATCH_ID="${F2FS_LISTXATTR_BOUNDS_PATCH_ID:-daaf1f38e2ef49
 ENABLE_BLKCG_RSTAT_RELEASE_FIX="${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}"
 BLKCG_RSTAT_RELEASE_STABLE_COMMIT="${BLKCG_RSTAT_RELEASE_STABLE_COMMIT:-bbebd9425cad3573d1527441753899b926525a0f}"
 BLKCG_RSTAT_RELEASE_PATCH_ID="${BLKCG_RSTAT_RELEASE_PATCH_ID:-5149120b23c377e425b11bfdcb1933e39245a1c7}"
-ENABLE_BINDER_TRANSACTION_LIFETIME_FIX="${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}"
-BINDER_THREAD_RELEASE_STABLE_COMMIT="${BINDER_THREAD_RELEASE_STABLE_COMMIT:-e63032dc715026a96bcaa13d375a8e15c91caa84}"
-BINDER_THREAD_RELEASE_PATCH_ID="${BINDER_THREAD_RELEASE_PATCH_ID:-bf97fd8b894461ca62445978f4f6422c736611b3}"
-BINDER_FREE_TRANSACTION_STABLE_COMMIT="${BINDER_FREE_TRANSACTION_STABLE_COMMIT:-d45ef513eed1abebfec90c3cfb6ae50c2a4182db}"
-BINDER_FREE_TRANSACTION_PATCH_ID="${BINDER_FREE_TRANSACTION_PATCH_ID:-5c23abbc83c1a297d19eb039610151fb377ea188}"
-BINDER_TRANSACTION_LIFETIME_PATCH="${HOST_WORKSPACE_DIR}/${BINDER_TRANSACTION_LIFETIME_PATCH:-patches/backports/binder-transaction-lifetime-6.12.69.patch}"
-BINDER_TRANSACTION_LIFETIME_PATCH_ID="${BINDER_TRANSACTION_LIFETIME_PATCH_ID:-7d9a01598e58b1f513fcfbe481dc682bd62c1f5c}"
 ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX="${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}"
 F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT="${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT:-44480f7e3f8369671452c0d262831c51aa5a9c20}"
 F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID="${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID:-8d86d1f0ff47ad109628af8462bd4506c81dd4f6}"
 F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT="${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT:-b885c7783c19c36c7bf899492a0bffcd68afa8c7}"
 F2FS_GC_MERGE_DEADLOCK_PATCH_ID="${F2FS_GC_MERGE_DEADLOCK_PATCH_ID:-f1e7da7bf78fadbfd5f41ae8f1d1b196ee96b98d}"
-F2FS_FOREGROUND_GC_PATCH="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-6.12.69.patch}"
+F2FS_FOREGROUND_GC_PATCH="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-r21.patch}"
 F2FS_FOREGROUND_GC_PATCH_ID="${F2FS_FOREGROUND_GC_PATCH_ID:-70442d9fb39ac24622e33231473817e5dc60249b}"
-ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX="${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}"
-UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT="${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT:-7ef00d3457d8c9cee0915ee0edff247031c36e0c}"
-UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID="${UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID:-d50c32d5918d030180b869f67a0ccd412b62209e}"
-UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT="${UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT:-459c818f8b5a562c34a27b915fae53792fa82a71}"
-UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID="${UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID:-32e05876eba86a6181f7f2cbc538f2fb73e63528}"
-UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT="${UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT:-a460b437af44c3317a57e637455ee891d0ee0352}"
-UFS_ERROR_HANDLER_WLUN_PATCH_ID="${UFS_ERROR_HANDLER_WLUN_PATCH_ID:-b4ec70973aaeef49650271cffd241533d63fac57}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH="${HOST_WORKSPACE_DIR}/${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH:-patches/backports/ufs-runtime-pm-error-recovery-6.12.69.patch}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID:-1480cec0fd66ee924f2a9488c44417709b5e3782}"
 ENABLE_TIMER_BASE_FAST_PATH="${ENABLE_TIMER_BASE_FAST_PATH:-0}"
 TIMER_BASE_FAST_PATH_COMMIT="${TIMER_BASE_FAST_PATH_COMMIT:-3ec955713d9617059d2fc8f2816d0b95ace72256}"
 TIMER_BASE_FAST_PATH_COMMIT_DATE="${TIMER_BASE_FAST_PATH_COMMIT_DATE:-2025-01-16}"
@@ -198,9 +179,6 @@ MEMCG_RSTAT_FAST_PATH_PATCH_ID="${MEMCG_RSTAT_FAST_PATH_PATCH_ID:-5b12701394b4f6
 ENABLE_TCP_RECV_MSTAMP_FAST_PATH="${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_IDLETIMER_DESTROY_UAF_FIX="${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}"
-IDLETIMER_DESTROY_UAF_FIX_COMMIT="${IDLETIMER_DESTROY_UAF_FIX_COMMIT:-9317fe019b5be27e888f02629a3de1f4d78cb1aa}"
-IDLETIMER_DESTROY_UAF_FIX_PATCH_ID="${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID:-2e6c62f1168d9eb5163373eac35801caa4d4a631}"
 ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
 EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
 EROFS_DIR_TAIL_OOB_FIX_PATCH_ID="${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID:-86095c51c9af49433ddbba4d32f194c2d3a7a6da}"
@@ -338,20 +316,6 @@ verify_linux_stable_source_exact() {
         die "${label} Linux mainline 上游 patch-id 不匹配"
 }
 
-verify_aosp_source() {
-    local label="$1" commit="$2" expected_patch_id="$3"
-    local patch_file patch_id
-    patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        cat-file -e "${commit}^{commit}" 2>/dev/null || \
-        die "${label}对象缺失，请先运行 ./init.sh"
-    env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    rm -f "${patch_file}"
-    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
-}
-
 apply_project_patch_once() {
     local label="$1" patch_file="$2" expected_sha256="$3" expected_patch_id="$4"
     local actual_sha256 patch_id
@@ -452,13 +416,6 @@ if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
     log_success "Linux TCP recv 时间戳快路径优化状态正确"
 fi
 
-if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ]; then
-    apply_aosp_backport_once "AOSP IDLETIMER destroy UAF 修复" \
-        "${IDLETIMER_DESTROY_UAF_FIX_COMMIT}" \
-        "${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID}"
-    log_success "AOSP IDLETIMER destroy UAF 修复状态正确"
-fi
-
 if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
     apply_aosp_backport_once "AOSP EROFS 目录尾项越界读取修复" \
         "${EROFS_DIR_TAIL_OOB_FIX_COMMIT}" \
@@ -511,16 +468,6 @@ if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" = "1" ]; then
     log_success "AOSP KVM compound head 引用修复状态正确"
 fi
 
-if [ "${ENABLE_FUTEX_EXITING_POINTER_FIX}" = "1" ]; then
-    apply_linux_stable_backport_once "Linux futex PI stale exiting 指针修复" \
-        "${FUTEX_EXITING_POINTER_STABLE_COMMIT}" \
-        "${FUTEX_EXITING_POINTER_PATCH_ID}"
-    grep -A2 -F 'retry:' "${COMMON_DIR}/kernel/futex/pi.c" |
-        grep -Fq 'exiting = NULL;' || \
-        die "futex_lock_pi retry 未清除 exiting 指针"
-    log_success "Linux futex PI stale exiting 指针修复状态正确"
-fi
-
 if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX}" = "1" ]; then
     apply_linux_stable_backport_once "Linux futex requeue-PI 超时竞态活锁修复" \
         "${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT}" \
@@ -569,35 +516,6 @@ if [ "${ENABLE_BLKCG_RSTAT_RELEASE_FIX}" = "1" ]; then
     log_success "Linux blk-cgroup rstat 释放竞态修复状态正确"
 fi
 
-if [ "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX}" = "1" ]; then
-    verify_linux_stable_source "Linux Binder thread release 生命周期修复" \
-        "${BINDER_THREAD_RELEASE_STABLE_COMMIT}" \
-        "${BINDER_THREAD_RELEASE_PATCH_ID}"
-    verify_linux_stable_source "Linux Binder transaction free 生命周期修复" \
-        "${BINDER_FREE_TRANSACTION_STABLE_COMMIT}" \
-        "${BINDER_FREE_TRANSACTION_PATCH_ID}"
-    apply_project_patch_once "Linux Binder transaction 生命周期修复（Android vendor hook 适配）" \
-        "${BINDER_TRANSACTION_LIFETIME_PATCH}" \
-        "${BINDER_TRANSACTION_LIFETIME_PATCH_SHA256}" \
-        "${BINDER_TRANSACTION_LIFETIME_PATCH_ID}"
-    binder_free_function="$(sed -n \
-        '/^static void binder_free_transaction(/,/^}/p' \
-        "${COMMON_DIR}/drivers/android/binder.c")"
-    printf '%s\n' "${binder_free_function}" | \
-        grep -Fq 'spin_lock(&t->lock);' || \
-        die "Binder transaction 未在锁内读取目标"
-    printf '%s\n' "${binder_free_function}" | \
-        grep -Fq 'atomic_inc(&target_thread->tmp_ref);' || \
-        die "Binder transaction 未固定目标线程生命周期"
-    printf '%s\n' "${binder_free_function}" | \
-        grep -Fq 'binder_thread_dec_tmpref(target_thread);' || \
-        die "Binder transaction 未释放目标线程临时引用"
-    printf '%s\n' "${binder_free_function}" | \
-        grep -Fq 'trace_android_vh_free_oem_binder_struct(t);' || \
-        die "Binder transaction 修复破坏 Android vendor hook"
-    log_success "Linux Binder transaction 生命周期修复状态正确"
-fi
-
 f2fs_gc_deadlock_fix_complete() {
     grep -Fq 'void f2fs_submit_all_merged_ipu_writes(struct f2fs_sb_info *sbi)' \
         "${COMMON_DIR}/fs/f2fs/data.c" &&
@@ -628,41 +546,6 @@ if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX}" = "1" ]; then
     f2fs_gc_deadlock_fix_complete || \
         die "F2FS 缓存 bio 未在 GC_MERGE 分支前统一提交"
     log_success "Linux F2FS 前台 GC 写回死锁修复状态正确"
-fi
-
-if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX}" = "1" ]; then
-    verify_aosp_source "AOSP UFS runtime suspend 错误恢复死锁修复" \
-        "${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT}" \
-        "${UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID}"
-    verify_aosp_source "AOSP UFS error handler host_sem 补充修复" \
-        "${UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT}" \
-        "${UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID}"
-    verify_aosp_source "AOSP UFS error handler WLUN 空指针补充修复" \
-        "${UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT}" \
-        "${UFS_ERROR_HANDLER_WLUN_PATCH_ID}"
-    apply_project_patch_once "AOSP UFS runtime PM 错误恢复组合修复（AOSP 6.12.69 语义适配）" \
-        "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" \
-        "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256}" \
-        "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID}"
-    ufs_error_handler="$(sed -n '/^static void ufshcd_err_handler(/,/^}/p' \
-        "${COMMON_DIR}/drivers/ufs/core/ufshcd.c")"
-    printf '%s\n' "${ufs_error_handler}" | \
-        grep -Fq 'if (hba->ufs_device_wlun) {' || \
-        die "UFS error handler 未保护未初始化 WLUN"
-    [ "$(printf '%s\n' "${ufs_error_handler}" | \
-        grep -Fc 'ufshcd_rpm_put(hba);')" = "2" ] || \
-        die "UFS error handler runtime PM 引用不平衡"
-    printf '%s\n' "${ufs_error_handler}" | awk '
-        /ufshcd_rpm_get_noresume\(hba\);/ { rpm = NR }
-        /down\(&hba->host_sem\);/ {
-            if (!rpm || rpm >= NR)
-                exit 1
-            checked = 1
-            exit 0
-        }
-        END { if (!checked) exit 1 }
-    ' || die "UFS runtime PM 检查未置于 host_sem 获取之前"
-    log_success "AOSP UFS runtime PM 错误恢复组合修复状态正确"
 fi
 
 if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then

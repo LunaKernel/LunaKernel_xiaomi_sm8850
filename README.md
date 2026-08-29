@@ -2,7 +2,7 @@
 
 # Luna Kernel
 
-Luna Kernel 是面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）ROM 的 Linux 6.12.69、4 KiB GKI 内核。
+Luna Kernel 是面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）ROM 的 Linux 6.12.81、4 KiB GKI 内核。
 
 “Luna”取月亮小巧、安静、纯净的意境。项目以小米公开内核源码和官方 AOSP GKI 为基线，加入有明确来源并经过门禁验证的功能、错误修复与轻量性能改进。
 
@@ -15,7 +15,7 @@ Luna Kernel 是面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17
 | 设备 | 小米 17 |
 | 代号 | `pudding` |
 | 系统 | HyperOS 4 / Android 17（适配验证中） |
-| 内核 | Linux 6.12.69 |
+| 内核 | Linux 6.12.81 |
 | 页面大小 | 4 KiB |
 | boot 分区 | 96 MiB（`100663296` 字节） |
 
@@ -26,7 +26,7 @@ Luna Kernel 是面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17
 | 用途 | 官方上游 | 固定版本 |
 | --- | --- | --- |
 | 小米 SM8850 SoC/vendor 公开基线 | [MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource) | `popsicle-w-oss` / `45705be1220b4cfa8100516ad86711656c0b634e` |
-| GKI Image 源码 | [AOSP kernel/common](https://android.googlesource.com/kernel/common) | `android16-6.12-2026-03_r63` / `625bef5cf43deeb3fca2e75202bcf958b6b976e5` |
+| GKI Image 源码 | [AOSP kernel/common](https://android.googlesource.com/kernel/common) | `android16-6.12-2026-06_r21` / `0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28` |
 
 最终 `Image` 从 AOSP common 构建；小米公开源码提供 SoC 基线和兼容性元数据。AOSP 分支名中的 `android16` 是 GKI/KMI 名称，不代表目标系统仍是 Android 16。
 
@@ -45,10 +45,10 @@ Luna Kernel 是面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17
 
 ## 修复与改进
 
-Luna 在固定 r63 基线上回移了来自官方 AOSP/Linux 历史的改动，主要包括：
+Luna 使用更新的官方 r21 基线，并只回移该基线仍缺少、来自官方 AOSP/Linux 历史的改动，主要包括：
 
 - F2FS 前台 GC、ACL/xattr，以及 EROFS、ext4 边界错误修复。
-- futex PI、blk-cgroup、Binder、UFS、IDLETIMER、IPv6 MLD 与 KVM compound-page pin 修复；主动回收 freezer 修复由 r63 基线提供。
+- futex PI、blk-cgroup、IPv6 MLD 与 KVM compound-page pin 等并发、边界和生命周期修复；新版 Binder、UFS、IDLETIMER 与主动回收 freezer 修复由 r21 基线直接提供。
 - KernelSU Manager 身份校验、低内存失败路径，以及 Baseband Guard 设备身份复核与写入口修复。
 - 回移 Linux/AOSP 已合入的 F2FS/UFS、块层与内存管理、BPF、TCP/IPv6 和 IPSet 并发及生命周期修复。
 - timer base、F2FS 直接 I/O、EAS cpumask、blk-wbt、memcg rstat 与 TCP 接收时间戳快路径改进。
@@ -76,7 +76,7 @@ Luna 在固定 r63 基线上回移了来自官方 AOSP/Linux 历史的改动，�
 - `patch_external.sh`：接入固定版本的独立组件。
 - `build.sh`：配置、编译，验证同 OTA 启动所需模块闭包，并生成配置、模块和 ABI/KMI 差异报告。
 
-当前分支的构建输出目录为 `kernel_out/android17-r63/`。只有提供固定同 OTA `tmp/os4/system_dlkm.img`，通过身份、完整性和模块闭包门禁，并处理完参考快照漂移后，才会生成候选 ZIP、`Image`、完整兼容性审计归档、Manager APK 与 IPSet 产物。
+当前分支的构建输出目录为 `kernel_out/android17-r21/`。只有提供固定同 OTA `tmp/os4/system_dlkm.img`，通过身份、完整性和模块闭包门禁，并处理完参考快照漂移后，才会生成候选 ZIP、`Image`、完整兼容性审计归档、Manager APK 与 IPSet 产物。
 
 重建 stock ABI 清单需要 `tmp/os4/` 中同一 OTA 的 `boot.img`、`vendor_boot.img`、`vendor_dlkm.img` 和 `system_dlkm.img`，以及提取脚本校验过的工具。`system_dlkm.img` 只用于兼容性验证，不会进入刷机包。
 

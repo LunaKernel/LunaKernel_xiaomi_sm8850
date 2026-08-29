@@ -445,12 +445,6 @@ verify_susfs_integration() {
         if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' net/ipv4/tcp.c net/ipv4/tcp_input.c
         fi
-        if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}" = "1" ]; then
-            printf '%s\n' net/netfilter/xt_IDLETIMER.c
-        fi
-        if [ "${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/futex/pi.c
-        fi
         if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}" = "1" ]; then
             printf '%s\n' kernel/futex/requeue.c
         fi
@@ -463,14 +457,8 @@ verify_susfs_integration() {
         if [ "${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}" = "1" ]; then
             printf '%s\n' block/blk-cgroup.c
         fi
-        if [ "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}" = "1" ]; then
-            printf '%s\n' drivers/android/binder.c
-        fi
         if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}" = "1" ]; then
             printf '%s\n' fs/f2fs/data.c fs/f2fs/f2fs.h fs/f2fs/segment.c
-        fi
-        if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}" = "1" ]; then
-            printf '%s\n' drivers/ufs/core/ufshcd.c
         fi
         if [ "${ENABLE_TIMER_BASE_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' kernel/time/timer.c

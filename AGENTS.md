@@ -9,7 +9,7 @@ Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）
 内核发布字符串必须由干净的项目提交派生：
 
 ```text
-6.12.69-android16-luna-g<项目提交前8位>-4k
+6.12.81-android16-luna-g<项目提交前8位>-4k
 ```
 
 两个基线仓库 MUST 独立存在、独立校验，禁止互相覆盖：
@@ -17,7 +17,7 @@ Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）
 | 职责 | 项目内路径 | 上游 | 分支 | 固定提交 |
 | --- | --- | --- | --- | --- |
 | 小米 SoC/vendor 公开基线与完整性元数据 | `sources/xiaomi_sm8850_soc/` | `https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git` | `popsicle-w-oss` | `45705be1220b4cfa8100516ad86711656c0b634e` |
-| 实际 GKI Image 源码 | `sources/aosp_common_6.12.69_kmi6_r63/` | `https://android.googlesource.com/kernel/common` | `android16-6.12-2026-03_r63` | `625bef5cf43deeb3fca2e75202bcf958b6b976e5` |
+| 实际 GKI Image 源码 | `sources/aosp_common_6.12.81_kmi6_r21/` | `https://android.googlesource.com/kernel/common` | `android16-6.12-2026-06_r21` | `0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28` |
 
 小米仓库 `android/ACK_SHA` 中的 r8 / `f1bdb13583da85a47fcf1632a78ef52d6e6da651` 只用于完整性检查，不是 Image 构建源。MUST 从 AOSP common 构建，MUST NOT 用小米仓库同名目录覆盖 common，也不得复制目录伪造单仓源码树。
 
@@ -32,9 +32,11 @@ Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）
 - Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r29：固定归档摘要和解压树摘要。
 
-已授权的内核直接修复仅包括 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 有清晰机制、与小米 17 实际路径相关、来自稳定官方历史、没有回退或明显回归证据，并通过第 3、5 节的可启动兼容性硬门禁及完整差异审计；收益极小、路径无关、来源不清或逻辑证据不足的改动一律拒绝。缺少实机性能数据本身不构成否决，但不得把无法说明机制的猜测包装成优化。r63 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得再作为项目回移重复应用。
+已授权的内核直接修复仅包括 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 有清晰机制、与小米 17 实际路径相关、来自稳定官方历史、没有回退或明显回归证据，并通过第 3、5 节的可启动兼容性硬门禁及完整差异审计；收益极小、路径无关、来源不清或逻辑证据不足的改动一律拒绝。缺少实机性能数据本身不构成否决，但不得把无法说明机制的猜测包装成优化。r21 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得再作为项目回移重复应用。
 
-r63 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一个有序、不可拆分的集合：29 项逻辑修复、34 个实际应用提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r21-independent/`，每个清单只承载一个可独立回退的逻辑项；不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
+r21 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一个有序、不可拆分的集合：23 项逻辑修复、28 个实际应用提交和 1 个来源证明提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r21-independent/`，当前为 31 个可独立回退的逻辑项；每个清单只承载一个逻辑项，不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
+
+r21 对 `struct tegra_mc` 的私有类型重构使固定 OTA 实际消费的 `devm_tegra_memory_controller_get` 与 `tegra_mc_probe_device` 产生 CRC 漂移。`patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch` 只使用 `ANDROID_KABI_TYPE_STRING` 固定这两个不透明指针接口的版本字符串，不改变函数机器 ABI、运行时代码或结构体布局；该窄兼容补丁及其 SHA-256、patch-id MUST 固定并纳入源码差异门禁。
 
 ## 3. 小米 17 可启动兼容性硬门禁
 
@@ -50,14 +52,12 @@ r63 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一�
 
 本文后续所称 ABI/KMI 硬门禁，仅指目标 OTA 模块闭包实际消费的接口及相关类型兼容性；不得再把全量导出集合、全量 STG 图、配置文件哈希或模块数量完全相等称为 ABI/KMI 绝对红线。
 
-以下全量快照保留为 r63 当前参考基线，构建 MUST 生成结构化漂移摘要并保留本次完整快照，但哈希、项目数或顺序变化本身不再构成补丁拒绝理由：
+以下全量快照保留为 r21 当前参考基线，构建 MUST 生成结构化漂移摘要并保留本次完整快照，但哈希、项目数或顺序变化本身不再构成补丁拒绝理由：
 
-- 剔除固定 r63 新增项后的完整 `Module.symvers`：`19344` 项，五列摘要 `527bbb7992ac077f67be5161bd769223cc8483533d0b35a75dd5f8e2228e2f7a`
-- 剔除固定 r63 新增项后的 `vmlinux`：`18746` 项导出，CRC 摘要 `c8f36343016f4d329ccb1fdcdd832137d28e0fe65b90ed1fa7fd51d9e07055fa`
-- 剔除 8 项 Xiaomi 新增后的 QCOM/Xiaomi vendor KMI：`4699` 项，摘要 `6c91f68b3efc6fae08101b9e75a95b062a0c38e4bbd8ac7e3665f27c1398e7e7`
-- 上述 `18746` 项旧导出的 STG 类型图摘要：`9d915f3833302d3f5202ddd2230cded1e1a3f73c2269f064c23165559c2105af`
-- r63 完整目标参考：`19377` 项 `Module.symvers`、`18779` 项 `vmlinux` 导出、`4707` 项 QCOM/Xiaomi 并集；完整 STG 类型图摘要 `e0b9e69a3f60ca2c5364493d330e7010e9b7808910d23bc7c10d8af7c5ade7c2`。
-- `abi/android16-6.12-r60-to-r63-allowed-exports.tsv` 记录 r60 到 r63 的 33 项官方新增，用于解释基线差异，不再作为禁止第 34 项正当项目导出的数量上限。
+- 完整 `Module.symvers`：`19703` 项，五列摘要 `a43d640d6146385d8d71f6e38d2e84487d9f47d15ff5418b78764accc477bb09`
+- `vmlinux`：`19105` 项导出，CRC 摘要 `aa089112cbed9f681b329520cb01f0f2ec6fc50a51399c3e7a39ab26026ec91b`
+- QCOM/Xiaomi vendor KMI 并集：`4723` 项，摘要 `f60e16b2517ba1be4cafc1855688d26ac6c8ef6b7fea848a08de552627a70664`
+- 上述 `19105` 项导出的完整 STG 类型图摘要：`d8176f381baff13ba86271412ff76712c749432c8e039feb68cf3be4a35c0073`
 
 差异审计必须把目标闭包硬门禁结果与全量参考快照漂移分开记录；目标闭包消费者相关变化只有证明完全兼容才能放行。无目标消费者的变化允许在有明确用途且不产生回归时保留，例如新增项目模块、其必要导出或没有目标消费者的全量快照漂移。出现 `DRIFT` 时必须先保留本次快照、完成影响审查，并在同一变更中更新参考摘要；未确认漂移不得进入发布闭包。这是审查门槛，不得把快照不同本身误写成兼容性失败，也不得据此放宽 UAPI、syscall 或用户态语义审查。
 
@@ -85,13 +85,13 @@ r63 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一�
 ## 5. 构建与发布门槛
 
 - `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
-- common 版本必须为 6.12.69，QCOM/Xiaomi symbol list 必须存在。
-- 当前参考配置为 8198 行、摘要 `802a5f160d470e5b07b638db65a13c6ce7a52d93bd5796035e8d831b2e61a423`；当前参考 `modules.order` 为 103 个活动模块、摘要 `23542e351835f1dca3b80cbaa975f86d7144a32c329d42efa7b502a8ca5033fb`。构建 MUST 报告参考值与本次值并保留本次配置及模块清单；经审查的必要配置变化、项目新增模块或排序变化可接受，不得仅以行数、数量或摘要不同拒绝，也不得以此绕过下一项关键配置和模块闭包门禁。
+- common 版本必须为 6.12.81，QCOM/Xiaomi symbol list 必须存在。
+- 当前参考配置为 8236 行、摘要 `b35ffd54c23acf009c1819d01614ecc40b53845b1bb3e7b6b7018622e872c935`；当前参考 `modules.order` 为 104 个活动模块、摘要 `03c98eead97e20de6f0fb74c8103e1bcde6ffddd254016b49dfd0aa5097d389d`。构建 MUST 报告参考值与本次值并保留本次配置及模块清单；经审查的必要配置变化、项目新增模块或排序变化可接受，不得仅以行数、数量或摘要不同拒绝，也不得以此绕过下一项关键配置和模块闭包门禁。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
 - `BPF_UNPRIV_DEFAULT_OFF=y`；DMA-BUF system/CMA heaps、GUNYAH_QCOM_PLATFORM、ARM_SMMU、ARM_SMMU_V3、ARM_SMMU_V3_PKVM 与 QCOM_IOMMU 必须保持关闭。ARM_PKVM_GUEST、VFIO_PKVM_IOMMU 与 PKVM_PVIOMMU 必须启用。
 - seccomp 内核能力必须启用。KernelSU Manager 或获准 root 进程因官方 `disable_seccomp()` 显示 `Seccomp: 0` 属于预期；普通 Android 应用应为 `2`。
-- 保留 AOSP r63 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。
+- 保留 AOSP r21 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。
 - LSM 展开后的 `MAX_LSM_COUNT` 必须与实际启用的 LSM 数量精确一致；当前参考值为 6，BBG 占 1 槽，KernelSU 不得额外注册 LSM。
 - clang 归档必须来自固定 AOSP Gitiles 提交并先校验 SHA-256，Rust 与 build-tools 必须来自固定 Git subtree；完整工具链安装树摘要必须保持 `65644bd77ed4ecde7239e3ce5a4aa53451a28c0a52b12394b88c5bd095517cc0`。
 - stock 清单覆盖 HyperOS 4 `OS4.0.0.9.XPCCNXM` 同一 OTA 的 boot/vendor_boot/vendor_dlkm/system_dlkm，可证明 4083 项实际 vmlinux 依赖，v5 清单摘要为 `866afc7ea549ff8aa13a53f28d242396f1a8fa356ead345709cc1b7f7a16136a`；对应五列硬门禁 tuple 摘要为 `d3add92d15233b79b94c354ad6bd74a254c8be94eba2b2c199369dc80f6a6555`。固定 system_dlkm 输入含 103 个 stock 模块，其中 102 个必须严格闭包；固定 `rust_binder.ko` 的 234 项需求必须精确保持 167 项 vmlinux/CRC 匹配、67 项缺失、0 项 CRC 或 provider 异常。该模块仅在固定启动输入未选择 Rust Binder、无导出、无模块依赖且无反向依赖的前提下作为精确例外。例外不得扩大到其他模块或更多缺失项。项目自身新增模块不计入这 103 个 stock 模块，但必须通过第 3 节所述加载与依赖门禁。

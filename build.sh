@@ -681,9 +681,6 @@ verify_susfs_source_state() {
         if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
             printf '%s\n' net/ipv4/tcp.c net/ipv4/tcp_input.c
         fi
-        if [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ]; then
-            printf '%s\n' net/netfilter/xt_IDLETIMER.c
-        fi
         if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
             printf '%s\n' fs/erofs/dir.c
         fi
@@ -699,9 +696,6 @@ verify_susfs_source_state() {
         if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}" = "1" ]; then
             printf '%s\n' virt/kvm/kvm_main.c
         fi
-        if [ "${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/futex/pi.c
-        fi
         if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}" = "1" ]; then
             printf '%s\n' kernel/futex/requeue.c
         fi
@@ -714,14 +708,8 @@ verify_susfs_source_state() {
         if [ "${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}" = "1" ]; then
             printf '%s\n' block/blk-cgroup.c
         fi
-        if [ "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}" = "1" ]; then
-            printf '%s\n' drivers/android/binder.c
-        fi
         if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}" = "1" ]; then
             printf '%s\n' fs/f2fs/data.c fs/f2fs/f2fs.h fs/f2fs/segment.c
-        fi
-        if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}" = "1" ]; then
-            printf '%s\n' drivers/ufs/core/ufshcd.c
         fi
         if [ "${ENABLE_TIMER_BASE_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' kernel/time/timer.c
@@ -962,14 +950,6 @@ verify_linux_mainline_backport_applied() {
 }
 
 verify_first_batch_linux_backports() {
-    local actual_sha256 patch_id composite_patch binder_function
-
-    if [ "${ENABLE_FUTEX_EXITING_POINTER_FIX}" = "1" ]; then
-        verify_linux_stable_backport_applied "futex PI stale exiting 指针修复" \
-            "${FUTEX_EXITING_POINTER_STABLE_COMMIT}" \
-            "${FUTEX_EXITING_POINTER_PATCH_ID}" \
-            "kernel/futex/pi.c"
-    fi
     if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX}" = "1" ]; then
         verify_linux_stable_backport_applied "futex requeue-PI 超时竞态活锁修复" \
             "${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT}" \
@@ -993,33 +973,6 @@ verify_first_batch_linux_backports() {
             "${BLKCG_RSTAT_RELEASE_STABLE_COMMIT}" \
             "${BLKCG_RSTAT_RELEASE_PATCH_ID}" \
             "block/blk-cgroup.c"
-    fi
-    if [ "${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX}" = "1" ]; then
-        verify_linux_stable_source "Binder thread release 生命周期修复" \
-            "${BINDER_THREAD_RELEASE_STABLE_COMMIT}" \
-            "${BINDER_THREAD_RELEASE_PATCH_ID}" \
-            "drivers/android/binder.c"
-        verify_linux_stable_source "Binder transaction free 生命周期修复" \
-            "${BINDER_FREE_TRANSACTION_STABLE_COMMIT}" \
-            "${BINDER_FREE_TRANSACTION_PATCH_ID}" \
-            "drivers/android/binder.c"
-        actual_sha256="$(sha256sum "${BINDER_TRANSACTION_LIFETIME_PATCH}" | awk '{ print $1 }')"
-        [ "${actual_sha256}" = "${BINDER_TRANSACTION_LIFETIME_PATCH_SHA256}" ] || \
-            die "Binder Android 适配补丁 SHA-256 不匹配"
-        patch_id="$(git patch-id --stable < "${BINDER_TRANSACTION_LIFETIME_PATCH}" | awk '{ print $1 }')"
-        [ "${patch_id}" = "${BINDER_TRANSACTION_LIFETIME_PATCH_ID}" ] || \
-            die "Binder Android 适配补丁 patch-id 不匹配"
-        git -C "${COMMON_DIR}" apply --reverse --check \
-            "${BINDER_TRANSACTION_LIFETIME_PATCH}" || \
-            die "Binder Android 适配补丁未完整应用"
-        binder_function="$(sed -n '/^static void binder_free_transaction(/,/^}/p' \
-            "${COMMON_DIR}/drivers/android/binder.c")"
-        printf '%s\n' "${binder_function}" | \
-            grep -Fq 'atomic_inc(&target_thread->tmp_ref);' || \
-            die "Binder 修复未固定目标线程生命周期"
-        printf '%s\n' "${binder_function}" | \
-            grep -Fq 'binder_thread_dec_tmpref(target_thread);' || \
-            die "Binder 修复未释放目标线程临时引用"
     fi
     if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX}" = "1" ]; then
         verify_linux_stable_source "F2FS 前台 GC 写回死锁修复" \
@@ -1046,49 +999,6 @@ verify_first_batch_linux_backports() {
 }
 
 verify_second_batch_backports() {
-    local actual_sha256 patch_id ufs_error_handler
-
-    if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX}" = "1" ]; then
-        verify_aosp_backport_source "UFS runtime suspend 错误恢复死锁修复" \
-            "${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT}" \
-            "${UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID}" \
-            "drivers/ufs/core/ufshcd.c"
-        verify_aosp_backport_source "UFS error handler host_sem 补充修复" \
-            "${UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT}" \
-            "${UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID}" \
-            "drivers/ufs/core/ufshcd.c"
-        verify_aosp_backport_source "UFS error handler WLUN 空指针补充修复" \
-            "${UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT}" \
-            "${UFS_ERROR_HANDLER_WLUN_PATCH_ID}" \
-            "drivers/ufs/core/ufshcd.c"
-        actual_sha256="$(sha256sum "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" | awk '{ print $1 }')"
-        [ "${actual_sha256}" = "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256}" ] || \
-            die "UFS AOSP 6.12.69 适配补丁 SHA-256 不匹配"
-        patch_id="$(git patch-id --stable < "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" | awk '{ print $1 }')"
-        [ "${patch_id}" = "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID}" ] || \
-            die "UFS AOSP 6.12.69 适配补丁 patch-id 不匹配"
-        git -C "${COMMON_DIR}" apply --reverse --check \
-            "${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH}" || \
-            die "UFS AOSP 6.12.69 适配补丁未完整应用"
-        ufs_error_handler="$(sed -n '/^static void ufshcd_err_handler(/,/^}/p' \
-            "${COMMON_DIR}/drivers/ufs/core/ufshcd.c")"
-        printf '%s\n' "${ufs_error_handler}" | \
-            grep -Fq 'if (hba->ufs_device_wlun) {' || \
-            die "UFS error handler 未保护未初始化 WLUN"
-        [ "$(printf '%s\n' "${ufs_error_handler}" | \
-            grep -Fc 'ufshcd_rpm_put(hba);')" = "2" ] || \
-            die "UFS error handler runtime PM 引用不平衡"
-        printf '%s\n' "${ufs_error_handler}" | awk '
-            /ufshcd_rpm_get_noresume\(hba\);/ { rpm = NR }
-            /down\(&hba->host_sem\);/ {
-                if (!rpm || rpm >= NR)
-                    exit 1
-                checked = 1
-                exit 0
-            }
-            END { if (!checked) exit 1 }
-        ' || die "UFS runtime PM 检查未置于 host_sem 获取之前"
-    fi
     if [ "${ENABLE_TIMER_BASE_FAST_PATH}" = "1" ]; then
         verify_linux_mainline_backport_applied "timer base 指针获取快路径优化" \
             "${TIMER_BASE_FAST_PATH_COMMIT}" \
@@ -1139,15 +1049,6 @@ verify_tcp_recv_mstamp_fast_path() {
         "${COMMON_DIR}/net/ipv4/tcp_input.c" || \
         die "TCP recv 时间戳快路径语义检查失败"
     log_success "TCP recv 时间戳快路径优化检查通过"
-}
-
-verify_idletimer_destroy_uaf_fix() {
-    [ "${ENABLE_IDLETIMER_DESTROY_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "IDLETIMER destroy UAF 修复" \
-        "${IDLETIMER_DESTROY_UAF_FIX_COMMIT}" \
-        "${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID}" \
-        "net/netfilter/xt_IDLETIMER.c"
-    log_success "IDLETIMER destroy UAF 修复检查通过"
 }
 
 verify_erofs_dir_tail_oob_fix() {
@@ -1670,184 +1571,6 @@ verify_android17_stock_system_dlkm_identity() {
 }
 
 verify_stage_abi() {
-    local abi_export_count abi_sha256 target_abi_count target_all_count
-    local abi_stg abi_stg_filter abi_stg_sha256 abi_stg_symbol_count
-    local abi_projection_stg abi_projection_filter abi_projection_stg_sha256
-    local abi_projection_stg_symbol_count stg_bin
-    local vendor_names xiaomi_names xiaomi_allowed vendor_old_names
-    local vendor_map vendor_crc vendor_count vendor_sha256 vendor_target_count
-    local xiaomi_missing_count
-    local duplicate_symbols allowed_count allowed_xiaomi_count allowed_mismatch
-    local allowed_expected_sha256 allowed_actual_sha256
-    local allowed_data allowed_expected allowed_actual
-    local all_symvers projected_all all_export_count all_export_sha256
-    local projected_vmlinux full_vmlinux
-    duplicate_symbols="$(awk -F '\t' 'NF >= 3 { print $2 }' "${BUILD_DIR}/Module.symvers" | \
-        LC_ALL=C sort | uniq -d | sed -n '1,20p')"
-    [ -z "${duplicate_symbols}" ] || \
-        die "Module.symvers 存在重复符号提供者:\n${duplicate_symbols}"
-
-    [ -s "${STAGE_ABI_ALLOWED_EXPORTS_FILE}" ] || die "缺少 r63 官方新增导出参考"
-    [ "$(sha256sum "${STAGE_ABI_ALLOWED_EXPORTS_FILE}" | awk '{ print $1 }')" = \
-      "${STAGE_ABI_ALLOWED_EXPORTS_SHA256}" ] || die "r63 官方新增导出参考 SHA-256 不匹配"
-
-    allowed_data="${AUDIT_DIR}/r63-reference-exports.tsv"
-    allowed_expected="${AUDIT_DIR}/r63-reference-tuples.tsv"
-    allowed_actual="${AUDIT_DIR}/r63-built-tuples.tsv"
-    all_symvers="${AUDIT_DIR}/module-symvers.full.tsv"
-    projected_all="${AUDIT_DIR}/module-symvers.r60-projection.tsv"
-    projected_vmlinux="${AUDIT_DIR}/vmlinux.r60-projection.tsv"
-    full_vmlinux="${AUDIT_DIR}/vmlinux.full.tsv"
-
-    awk -F '\t' '
-        /^#/ || NF == 0 { next }
-        NF != 6 || $1 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ ||
-        $2 !~ /^0x[0-9a-f]{8}$/ || $3 != "vmlinux" ||
-        $4 != "EXPORT_SYMBOL_GPL" || $5 != "-" ||
-        ($6 != "common" && $6 != "xiaomi") { bad=1; next }
-        { print }
-        END { exit bad }
-    ' "${STAGE_ABI_ALLOWED_EXPORTS_FILE}" > "${allowed_data}" || \
-        die "r63 官方新增导出参考格式非法"
-    LC_ALL=C sort -c -t "$(printf '\t')" -k1,1 "${allowed_data}" || \
-        die "r63 官方新增导出参考未按符号排序"
-    duplicate_symbols="$(cut -f1 "${allowed_data}" | uniq -d | sed -n '1,20p')"
-    [ -z "${duplicate_symbols}" ] || die "r63 官方新增导出参考存在重复符号:\n${duplicate_symbols}"
-    allowed_count="$(wc -l < "${allowed_data}" | tr -d ' ')"
-    allowed_xiaomi_count="$(awk -F '\t' '$6 == "xiaomi" { count++ } END { print count + 0 }' \
-        "${allowed_data}")"
-    [ "${allowed_count}" = "${STAGE_ABI_ALLOWED_EXPORTS_COUNT}" ] || \
-        die "r63 官方新增导出数量错误: ${allowed_count}"
-    [ "${allowed_xiaomi_count}" = "${STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT}" ] || \
-        die "r63 Xiaomi 新增导出数量错误: ${allowed_xiaomi_count}"
-    awk -F '\t' '{ printf "%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }' \
-        "${allowed_data}" > "${allowed_expected}"
-
-    LC_ALL=C awk -F '\t' '
-        NF != 5 || $1 !~ /^0x[0-9a-f]{8}$/ ||
-        $2 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ || $3 !~ /^[!-~]+$/ ||
-        ($4 != "EXPORT_SYMBOL" && $4 != "EXPORT_SYMBOL_GPL") ||
-        ($5 != "" && $5 !~ /^[!-~]+$/) { bad=1; next }
-        { printf "%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }
-        END { exit bad }
-    ' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort -t "$(printf '\t')" \
-        -k2,2 -k3,3 -k1,1 -k4,4 -k5,5 > "${all_symvers}" || \
-        die "Module.symvers 五列格式非法"
-
-    awk -F '\t' 'NR == FNR { allowed[$1]=1; next }
-        $2 in allowed {
-            namespace=$5
-            if (namespace == "") namespace="-"
-            printf "%s\t%s\t%s\t%s\t%s\n", $2, $1, $3, $4, namespace
-        }
-    ' "${allowed_data}" "${all_symvers}" > "${allowed_actual}"
-    allowed_expected_sha256="$(sha256sum "${allowed_expected}" | awk '{ print $1 }')"
-    allowed_actual_sha256="$(sha256sum "${allowed_actual}" | awk '{ print $1 }')"
-    audit_compare "module-symvers.r63-reference-tuples.sha256" \
-        "${allowed_expected_sha256}" "${allowed_actual_sha256}"
-
-    awk -F '\t' 'NR == FNR { allowed[$1]=1; next } !($2 in allowed) { print }' \
-        "${allowed_data}" "${all_symvers}" > "${projected_all}"
-    awk -F '\t' 'NR == FNR { allowed[$1]=1; next }
-        $3 == "vmlinux" && !($2 in allowed) { print $1 "\t" $2 }
-    ' "${allowed_data}" "${all_symvers}" | LC_ALL=C sort -k2,2 > "${projected_vmlinux}"
-    awk -F '\t' '$3 == "vmlinux" { print $1 "\t" $2 }' "${all_symvers}" | \
-        LC_ALL=C sort -k2,2 > "${full_vmlinux}"
-
-    all_export_count="$(wc -l < "${all_symvers}" | tr -d ' ')"
-    target_all_count="$((STAGE_ABI_ALL_EXPORT_COUNT + allowed_count))"
-    [ "${STAGE_ABI_TARGET_ALL_EXPORT_COUNT}" = "${target_all_count}" ] || \
-        die "r63 完整 Module.symvers 目标数量未由 r60 投影派生"
-    audit_compare "module-symvers.full.count" "${target_all_count}" "${all_export_count}"
-    audit_compare "module-symvers.full.sha256" "${STAGE_ABI_TARGET_ALL_SHA256}" \
-        "$(sha256sum "${all_symvers}" | awk '{ print $1 }')"
-    all_export_count="$(wc -l < "${projected_all}" | tr -d ' ')"
-    all_export_sha256="$(sha256sum "${projected_all}" | awk '{ print $1 }')"
-    audit_compare "module-symvers.r60-projection.count" \
-        "${STAGE_ABI_ALL_EXPORT_COUNT}" "${all_export_count}"
-    audit_compare "module-symvers.r60-projection.sha256" \
-        "${STAGE_ABI_ALL_SHA256}" "${all_export_sha256}"
-
-    verify_android17_stock_abi
-
-    abi_export_count="$(awk -F '\t' '$3 == "vmlinux" { count++ } END { print count + 0 }' "${all_symvers}")"
-    target_abi_count="$((STAGE_ABI_EXPORT_COUNT + allowed_count))"
-    [ "${STAGE_ABI_TARGET_EXPORT_COUNT}" = "${target_abi_count}" ] || \
-        die "r63 vmlinux 导出目标数量未由 r60 投影派生"
-    audit_compare "vmlinux.exports.full.count" "${target_abi_count}" "${abi_export_count}"
-    audit_compare "vmlinux.exports.full.sha256" "${STAGE_ABI_TARGET_SHA256}" \
-        "$(sha256sum "${full_vmlinux}" | awk '{ print $1 }')"
-    abi_export_count="$(wc -l < "${projected_vmlinux}" | tr -d ' ')"
-    abi_sha256="$(sha256sum "${projected_vmlinux}" | awk '{ print $1 }')"
-    audit_compare "vmlinux.exports.r60-projection.count" \
-        "${STAGE_ABI_EXPORT_COUNT}" "${abi_export_count}"
-    audit_compare "vmlinux.exports.r60-projection.sha256" \
-        "${STAGE_ABI_SHA256}" "${abi_sha256}"
-
-    vendor_names="${AUDIT_DIR}/vendor-symbol-list.full.txt"
-    xiaomi_names="${AUDIT_DIR}/xiaomi-symbol-list.txt"
-    xiaomi_allowed="${AUDIT_DIR}/xiaomi-r63-reference-exports.txt"
-    vendor_old_names="${AUDIT_DIR}/vendor-symbol-list.r60-projection.txt"
-    vendor_map="${AUDIT_DIR}/module-symvers.by-symbol.tsv"
-    vendor_crc="${AUDIT_DIR}/vendor-kmi.r60-projection.tsv"
-    awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' \
-        "${COMMON_DIR}/gki/aarch64/symbols/qcom" "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" | LC_ALL=C sort -u > "${vendor_names}"
-    awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' \
-        "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" | LC_ALL=C sort -u > "${xiaomi_names}"
-    awk -F '\t' '$6 == "xiaomi" { print $1 }' "${allowed_data}" > "${xiaomi_allowed}"
-    allowed_mismatch="$(LC_ALL=C comm -23 "${xiaomi_allowed}" "${xiaomi_names}" | sed -n '1,20p')"
-    xiaomi_missing_count="$(LC_ALL=C comm -23 "${xiaomi_allowed}" "${xiaomi_names}" | wc -l | tr -d ' ')"
-    audit_compare "vendor-symbol-list.r63-xiaomi-reference-missing" "0" "${xiaomi_missing_count}"
-    if [ -n "${allowed_mismatch}" ]; then
-        printf '[AUDIT] Xiaomi r63 reference export missing sample:\n%s\n' "${allowed_mismatch}"
-    fi
-    vendor_target_count="$((VENDOR_KMI_BASELINE_COUNT + allowed_xiaomi_count))"
-    audit_compare "vendor-symbol-list.full.count" "${vendor_target_count}" \
-        "$(wc -l < "${vendor_names}" | tr -d ' ')"
-    LC_ALL=C comm -23 "${vendor_names}" "${xiaomi_allowed}" > "${vendor_old_names}"
-    awk -F '\t' '{ print $2 "\t" $1 }' "${all_symvers}" | LC_ALL=C sort -k1,1 > "${vendor_map}"
-    LC_ALL=C join -t "$(printf '\t')" -1 1 -2 1 "${vendor_old_names}" "${vendor_map}" | \
-        awk -F '\t' '{ print $2 "\t" $1 }' > "${vendor_crc}"
-    vendor_count="$(wc -l < "${vendor_crc}" | tr -d ' ')"
-    vendor_sha256="$(sha256sum "${vendor_crc}" | awk '{ print $1 }')"
-    audit_compare "vendor-kmi.r60-projection.count" \
-        "${VENDOR_KMI_BASELINE_COUNT}" "${vendor_count}"
-    audit_compare "vendor-kmi.r60-projection.sha256" \
-        "${VENDOR_KMI_BASELINE_SHA256}" "${vendor_sha256}"
-
-    stg_bin="${CI_TOOLCHAIN_DIR}/build-tools/bin/stg"
-    abi_projection_filter="${AUDIT_DIR}/abi-exported-r60-projection-symbols"
-    abi_projection_stg="${AUDIT_DIR}/abi-exported-r60-projection.stg"
-    abi_stg_filter="${AUDIT_DIR}/abi-exported-symbols"
-    abi_stg="${AUDIT_DIR}/abi-exported.stg"
-    [ -x "${stg_bin}" ] || die "缺少 STG ABI 提取工具"
-    {
-        printf '[abi_symbol_list]\n'
-        cut -f2 "${projected_vmlinux}" | sed 's/^/  /'
-    } > "${abi_projection_filter}"
-    "${stg_bin}" --elf "${BUILD_DIR}/vmlinux" \
-        --symbols ":${abi_projection_filter}" --output "${abi_projection_stg}"
-    abi_projection_stg_symbol_count="$(grep -c '^elf_symbol {' "${abi_projection_stg}")"
-    abi_projection_stg_sha256="$(sha256sum "${abi_projection_stg}" | awk '{ print $1 }')"
-    audit_compare "stg.r60-projection.count" \
-        "${STAGE_ABI_EXPORT_COUNT}" "${abi_projection_stg_symbol_count}"
-    audit_compare "stg.r60-projection.sha256" \
-        "${STAGE_ABI_STG_SHA256}" "${abi_projection_stg_sha256}"
-
-    {
-        printf '[abi_symbol_list]\n'
-        awk -F '\t' '$3 == "vmlinux" { print $2 }' "${all_symvers}" | sed 's/^/  /'
-    } > "${abi_stg_filter}"
-    "${stg_bin}" --elf "${BUILD_DIR}/vmlinux" \
-        --symbols ":${abi_stg_filter}" --output "${abi_stg}"
-    abi_stg_symbol_count="$(grep -c '^elf_symbol {' "${abi_stg}")"
-    abi_stg_sha256="$(sha256sum "${abi_stg}" | awk '{ print $1 }')"
-    audit_compare "stg.full.count" "${STAGE_ABI_TARGET_EXPORT_COUNT}" "${abi_stg_symbol_count}"
-    audit_compare "stg.full.sha256" "${STAGE_ABI_TARGET_STG_SHA256}" "${abi_stg_sha256}"
-    log_success "固定 OTA 模块闭包通过；全量 ABI/KMI/STG 投影与差异审计保存在 ${AUDIT_DIR}"
-}
-
-verify_stage_abi_current() {
     local all_symvers full_vmlinux duplicate_symbols
     local all_export_count all_export_sha256 abi_export_count abi_sha256
     local vendor_names vendor_map vendor_crc vendor_count vendor_sha256
@@ -2090,9 +1813,6 @@ LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DI
 LINUX_STABLE_AUDIT_COMMIT="${LINUX_STABLE_AUDIT_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
 LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
-ENABLE_FUTEX_EXITING_POINTER_FIX="${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}"
-FUTEX_EXITING_POINTER_STABLE_COMMIT="${FUTEX_EXITING_POINTER_STABLE_COMMIT:-7475dfad10a05a5bfadebf5f2499bd61b19ed293}"
-FUTEX_EXITING_POINTER_PATCH_ID="${FUTEX_EXITING_POINTER_PATCH_ID:-419d86818387f958327185e62d1581e20b357a1d}"
 ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX="${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}"
 FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT="${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT:-0aacb6d18f76552e3e0ee25d9f40d21b3486f4cf}"
 FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID="${FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID:-88d19e4a03bfc1fdc6b126a65489e9d62eae2780}"
@@ -2105,32 +1825,14 @@ F2FS_LISTXATTR_BOUNDS_PATCH_ID="${F2FS_LISTXATTR_BOUNDS_PATCH_ID:-daaf1f38e2ef49
 ENABLE_BLKCG_RSTAT_RELEASE_FIX="${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}"
 BLKCG_RSTAT_RELEASE_STABLE_COMMIT="${BLKCG_RSTAT_RELEASE_STABLE_COMMIT:-bbebd9425cad3573d1527441753899b926525a0f}"
 BLKCG_RSTAT_RELEASE_PATCH_ID="${BLKCG_RSTAT_RELEASE_PATCH_ID:-5149120b23c377e425b11bfdcb1933e39245a1c7}"
-ENABLE_BINDER_TRANSACTION_LIFETIME_FIX="${ENABLE_BINDER_TRANSACTION_LIFETIME_FIX:-0}"
-BINDER_THREAD_RELEASE_STABLE_COMMIT="${BINDER_THREAD_RELEASE_STABLE_COMMIT:-e63032dc715026a96bcaa13d375a8e15c91caa84}"
-BINDER_THREAD_RELEASE_PATCH_ID="${BINDER_THREAD_RELEASE_PATCH_ID:-bf97fd8b894461ca62445978f4f6422c736611b3}"
-BINDER_FREE_TRANSACTION_STABLE_COMMIT="${BINDER_FREE_TRANSACTION_STABLE_COMMIT:-d45ef513eed1abebfec90c3cfb6ae50c2a4182db}"
-BINDER_FREE_TRANSACTION_PATCH_ID="${BINDER_FREE_TRANSACTION_PATCH_ID:-5c23abbc83c1a297d19eb039610151fb377ea188}"
-BINDER_TRANSACTION_LIFETIME_PATCH="${HOST_WORKSPACE_DIR}/${BINDER_TRANSACTION_LIFETIME_PATCH:-patches/backports/binder-transaction-lifetime-6.12.69.patch}"
-BINDER_TRANSACTION_LIFETIME_PATCH_SHA256="${BINDER_TRANSACTION_LIFETIME_PATCH_SHA256:-d6e052b736148f7b0434802e842ef6b54a52544eca5b59040d60e43bf1878e6f}"
-BINDER_TRANSACTION_LIFETIME_PATCH_ID="${BINDER_TRANSACTION_LIFETIME_PATCH_ID:-7d9a01598e58b1f513fcfbe481dc682bd62c1f5c}"
 ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX="${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}"
 F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT="${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT:-44480f7e3f8369671452c0d262831c51aa5a9c20}"
 F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID="${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID:-8d86d1f0ff47ad109628af8462bd4506c81dd4f6}"
 F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT="${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT:-b885c7783c19c36c7bf899492a0bffcd68afa8c7}"
 F2FS_GC_MERGE_DEADLOCK_PATCH_ID="${F2FS_GC_MERGE_DEADLOCK_PATCH_ID:-f1e7da7bf78fadbfd5f41ae8f1d1b196ee96b98d}"
-F2FS_FOREGROUND_GC_PATCH="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-6.12.69.patch}"
+F2FS_FOREGROUND_GC_PATCH="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-r21.patch}"
 F2FS_FOREGROUND_GC_PATCH_SHA256="${F2FS_FOREGROUND_GC_PATCH_SHA256:-f105094430a7d6c1101767b99da3dbf3d1434feba63ae4b99dec4394962947e9}"
 F2FS_FOREGROUND_GC_PATCH_ID="${F2FS_FOREGROUND_GC_PATCH_ID:-70442d9fb39ac24622e33231473817e5dc60249b}"
-ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX="${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX:-0}"
-UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT="${UFS_RUNTIME_SUSPEND_DEADLOCK_AOSP_COMMIT:-7ef00d3457d8c9cee0915ee0edff247031c36e0c}"
-UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID="${UFS_RUNTIME_SUSPEND_DEADLOCK_PATCH_ID:-d50c32d5918d030180b869f67a0ccd412b62209e}"
-UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT="${UFS_ERROR_HANDLER_HOST_SEM_AOSP_COMMIT:-459c818f8b5a562c34a27b915fae53792fa82a71}"
-UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID="${UFS_ERROR_HANDLER_HOST_SEM_PATCH_ID:-32e05876eba86a6181f7f2cbc538f2fb73e63528}"
-UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT="${UFS_ERROR_HANDLER_WLUN_AOSP_COMMIT:-a460b437af44c3317a57e637455ee891d0ee0352}"
-UFS_ERROR_HANDLER_WLUN_PATCH_ID="${UFS_ERROR_HANDLER_WLUN_PATCH_ID:-b4ec70973aaeef49650271cffd241533d63fac57}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH="${HOST_WORKSPACE_DIR}/${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH:-patches/backports/ufs-runtime-pm-error-recovery-6.12.69.patch}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_SHA256:-270397f549faaa45827b8011e708d0d7cca5a2600dd0c2ff08423ebcf124412c}"
-UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID="${UFS_RUNTIME_PM_ERROR_RECOVERY_PATCH_ID:-1480cec0fd66ee924f2a9488c44417709b5e3782}"
 ENABLE_TIMER_BASE_FAST_PATH="${ENABLE_TIMER_BASE_FAST_PATH:-0}"
 TIMER_BASE_FAST_PATH_COMMIT="${TIMER_BASE_FAST_PATH_COMMIT:-3ec955713d9617059d2fc8f2816d0b95ace72256}"
 TIMER_BASE_FAST_PATH_COMMIT_DATE="${TIMER_BASE_FAST_PATH_COMMIT_DATE:-2025-01-16}"
@@ -2150,9 +1852,6 @@ MEMCG_RSTAT_FAST_PATH_PATCH_ID="${MEMCG_RSTAT_FAST_PATH_PATCH_ID:-5b12701394b4f6
 ENABLE_TCP_RECV_MSTAMP_FAST_PATH="${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_IDLETIMER_DESTROY_UAF_FIX="${ENABLE_IDLETIMER_DESTROY_UAF_FIX:-0}"
-IDLETIMER_DESTROY_UAF_FIX_COMMIT="${IDLETIMER_DESTROY_UAF_FIX_COMMIT:-9317fe019b5be27e888f02629a3de1f4d78cb1aa}"
-IDLETIMER_DESTROY_UAF_FIX_PATCH_ID="${IDLETIMER_DESTROY_UAF_FIX_PATCH_ID:-2e6c62f1168d9eb5163373eac35801caa4d4a631}"
 ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
 EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
 EROFS_DIR_TAIL_OOB_FIX_PATCH_ID="${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID:-86095c51c9af49433ddbba4d32f194c2d3a7a6da}"
@@ -2167,7 +1866,7 @@ IPV6_MLD_DELAYED_WORK_STABLE_COMMIT="${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-ebbe
 IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT="${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT:-9b26518b6896a16b809b1e42986f4ebac7bccc1e}"
 IPV6_MLD_DELAYED_WORK_COMMIT_DATE="${IPV6_MLD_DELAYED_WORK_COMMIT_DATE:-2026-07-24}"
 IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID="${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID:-4fcf3ce5ec83da4c8203e344d896802035700c78}"
-IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ipv6-mld-delayed-work-uaf-6.12.69.patch}"
+IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ipv6-mld-delayed-work-uaf-r21.patch}"
 IPV6_MLD_DELAYED_WORK_PATCH_SHA256="${IPV6_MLD_DELAYED_WORK_PATCH_SHA256:-7bd3339c3a5db6b1aa034585a5bb5eb53d90a0ac98775e5bdfc941547d5c1c5b}"
 IPV6_MLD_DELAYED_WORK_PATCH_ID="${IPV6_MLD_DELAYED_WORK_PATCH_ID:-8d28904741b04eefe83489706946e55a0682fe08}"
 IPV6_MLD_DELAYED_WORK_PATCH_FILE="${HOST_WORKSPACE_DIR}/${IPV6_MLD_DELAYED_WORK_PATCH}"
@@ -2587,10 +2286,16 @@ verify_stage5_selected_build
 
 verify_symbol_list_exports "${COMMON_DIR}/gki/aarch64/symbols/qcom" "QCOM"
 verify_symbol_list_exports "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" "Xiaomi"
-verify_stage_abi_current
+verify_stage_abi
 
-EMBEDDED_CONFIG_LINES="$("${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" | wc -l | tr -d ' ')"
-EMBEDDED_CONFIG_SHA256="$("${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" | sha256sum | awk '{ print $1 }')"
+EMBEDDED_CONFIG_FILE="${AUDIT_DIR}/image.config.current"
+EMBEDDED_CONFIG_LOG="${AUDIT_DIR}/image-config-extract.stderr"
+if ! "${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" \
+    > "${EMBEDDED_CONFIG_FILE}" 2> "${EMBEDDED_CONFIG_LOG}"; then
+    die "无法从 Image 提取内嵌配置:\n$(sed -n '1,20p' "${EMBEDDED_CONFIG_LOG}")"
+fi
+EMBEDDED_CONFIG_LINES="$(wc -l < "${EMBEDDED_CONFIG_FILE}" | tr -d ' ')"
+EMBEDDED_CONFIG_SHA256="$(sha256sum "${EMBEDDED_CONFIG_FILE}" | awk '{ print $1 }')"
 GENERATED_CONFIG_SHA256="$(sha256sum "${BUILD_DIR}/.config" | awk '{ print $1 }')"
 [ "${EMBEDDED_CONFIG_SHA256}" = "${GENERATED_CONFIG_SHA256}" ] || \
     die "Image 内嵌配置与本次已审查生成配置不一致"

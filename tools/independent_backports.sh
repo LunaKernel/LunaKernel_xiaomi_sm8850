@@ -149,7 +149,7 @@ verify_sources() {
 	local manifest
 	verify_manifests
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" verify-sources
+		run_manifest "${manifest}" verify-sources >/dev/null
 	done
 }
 
@@ -223,7 +223,7 @@ apply_all() {
 	local tree="$1" manifest
 	verify_sources
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" apply "${tree}"
+		run_manifest "${manifest}" apply "${tree}" >/dev/null
 	done
 }
 
@@ -231,7 +231,7 @@ verify_applied() {
 	local tree="$1" manifest
 	verify_sources
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" verify-applied "${tree}"
+		run_manifest "${manifest}" verify-applied "${tree}" >/dev/null
 	done
 }
 

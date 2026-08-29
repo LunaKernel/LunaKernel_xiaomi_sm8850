@@ -2,7 +2,7 @@
 
 # Luna Kernel
 
-Luna Kernel is a Linux 6.12.69, 4 KiB GKI kernel for the Xiaomi 17 (`pudding`) HyperOS 4 (Android 17) ROM baseline currently under validation.
+Luna Kernel is a Linux 6.12.81, 4 KiB GKI kernel for the Xiaomi 17 (`pudding`) HyperOS 4 (Android 17) ROM baseline currently under validation.
 
 The name Luna evokes a small, quiet, and clean moon. The project uses Xiaomi's public kernel sources and the official AOSP GKI as its baseline, then adds features, bug fixes, and lightweight performance improvements with traceable upstream origins and enforced validation gates.
 
@@ -15,7 +15,7 @@ The name Luna evokes a small, quiet, and clean moon. The project uses Xiaomi's p
 | Device | Xiaomi 17 |
 | Codename | `pudding` |
 | OS | HyperOS 4 / Android 17 (validation in progress) |
-| Kernel | Linux 6.12.69 |
+| Kernel | Linux 6.12.81 |
 | Page size | 4 KiB |
 | boot partition | 96 MiB (`100663296` bytes) |
 
@@ -26,7 +26,7 @@ Only `pudding` is in scope. Support must not be inferred for other devices.
 | Purpose | Official upstream | Pinned revision |
 | --- | --- | --- |
 | Xiaomi SM8850 SoC/vendor public baseline | [MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource) | `popsicle-w-oss` / `45705be1220b4cfa8100516ad86711656c0b634e` |
-| GKI Image source | [AOSP kernel/common](https://android.googlesource.com/kernel/common) | `android16-6.12-2026-03_r63` / `625bef5cf43deeb3fca2e75202bcf958b6b976e5` |
+| GKI Image source | [AOSP kernel/common](https://android.googlesource.com/kernel/common) | `android16-6.12-2026-06_r21` / `0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28` |
 
 The final `Image` is built from AOSP common. Xiaomi's public sources provide the SoC baseline and compatibility metadata. The `android16` text in the AOSP branch name identifies the GKI/KMI branch; it does not mean that the target OS is Android 16.
 
@@ -45,10 +45,10 @@ The kernel also retains BBR v1, FQ, seccomp, CFI, BPF JIT, module BTF, FUSE BPF,
 
 ## Fixes and improvements
 
-Luna backports changes from official AOSP/Linux history onto the pinned r63 baseline, primarily covering:
+Luna uses the newer official r21 baseline and backports only changes that it still lacks from official AOSP/Linux history, primarily covering:
 
 - F2FS foreground GC and ACL/xattr fixes, plus EROFS and ext4 bounds fixes.
-- Fixes for futex PI, blk-cgroup, Binder, UFS, IDLETIMER, IPv6 MLD, and KVM compound-page pinning; proactive-reclaim freezer handling is provided by the r63 baseline.
+- Concurrency, bounds, and lifetime fixes for futex PI, blk-cgroup, IPv6 MLD, and KVM compound-page pinning; newer Binder, UFS, IDLETIMER, and proactive-reclaim freezer fixes are provided directly by r21.
 - KernelSU Manager identity verification, low-memory failure paths, and Baseband Guard device-identity and write-path fixes.
 - Selected Linux/AOSP fixes for F2FS/UFS, block and memory management, BPF, TCP/IPv6, and IPSet concurrency and lifetime bugs.
 - Fast-path improvements for timer bases, F2FS direct I/O, EAS cpumasks, blk-wbt, memcg rstat, and TCP receive timestamps.
@@ -76,7 +76,7 @@ Linux is recommended. After installing Bash, Git, curl, tar, unzip, 7-Zip, and G
 - `patch_external.sh` integrates pinned independent components.
 - `build.sh` configures and builds the kernel, validates the same-OTA boot module closure, and reports configuration, module, and ABI/KMI differences.
 
-The build-output directory for this branch is `kernel_out/android17-r63/`. Candidate ZIP, `Image`, complete compatibility-audit archive, Manager APK, and IPSet artifacts are produced only when the pinned same-OTA `tmp/os4/system_dlkm.img` passes identity, integrity, and module-closure gates and all reference-snapshot drift has been reviewed.
+The build-output directory for this branch is `kernel_out/android17-r21/`. Candidate ZIP, `Image`, complete compatibility-audit archive, Manager APK, and IPSet artifacts are produced only when the pinned same-OTA `tmp/os4/system_dlkm.img` passes identity, integrity, and module-closure gates and all reference-snapshot drift has been reviewed.
 
 Reproducing the stock ABI manifest requires the same-OTA `boot.img`, `vendor_boot.img`, `vendor_dlkm.img`, and `system_dlkm.img` under `tmp/os4/`, together with the tools verified by the extraction script. `system_dlkm.img` is a compatibility input only and is never included in the flashable package.
 
