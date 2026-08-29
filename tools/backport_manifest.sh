@@ -113,6 +113,9 @@ manifest_group_sequence() {
 
 validate_manifest() {
 	local actual_sha256 expected_header
+	[ "${LINUX_STABLE_STANDALONE_COMMITS:-}" = \
+		"03cb8cc2961f5f781d12e903782cb3815ed84b1c" ] || \
+		die "Linux stable-only 来源例外集合异常"
 	[ -f "${MANIFEST}" ] && [ ! -L "${MANIFEST}" ] || die "r21 回移清单缺失或不安全"
 	[ -n "${MANIFEST_SHA256}" ] || die "缺少 r21 回移清单 SHA-256"
 	actual_sha256="$(sha256sum "${MANIFEST}" | awk '{ print $1 }')"
@@ -252,11 +255,45 @@ verify_source_row() {
 	[ "$(wc -l <<<"${patch_output}")" = 1 ] || die "${group} 官方提交 patch-id 输出异常"
 	actual_patch_id="${patch_output%% *}"
 	[ "${actual_patch_id}" = "${patch_id}" ] || die "${group} 官方提交 patch-id 不匹配"
+	if [ "${source}" = stable ]; then
+		verify_stable_origin "${group}" "${commit}" "${actual_paths}"
+	fi
 
 	if [ "${action}" = adapt ]; then
 		verify_project_patch "${group}" "${paths}" "${project_patch}" \
 			"${project_sha}" "${project_patch_id}"
 	fi
+}
+
+verify_stable_origin() {
+	local group="$1" commit="$2" stable_paths="$3"
+	local message upstream upstream_paths stable_subject upstream_subject count
+	case " ${LINUX_STABLE_STANDALONE_COMMITS:-} " in
+		*" ${commit} "*) return ;;
+	esac
+	message="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${STABLE_DIR}" \
+		show -s --format=%B "${commit}")"
+	upstream="$(printf '%s\n' "${message}" | sed -n -E \
+		-e 's/^\[ Upstream commit ([0-9a-f]{40}) \]$/\1/p' \
+		-e 's/^commit ([0-9a-f]{40}) upstream\.$/\1/p' | LC_ALL=C sort -u)"
+	count="$(grep -c . <<<"${upstream}" || true)"
+	[ "${count}" = 1 ] || die "${group} stable 提交未唯一绑定 mainline 原始提交"
+	env GIT_NO_LAZY_FETCH=1 git -C "${MAINLINE_DIR}" cat-file \
+		-e "${upstream}^{commit}" 2>/dev/null || \
+		die "${group} mainline 原始提交对象缺失，请先运行 ./init.sh"
+	env GIT_NO_LAZY_FETCH=1 git -C "${MAINLINE_DIR}" merge-base --is-ancestor \
+		"${upstream}" "${LINUX_MAINLINE_AUDIT_COMMIT}" || \
+		die "${group} mainline 原始提交不属于固定审计快照"
+	upstream_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${MAINLINE_DIR}" diff-tree \
+		--no-commit-id --name-only -r "${upstream}" | LC_ALL=C sort -u | paste -sd, -)"
+	[ "${upstream_paths}" = "${stable_paths}" ] || \
+		die "${group} stable 与 mainline 原始提交路径不一致"
+	stable_subject="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${STABLE_DIR}" \
+		show -s --format=%s "${commit}")"
+	upstream_subject="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${MAINLINE_DIR}" \
+		show -s --format=%s "${upstream}")"
+	[ "${stable_subject}" = "${upstream_subject}" ] || \
+		die "${group} stable 与 mainline 原始提交标题不一致"
 }
 
 verify_project_patch() {

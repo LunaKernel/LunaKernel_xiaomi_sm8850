@@ -272,6 +272,9 @@ verify_linux_stable_source() {
         cat-file -e "${commit}^{commit}" 2>/dev/null || \
         die "${label}对象缺失，请先运行 ./init.sh"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
+        merge-base --is-ancestor "${commit}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
+        die "${label} 不属于固定 Linux 6.12.y 审计快照"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
         -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
     patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
     rm -f "${patch_file}"

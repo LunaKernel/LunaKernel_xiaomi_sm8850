@@ -866,6 +866,9 @@ verify_linux_stable_source() {
     local actual_paths patch_file patch_id
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
         cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
+    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
+        merge-base --is-ancestor "${commit}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
+        die "${label} 不属于固定 Linux 6.12.y 审计快照"
     actual_paths="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
         diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
     [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常: ${actual_paths}"
