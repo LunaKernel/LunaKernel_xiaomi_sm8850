@@ -124,9 +124,9 @@ ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
 ORB_LINUX_WORKSPACE="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME:-workspace}/workspace"
 run_in_orb_if_needed "$@"
 
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
 [ -d "${COMMON_DIR}/.git" ] || die "GKI common 未初始化，请先运行 ./init.sh"
-[ "$(git -C "${COMMON_DIR}" rev-parse HEAD)" = "${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}" ] || die "GKI common pin 不匹配"
+[ "$(git -C "${COMMON_DIR}" rev-parse HEAD)" = "${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}" ] || die "GKI common pin 不匹配"
 
 AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
@@ -138,6 +138,9 @@ verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
 reject_git_object_overrides "AOSP common 审计仓库" "${AOSP_BACKPORT_AUDIT_DIR}"
 reject_git_object_overrides "Linux stable 审计仓库" "${LINUX_STABLE_AUDIT_DIR}"
 reject_git_object_overrides "Linux mainline 审计仓库" "${LINUX_MAINLINE_AUDIT_DIR}"
+TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
+TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
+TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
 ENABLE_FUTEX_EXITING_POINTER_FIX="${ENABLE_FUTEX_EXITING_POINTER_FIX:-0}"
 FUTEX_EXITING_POINTER_STABLE_COMMIT="${FUTEX_EXITING_POINTER_STABLE_COMMIT:-7475dfad10a05a5bfadebf5f2499bd61b19ed293}"
 FUTEX_EXITING_POINTER_PATCH_ID="${FUTEX_EXITING_POINTER_PATCH_ID:-419d86818387f958327185e62d1581e20b357a1d}"
@@ -212,7 +215,7 @@ IPV6_MLD_DELAYED_WORK_STABLE_COMMIT="${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-ebbe
 IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT="${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT:-9b26518b6896a16b809b1e42986f4ebac7bccc1e}"
 IPV6_MLD_DELAYED_WORK_COMMIT_DATE="${IPV6_MLD_DELAYED_WORK_COMMIT_DATE:-2026-07-24}"
 IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID="${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID:-4fcf3ce5ec83da4c8203e344d896802035700c78}"
-IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ipv6-mld-delayed-work-uaf-6.12.69.patch}"
+IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ipv6-mld-delayed-work-uaf-r21.patch}"
 IPV6_MLD_DELAYED_WORK_PATCH_SHA256="${IPV6_MLD_DELAYED_WORK_PATCH_SHA256:-7bd3339c3a5db6b1aa034585a5bb5eb53d90a0ac98775e5bdfc941547d5c1c5b}"
 IPV6_MLD_DELAYED_WORK_PATCH_ID="${IPV6_MLD_DELAYED_WORK_PATCH_ID:-8d28904741b04eefe83489706946e55a0682fe08}"
 IPV6_MLD_DELAYED_WORK_PATCH_FILE="${HOST_WORKSPACE_DIR}/${IPV6_MLD_DELAYED_WORK_PATCH}"
@@ -369,6 +372,11 @@ apply_project_patch_once() {
         die "${label}状态不完整"
 }
 
+apply_project_patch_once "AOSP r21 Tegra 不透明指针 KMI 兼容标注" \
+    "${TEGRA_MC_KMI_PATCH_FILE}" \
+    "${TEGRA_MC_KMI_PATCH_SHA256}" \
+    "${TEGRA_MC_KMI_PATCH_ID}"
+
 if [ "${ENABLE_TIMER_BASE_FAST_PATH}" = "1" ]; then
     verify_linux_mainline_source_exact "Linux mainline timer base 指针获取快路径优化" \
         "${TIMER_BASE_FAST_PATH_COMMIT}" \
@@ -481,7 +489,7 @@ if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX}" = "1" ]; then
         "${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID}" \
         "include/net/addrconf.h net/ipv6/mcast.c" \
         "${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}"
-    apply_project_patch_once "Linux IPv6 MLD delayed-work UAF 修复（AOSP 6.12.69 上下文适配）" \
+    apply_project_patch_once "Linux IPv6 MLD delayed-work UAF 修复（r21 上下文适配）" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_FILE}" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_SHA256}" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_ID}"
@@ -613,7 +621,7 @@ if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX}" = "1" ]; then
     verify_linux_stable_source "Linux F2FS GC_MERGE 写回死锁补充修复" \
         "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" \
         "${F2FS_GC_MERGE_DEADLOCK_PATCH_ID}"
-    apply_project_patch_once "Linux F2FS 前台 GC 写回死锁组合修复（AOSP 6.12.69 上下文适配）" \
+    apply_project_patch_once "Linux F2FS 前台 GC 写回死锁组合修复（r21 上下文适配）" \
         "${F2FS_FOREGROUND_GC_PATCH}" \
         "${F2FS_FOREGROUND_GC_PATCH_SHA256}" \
         "${F2FS_FOREGROUND_GC_PATCH_ID}"
@@ -657,11 +665,11 @@ if [ "${ENABLE_UFS_RUNTIME_PM_ERROR_RECOVERY_FIX}" = "1" ]; then
     log_success "AOSP UFS runtime PM 错误恢复组合修复状态正确"
 fi
 
-if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
-    bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" apply "${COMMON_DIR}"
+if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
+    bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" apply "${COMMON_DIR}"
 fi
 
-bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
     apply "${COMMON_DIR}"
 
 log_success "内部 patch 阶段完成"

@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	ufs_rtc_suspend_race	direct	stable	linux-6.12.y	0267a9417dfe1342acbdfb8489b593ac4e6fa308	2026-08-09	611a54bf4a1cedc8bebbef1fb99f938221471563	drivers/ufs/core/ufshcd.c	-	-	-

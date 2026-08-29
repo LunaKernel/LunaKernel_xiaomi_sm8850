@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	f2fs_compress_cache_inode	adapt	stable	linux-6.12.y	16161444c30d8dff9428abbae42b72ce4e32a932	2026-07-04	de2d82826612b438d68bc1261dee8ab68b18c823	fs/f2fs/inode.c	patches/backports/f2fs-compress-cache-inode-r63.patch	d96f921bb603096276e9a0626ec65aba4e6a610c3ffe6f4db2675b597173f6a1	4d7333de80d33faf823bf1c9e55e6f4616822e9c

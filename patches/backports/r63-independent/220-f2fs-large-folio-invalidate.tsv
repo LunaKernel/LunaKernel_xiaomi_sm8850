@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	f2fs_large_folio_invalidate	direct	aosp	android16-6.12-2026-06_r19	4f69fc7b210c4319e69b69cd861e6efa5b096e2a	2026-08-25	40ecedff2a0cbb746a7746e39a20d524865105be	fs/f2fs/data.c	-	-	-

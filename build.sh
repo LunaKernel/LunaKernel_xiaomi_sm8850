@@ -487,7 +487,7 @@ verify_final_source_deltas() {
     verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
     verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
     ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
-    bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+    bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
         verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
     [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
         die "KernelSU 精确差异指纹不匹配: ${ksu_sha256}"
@@ -734,10 +734,10 @@ verify_susfs_source_state() {
         if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' block/blk-wbt.c
         fi
-        if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
-            bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" list-paths
+        if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
+            bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" list-paths
         fi
-        bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" list-paths
+        bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" list-paths
     } | sort -u > "${allowed_common}"
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
@@ -1033,13 +1033,13 @@ verify_first_batch_linux_backports() {
             "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}^")" = \
             "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" ] || \
             die "F2FS GC 死锁组合提交顺序异常"
-        verify_project_patch "F2FS GC 死锁 AOSP 6.12.69 适配补丁" \
+        verify_project_patch "F2FS GC 死锁 AOSP r21 适配补丁" \
             "${F2FS_FOREGROUND_GC_PATCH}" \
             "${F2FS_FOREGROUND_GC_PATCH_SHA256}" \
             "${F2FS_FOREGROUND_GC_PATCH_ID}"
         git -C "${COMMON_DIR}" apply --reverse --check \
             "${F2FS_FOREGROUND_GC_PATCH}" || \
-            die "F2FS GC 死锁 AOSP 6.12.69 适配补丁未完整应用"
+            die "F2FS GC 死锁 AOSP r21 适配补丁未完整应用"
     fi
     log_success "第一批 Linux 稳定修复来源、路径与应用状态检查通过"
 }
@@ -1186,13 +1186,13 @@ verify_ipv6_mld_delayed_work_uaf_fix() {
         "${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID}" \
         "include/net/addrconf.h net/ipv6/mcast.c" \
         "${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}"
-    verify_project_patch "IPv6 MLD delayed-work AOSP 6.12.69 适配补丁" \
+    verify_project_patch "IPv6 MLD delayed-work AOSP r21 适配补丁" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_FILE}" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_SHA256}" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_ID}"
     git -C "${COMMON_DIR}" apply --reverse --check \
         "${IPV6_MLD_DELAYED_WORK_PATCH_FILE}" || \
-        die "IPv6 MLD delayed-work AOSP 6.12.69 适配补丁未完整应用"
+        die "IPv6 MLD delayed-work AOSP r21 适配补丁未完整应用"
     [ "$(grep -Fc 'in6_dev_hold_safe(idev)' "${COMMON_DIR}/net/ipv6/mcast.c")" = "5" ] || \
         die "IPv6 MLD delayed-work 安全引用覆盖点异常"
     grep -Fq 'return refcount_inc_not_zero(&idev->refcnt);' \
@@ -1213,11 +1213,11 @@ verify_android17_selected_fixes() {
     fi
     grep -Fq 'unlikely(sc->proactive && signal_pending(current))' \
         "${COMMON_DIR}/mm/vmscan.c" || \
-        die "r63 基线缺少主动回收内层扫描 freezer 检查"
+        die "r21 基线缺少主动回收内层扫描 freezer 检查"
     grep -A1 -F 'if (signal_pending(current))' \
         "${COMMON_DIR}/mm/memcontrol.c" | grep -Fq 'return -ERESTARTSYS;' || \
-        die "r63 基线主动回收 freezer 返回值语义异常"
-    log_success "Android 17 r63 基线与所选后续修复检查通过"
+        die "r21 基线主动回收 freezer 返回值语义异常"
+    log_success "Android 17 r21 基线与所选后续修复检查通过"
 }
 
 verify_lsm_slot_capacity() {
@@ -1846,6 +1846,85 @@ verify_stage_abi() {
     log_success "固定 OTA 模块闭包通过；全量 ABI/KMI/STG 投影与差异审计保存在 ${AUDIT_DIR}"
 }
 
+verify_stage_abi_current() {
+    local all_symvers full_vmlinux duplicate_symbols
+    local all_export_count all_export_sha256 abi_export_count abi_sha256
+    local vendor_names vendor_map vendor_crc vendor_count vendor_sha256
+    local abi_stg abi_stg_filter abi_stg_symbol_count abi_stg_sha256 stg_bin
+
+    duplicate_symbols="$(awk -F '\t' 'NF >= 3 { print $2 }' "${BUILD_DIR}/Module.symvers" | \
+        LC_ALL=C sort | uniq -d | sed -n '1,20p')"
+    [ -z "${duplicate_symbols}" ] || \
+        die "Module.symvers 存在重复符号提供者:\n${duplicate_symbols}"
+
+    all_symvers="${AUDIT_DIR}/module-symvers.full.tsv"
+    full_vmlinux="${AUDIT_DIR}/vmlinux.full.tsv"
+    LC_ALL=C awk -F '\t' '
+        NF != 5 || $1 !~ /^0x[0-9a-f]{8}$/ ||
+        $2 !~ /^[A-Za-z_][A-Za-z0-9_]*$/ || $3 !~ /^[!-~]+$/ ||
+        ($4 != "EXPORT_SYMBOL" && $4 != "EXPORT_SYMBOL_GPL") ||
+        ($5 != "" && $5 !~ /^[!-~]+$/) { bad=1; next }
+        { printf "%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }
+        END { exit bad }
+    ' "${BUILD_DIR}/Module.symvers" | LC_ALL=C sort -t "$(printf '\t')" \
+        -k2,2 -k3,3 -k1,1 -k4,4 -k5,5 > "${all_symvers}" || \
+        die "Module.symvers 五列格式非法"
+    awk -F '\t' '$3 == "vmlinux" { print $1 "\t" $2 }' "${all_symvers}" | \
+        LC_ALL=C sort -k2,2 > "${full_vmlinux}"
+
+    all_export_count="$(wc -l < "${all_symvers}" | tr -d ' ')"
+    all_export_sha256="$(sha256sum "${all_symvers}" | awk '{ print $1 }')"
+    audit_compare "module-symvers.full.count" \
+        "${STAGE_ABI_ALL_EXPORT_COUNT}" "${all_export_count}"
+    audit_compare "module-symvers.full.sha256" \
+        "${STAGE_ABI_ALL_SHA256}" "${all_export_sha256}"
+
+    verify_android17_stock_abi
+
+    abi_export_count="$(wc -l < "${full_vmlinux}" | tr -d ' ')"
+    abi_sha256="$(sha256sum "${full_vmlinux}" | awk '{ print $1 }')"
+    audit_compare "vmlinux.exports.full.count" \
+        "${STAGE_ABI_EXPORT_COUNT}" "${abi_export_count}"
+    audit_compare "vmlinux.exports.full.sha256" \
+        "${STAGE_ABI_SHA256}" "${abi_sha256}"
+
+    vendor_names="${AUDIT_DIR}/vendor-symbol-list.full.txt"
+    vendor_map="${AUDIT_DIR}/module-symvers.by-symbol.tsv"
+    vendor_crc="${AUDIT_DIR}/vendor-kmi.full.tsv"
+    awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print
+    }' "${COMMON_DIR}/gki/aarch64/symbols/qcom" \
+       "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" | LC_ALL=C sort -u > "${vendor_names}"
+    awk -F '\t' '{ print $2 "\t" $1 }' "${all_symvers}" | \
+        LC_ALL=C sort -k1,1 > "${vendor_map}"
+    LC_ALL=C join -t "$(printf '\t')" -1 1 -2 1 "${vendor_names}" "${vendor_map}" | \
+        awk -F '\t' '{ print $2 "\t" $1 }' > "${vendor_crc}"
+    vendor_count="$(wc -l < "${vendor_crc}" | tr -d ' ')"
+    [ "${vendor_count}" = "$(wc -l < "${vendor_names}" | tr -d ' ')" ] || \
+        die "QCOM/Xiaomi symbol list 含未解析导出"
+    vendor_sha256="$(sha256sum "${vendor_crc}" | awk '{ print $1 }')"
+    audit_compare "vendor-kmi.full.count" \
+        "${VENDOR_KMI_BASELINE_COUNT}" "${vendor_count}"
+    audit_compare "vendor-kmi.full.sha256" \
+        "${VENDOR_KMI_BASELINE_SHA256}" "${vendor_sha256}"
+
+    stg_bin="${CI_TOOLCHAIN_DIR}/build-tools/bin/stg"
+    abi_stg_filter="${AUDIT_DIR}/abi-exported-symbols"
+    abi_stg="${AUDIT_DIR}/abi-exported.stg"
+    [ -x "${stg_bin}" ] || die "缺少 STG ABI 提取工具"
+    {
+        printf '[abi_symbol_list]\n'
+        awk -F '\t' '$3 == "vmlinux" { print $2 }' "${all_symvers}" | sed 's/^/  /'
+    } > "${abi_stg_filter}"
+    "${stg_bin}" --elf "${BUILD_DIR}/vmlinux" \
+        --symbols ":${abi_stg_filter}" --output "${abi_stg}"
+    abi_stg_symbol_count="$(grep -c '^elf_symbol {' "${abi_stg}")"
+    abi_stg_sha256="$(sha256sum "${abi_stg}" | awk '{ print $1 }')"
+    audit_compare "stg.full.count" "${STAGE_ABI_EXPORT_COUNT}" "${abi_stg_symbol_count}"
+    audit_compare "stg.full.sha256" "${STAGE_ABI_STG_SHA256}" "${abi_stg_sha256}"
+    log_success "固定 OTA 模块闭包通过；全量 ABI/KMI/STG 差异审计保存在 ${AUDIT_DIR}"
+}
+
 build_ipset_userspace() {
     local ndk_bin cc userspace_root prefix libmnl_build ipset_build binary module_dir module_zip needed unexpected_needed
     [ "${ENABLE_IPSET}" = "1" ] || return
@@ -1944,9 +2023,12 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.g
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-03_r63}"
-COMMON_COMMIT="${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
+COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-06_r21}"
+COMMON_COMMIT="${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
+TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
+TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-v3.2.5}"
@@ -2111,24 +2193,23 @@ XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
 verify_repo_identity "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_COMMIT}"
-verify_repo_identity "Android 16 GKI common r63" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
-[ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "6.12.69" ] || \
-    die "GKI common 版本不是 6.12.69"
+verify_repo_identity "Android 16 GKI common r21" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
+[ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "6.12.81" ] || \
+    die "GKI common 版本不是 6.12.81"
 [ "$(sed -n 's/^KMI_GENERATION=//p' "${COMMON_DIR}/build.config.constants")" = "6" ] || \
     die "GKI common KMI generation 不是 6"
 verify_first_batch_linux_backports
 verify_second_batch_backports
 verify_memcg_rstat_fast_path
 verify_tcp_recv_mstamp_fast_path
-verify_idletimer_destroy_uaf_fix
 verify_erofs_dir_tail_oob_fix
 verify_ext4_xattr_oob_fix
 verify_ipv6_mld_uaf_fix
 verify_ipv6_mld_delayed_work_uaf_fix
 verify_android17_selected_fixes
-[ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" != "1" ] || \
-    bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" verify-applied "${COMMON_DIR}"
-bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+[ "${ENABLE_SELECTED_BACKPORTS:-0}" != "1" ] || \
+    bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" verify-applied "${COMMON_DIR}"
+bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
     verify-applied "${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_source_state
 [ "${ENABLE_SUSFS}" != "1" ] || verify_susfs_source_state
@@ -2137,7 +2218,7 @@ bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
 [ "$(sed -n '2p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化"
 
 BUILD_JOBS="$(detect_cpu_count)"
-BUILD_DIR="${BUILD_DIR:-/tmp/luna_xiaomi17_android17_aosp_6.12.69_r63_out}"
+BUILD_DIR="${BUILD_DIR:-/tmp/luna_xiaomi17_android17_aosp_6.12.81_r21_out}"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
 STAGE_MODULE_COUNT="${STAGE_MODULE_COUNT:-}"
@@ -2149,15 +2230,6 @@ STAGE_ABI_SHA256="${STAGE_ABI_SHA256:-}"
 STAGE_ABI_STG_SHA256="${STAGE_ABI_STG_SHA256:-}"
 STAGE_ABI_ALL_EXPORT_COUNT="${STAGE_ABI_ALL_EXPORT_COUNT:-}"
 STAGE_ABI_ALL_SHA256="${STAGE_ABI_ALL_SHA256:-}"
-STAGE_ABI_ALLOWED_EXPORTS_FILE="$(resolve_workspace_path "${STAGE_ABI_ALLOWED_EXPORTS:-abi/android16-6.12-r60-to-r63-allowed-exports.tsv}")"
-STAGE_ABI_ALLOWED_EXPORTS_COUNT="${STAGE_ABI_ALLOWED_EXPORTS_COUNT:-}"
-STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT="${STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT:-}"
-STAGE_ABI_ALLOWED_EXPORTS_SHA256="${STAGE_ABI_ALLOWED_EXPORTS_SHA256:-}"
-STAGE_ABI_TARGET_ALL_EXPORT_COUNT="${STAGE_ABI_TARGET_ALL_EXPORT_COUNT:-}"
-STAGE_ABI_TARGET_ALL_SHA256="${STAGE_ABI_TARGET_ALL_SHA256:-}"
-STAGE_ABI_TARGET_EXPORT_COUNT="${STAGE_ABI_TARGET_EXPORT_COUNT:-}"
-STAGE_ABI_TARGET_SHA256="${STAGE_ABI_TARGET_SHA256:-}"
-STAGE_ABI_TARGET_STG_SHA256="${STAGE_ABI_TARGET_STG_SHA256:-}"
 ANDROID17_STOCK_ABI_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_ABI_MANIFEST:-abi/xiaomi17-android17-stock-common-abi.tsv}")"
 ANDROID17_STOCK_ABI_COUNT="${ANDROID17_STOCK_ABI_COUNT:-}"
 ANDROID17_STOCK_ABI_SHA256="${ANDROID17_STOCK_ABI_SHA256:-}"
@@ -2180,7 +2252,7 @@ LUNA_PROJECT_SHORT="${LUNA_PROJECT_COMMIT:0:8}"
 KERNEL_LOCALVERSION="-android16-luna-g${LUNA_PROJECT_SHORT}-4k"
 KERNEL_BUILD_USER="${KERNEL_BUILD_USER:-luna}"
 KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
-KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-08-21 02:42:48 +0800}"
+KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-08-27 02:47:56 -0700}"
 KERNEL_BUILD_VERSION="${KERNEL_BUILD_VERSION:-1}"
 AK3_BOOT_PARTITION_SIZE="${AK3_BOOT_PARTITION_SIZE:-100663296}"
 AK3_TEMPLATE_SHA256="${AK3_TEMPLATE_SHA256:-}"
@@ -2189,7 +2261,7 @@ MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf793baef9804ccbe5a52ce34a8b6242725d3c77}"
 [ "${KERNEL_BUILD_USER}" = "luna" ] || die "内核构建用户必须固定为 luna"
 [ "${KERNEL_BUILD_HOST}" = "luna-build" ] || die "内核构建主机标识必须固定为 luna-build"
-[ "${KERNEL_BUILD_TIMESTAMP}" = "2026-08-21 02:42:48 +0800" ] || die "内核构建时间必须固定为 r63 提交时间"
+[ "${KERNEL_BUILD_TIMESTAMP}" = "2026-08-27 02:47:56 -0700" ] || die "内核构建时间必须固定为 r21 提交时间"
 [ "${KERNEL_BUILD_VERSION}" = "1" ] || die "内核构建版本必须固定为 1"
 [ "${AK3_BOOT_PARTITION_SIZE}" = "100663296" ] || die "小米 17 boot 分区容量必须固定为 100663296 字节"
 [[ "${AK3_TEMPLATE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "AnyKernel3 模板 SHA-256 格式错误"
@@ -2242,18 +2314,13 @@ MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf79
 [[ "${STAGE_ABI_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "STG 投影 SHA-256 快照格式错误"
 [[ "${STAGE_ABI_ALL_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "Module.symvers 投影数量格式错误"
 [[ "${STAGE_ABI_ALL_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Module.symvers 投影 SHA-256 快照格式错误"
-[ "${STAGE_ABI_ALLOWED_EXPORTS:-}" = "abi/android16-6.12-r60-to-r63-allowed-exports.tsv" ] || \
-    die "r63 官方新增导出参考路径异常"
-[[ "${STAGE_ABI_ALLOWED_EXPORTS_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 官方新增导出数量格式错误"
-[[ "${STAGE_ABI_ALLOWED_EXPORTS_XIAOMI_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 Xiaomi 新增导出数量格式错误"
-[[ "${STAGE_ABI_ALLOWED_EXPORTS_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 官方新增导出 SHA-256 格式错误"
-[[ "${STAGE_ABI_TARGET_ALL_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 完整 Module.symvers 目标数量格式错误"
-[[ "${STAGE_ABI_TARGET_ALL_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 完整 Module.symvers SHA-256 格式错误"
-[[ "${STAGE_ABI_TARGET_EXPORT_COUNT}" =~ ^[1-9][0-9]*$ ]] || die "r63 vmlinux 目标导出数量格式错误"
-[[ "${STAGE_ABI_TARGET_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 vmlinux 完整 SHA-256 格式错误"
-[[ "${STAGE_ABI_TARGET_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "r63 全量 STG ABI SHA-256 格式错误"
+verify_project_patch "Tegra MC opaque-pointer KMI compatibility" \
+    "${TEGRA_MC_KMI_PATCH_FILE}" "${TEGRA_MC_KMI_PATCH_SHA256}" \
+    "${TEGRA_MC_KMI_PATCH_ID}"
+git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
+    die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_final_source_deltas
-EXPECTED_RELEASE="6.12.69${KERNEL_LOCALVERSION}"
+EXPECTED_RELEASE="6.12.81${KERNEL_LOCALVERSION}"
 EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@${KERNEL_BUILD_HOST}) (Android (14043575, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460), LLD 19.0.1) #${KERNEL_BUILD_VERSION} SMP PREEMPT ${KERNEL_BUILD_TIMESTAMP}"
 
 ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
@@ -2318,7 +2385,7 @@ AUDIT_DRIFT_COUNT=0
     printf 'status\tmetric\treference\tactual\n'
 } > "${AUDIT_REPORT}"
 
-log_step "生成 Android 16 GKI 6.12.69 配置"
+log_step "生成 Android 16 GKI 6.12.81 配置"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" gki_defconfig
 bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable WERROR \
@@ -2519,7 +2586,7 @@ verify_stage5_selected_build
 
 verify_symbol_list_exports "${COMMON_DIR}/gki/aarch64/symbols/qcom" "QCOM"
 verify_symbol_list_exports "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" "Xiaomi"
-verify_stage_abi
+verify_stage_abi_current
 
 EMBEDDED_CONFIG_LINES="$("${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" | wc -l | tr -d ' ')"
 EMBEDDED_CONFIG_SHA256="$("${COMMON_DIR}/scripts/extract-ikconfig" "${IMAGE_PATH}" | sha256sum | awk '{ print $1 }')"

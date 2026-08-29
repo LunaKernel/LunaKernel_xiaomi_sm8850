@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Orchestrate independently revertible r63 official-backport manifests.
+# Orchestrate independently revertible official-backport manifests.
 #
 set -euo pipefail
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -46,8 +46,8 @@ SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 load_env_file "${WORKSPACE_DIR}/.env"
 
-MANIFEST_TOOL="${WORKSPACE_DIR}/tools/r63_backports.sh"
-MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/r63-independent"
+MANIFEST_TOOL="${WORKSPACE_DIR}/tools/backport_manifest.sh"
+MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/r21-independent"
 TMP_ROOT=""
 declare -a MANIFESTS=()
 
@@ -55,7 +55,7 @@ manifest_pin_name() {
 	local base key
 	base="$(basename "$1" .tsv)"
 	key="$(tr '[:lower:]-' '[:upper:]_' <<<"${base}")"
-	printf 'R63_INDEPENDENT_%s_SHA256\n' "${key}"
+	printf 'INDEPENDENT_%s_SHA256\n' "${key}"
 }
 
 discover_manifests() {
@@ -79,8 +79,8 @@ discover_manifests() {
 	done
 	while IFS= read -r variable; do
 		case "${variable}" in
-			R63_INDEPENDENT_[0-9][0-9][0-9]_*_SHA256)
-				expected_file="${variable#R63_INDEPENDENT_}"
+			INDEPENDENT_[0-9][0-9][0-9]_*_SHA256)
+				expected_file="${variable#INDEPENDENT_}"
 				expected_file="${expected_file%_SHA256}"
 				expected_file="$(tr '[:upper:]_' '[:lower:]-' <<<"${expected_file}").tsv"
 				[ -f "${MANIFEST_DIR}/${expected_file}" ] || \
@@ -95,16 +95,16 @@ run_manifest() {
 	shift
 	pin_name="$(manifest_pin_name "${manifest}")"
 	pin_value="${!pin_name:-}"
-	R63_BACKPORT_INDEPENDENT=1 \
-	R63_BACKPORT_MANIFEST_OVERRIDE="${manifest}" \
-	R63_BACKPORT_MANIFEST_SHA256_OVERRIDE="${pin_value}" \
+	BACKPORT_INDEPENDENT=1 \
+	BACKPORT_MANIFEST_OVERRIDE="${manifest}" \
+	BACKPORT_MANIFEST_SHA256_OVERRIDE="${pin_value}" \
 		bash "${MANIFEST_TOOL}" "$@"
 }
 
 verify_manifests() {
 	local manifest source duplicates overlap new_commits old_commits
 	[ -f "${MANIFEST_TOOL}" ] && [ ! -L "${MANIFEST_TOOL}" ] || \
-		die "缺少 r63 回移清单工具"
+		die "缺少 r21 回移清单工具"
 	discover_manifests
 	for manifest in "${MANIFESTS[@]}"; do
 		run_manifest "${manifest}" verify-manifest >/dev/null
@@ -244,7 +244,7 @@ case "${1:-}" in
 	verify-manifests)
 		[ "$#" = 1 ] || usage
 		verify_manifests
-		log_success "r63 独立回移清单身份与互斥性检查通过"
+		log_success "r21 独立回移清单身份与互斥性检查通过"
 		;;
 	list)
 		[ "$#" = 2 ] || usage
@@ -258,17 +258,17 @@ case "${1:-}" in
 	verify-sources)
 		[ "$#" = 1 ] || usage
 		verify_sources
-		log_success "r63 独立回移全部官方来源检查通过"
+		log_success "r21 独立回移全部官方来源检查通过"
 		;;
 	apply)
 		[ "$#" = 2 ] || usage
 		apply_all "$2"
-		log_success "r63 独立回移状态正确"
+		log_success "r21 独立回移状态正确"
 		;;
 	verify-applied)
 		[ "$#" = 2 ] || usage
 		verify_applied "$2"
-		log_success "r63 独立回移最终应用状态正确"
+		log_success "r21 独立回移最终应用状态正确"
 		;;
 	verify-base-diff)
 		[ "$#" = 3 ] || usage

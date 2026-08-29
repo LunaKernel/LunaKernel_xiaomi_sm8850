@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	block_submit_bio_plug	adapt	mainline	snapshot-2026-08-28	9cbbac29d752fb5d95e375fa3685a359b89caa0a	2026-06-16	03d5b9c0ab70786e2ed9b57b2184b9391fa7a222	block/blk-core.c	patches/backports/block-submit-bio-plug-r63.patch	6f4b07272b9f26c41f2946f64753eaf49f6baec8a35c407684494aaedeae53c7	2e39ffc0d5a75aed779773ae51012006924e5537

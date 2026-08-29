@@ -358,7 +358,7 @@ verify_kernelsu_backport_source() {
 verify_source_baseline() {
     local branch kmi_generation version tracked_files xiaomi_ack_commit xiaomi_ack_tag
     version="$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")"
-    [ "${version}" = "6.12.69" ] || die "GKI common 版本不是 6.12.69: ${version}"
+    [ "${version}" = "6.12.81" ] || die "GKI common 版本不是 6.12.81: ${version}"
     branch="$(sed -n 's/^BRANCH=//p' "${COMMON_DIR}/build.config.constants")"
     kmi_generation="$(sed -n 's/^KMI_GENERATION=//p' "${COMMON_DIR}/build.config.constants")"
     [ "${branch}" = "android16-6.12" ] || die "GKI common BRANCH 异常: ${branch}"
@@ -793,10 +793,10 @@ KERNEL_BRANCH="${KERNEL_BRANCH:-popsicle-w-oss}"
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-03_r63}"
-COMMON_COMMIT="${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
-COMMON_ABI_STG_SHA256="${COMMON_ABI_STG_SHA256:-f919ee47d380b2eb49e9f1f4b0844fcacf1bff3bf7f5307a402430d678635ad8}"
+COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-06_r21}"
+COMMON_COMMIT="${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+COMMON_ABI_STG_SHA256="${COMMON_ABI_STG_SHA256:-5b1f1a3c95fe1cfd8020666730cb1aef1de54498ff037afc2c541e119b18e39f}"
 ABI_BASELINE_COMMIT="${ABI_BASELINE_COMMIT:-160343479eb972500e11fe76957fdb41b1772f97}"
 ABI_BASELINE_STG_SHA256="${ABI_BASELINE_STG_SHA256:-f9802b066d9ffd4a0363ee57615e9af34360a84b3427549d9398de3eadb54691}"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
@@ -856,8 +856,8 @@ LINUX_MAINLINE_AUDIT_REPO="${LINUX_MAINLINE_AUDIT_REPO:-https://git.kernel.org/p
 LINUX_MAINLINE_AUDIT_BASE_COMMIT="${LINUX_MAINLINE_AUDIT_BASE_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
-R63_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/r63_backports.sh"
-R63_INDEPENDENT_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh"
+BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
+INDEPENDENT_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/independent_backports.sh"
 ENABLE_MEMCG_RSTAT_FAST_PATH="${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}"
 MEMCG_RSTAT_FAST_PATH_AOSP_REF="${MEMCG_RSTAT_FAST_PATH_AOSP_REF:-android-mainline}"
 MEMCG_RSTAT_FAST_PATH_COMMIT="${MEMCG_RSTAT_FAST_PATH_COMMIT:-60cada258dfe3694e15c4539259173c37bd5f1fe}"
@@ -1060,10 +1060,10 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 审计终点"
     [ -n "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux mainline 审计起点"
     [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 审计终点"
-    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        bash "${R63_BACKPORT_TOOL}" verify-manifest
+    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        bash "${BACKPORT_TOOL}" verify-manifest
     fi
-    bash "${R63_INDEPENDENT_BACKPORT_TOOL}" verify-manifests
+    bash "${INDEPENDENT_BACKPORT_TOOL}" verify-manifests
 
     aosp_audit_commits=("${COMMON_COMMIT}" "${ABI_BASELINE_COMMIT}")
     ensure_audit_repo "AOSP common 后续历史" "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_REPO}"
@@ -1116,14 +1116,14 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         [ "${selected_aosp_entry%%:*}" = "1" ] || continue
         selected_aosp_patches+=("${selected_aosp_entry#*:}")
     done
-    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
         while IFS= read -r audit_commit; do
             selected_aosp_patches+=("${audit_commit}")
-        done < <(bash "${R63_BACKPORT_TOOL}" list aosp)
+        done < <(bash "${BACKPORT_TOOL}" list aosp)
     fi
     while IFS= read -r audit_commit; do
         [ -n "${audit_commit}" ] && selected_aosp_patches+=("${audit_commit}")
-    done < <(bash "${R63_INDEPENDENT_BACKPORT_TOOL}" list aosp)
+    done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list aosp)
     hydrate_audit_patches "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
         "${selected_aosp_patches[@]}"
 
@@ -1153,14 +1153,14 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         [ "${selected_stable_entry%%:*}" = "1" ] || continue
         selected_stable_patches+=("${selected_stable_entry#*:}")
     done
-    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
         while IFS= read -r audit_commit; do
             selected_stable_patches+=("${audit_commit}")
-        done < <(bash "${R63_BACKPORT_TOOL}" list stable)
+        done < <(bash "${BACKPORT_TOOL}" list stable)
     fi
     while IFS= read -r audit_commit; do
         [ -n "${audit_commit}" ] && selected_stable_patches+=("${audit_commit}")
-    done < <(bash "${R63_INDEPENDENT_BACKPORT_TOOL}" list stable)
+    done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list stable)
     hydrate_audit_patches "Linux 6.12 stable" "${LINUX_STABLE_AUDIT_DIR}" \
         "${selected_stable_patches[@]}"
 
@@ -1179,20 +1179,20 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
         selected_mainline_patches+=("${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}")
     fi
-    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
+    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
         while IFS= read -r audit_commit; do
             selected_mainline_patches+=("${audit_commit}")
-        done < <(bash "${R63_BACKPORT_TOOL}" list mainline)
+        done < <(bash "${BACKPORT_TOOL}" list mainline)
     fi
     while IFS= read -r audit_commit; do
         [ -n "${audit_commit}" ] && selected_mainline_patches+=("${audit_commit}")
-    done < <(bash "${R63_INDEPENDENT_BACKPORT_TOOL}" list mainline)
+    done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list mainline)
     hydrate_audit_patches "Linux mainline 已选补丁" "${LINUX_MAINLINE_AUDIT_DIR}" \
         "${selected_mainline_patches[@]}"
-    if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        bash "${R63_BACKPORT_TOOL}" verify-sources
+    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
+        bash "${BACKPORT_TOOL}" verify-sources
     fi
-    bash "${R63_INDEPENDENT_BACKPORT_TOOL}" verify-sources
+    bash "${INDEPENDENT_BACKPORT_TOOL}" verify-sources
     log_success "后续改进只读审计历史已固定"
 fi
 if [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then

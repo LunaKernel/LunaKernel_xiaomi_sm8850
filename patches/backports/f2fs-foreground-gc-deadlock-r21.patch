@@ -1,4 +1,4 @@
-Subject: [PATCH] f2fs: 合并上游前台 GC 死锁修复并适配 AOSP 6.12.69
+Subject: [PATCH] f2fs: 合并上游前台 GC 死锁修复并适配 r21
 
 diff --git a/fs/f2fs/data.c b/fs/f2fs/data.c
 index f19b0a2b335ed4ba8df95dd4cc8521ce07276ba7..2bbc53a09651a41f526911db0d3329b34729d3e3 100644

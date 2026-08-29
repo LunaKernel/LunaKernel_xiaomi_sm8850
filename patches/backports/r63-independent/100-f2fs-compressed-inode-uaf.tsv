@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	f2fs_compressed_inode_uaf	adapt	stable	linux-6.12.y	cc81768212cdc509e5a986274db7bc24d18cde19	2026-03-25	d9641c60a981a4c10edcc3f42d358692c6de769f	fs/f2fs/compress.c,fs/f2fs/f2fs.h	patches/backports/f2fs-compressed-inode-uaf-r63.patch	7bc0a5280949c486897d0f4ccca04e3569bdfefde85df02be846c88d9ef3d898	2b6a9b9e2216a2a68db7e98e5f91d6e220f19968

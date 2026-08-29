@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	f2fs_sysfs_field_bounds	direct	stable	linux-6.12.y	4ef30b9f1641c9e877792df6b049f1cf507d002d	2026-02-19	3024c147f977961e31dcf7a18c425a62e8fb0c67	fs/f2fs/sysfs.c	-	-	-

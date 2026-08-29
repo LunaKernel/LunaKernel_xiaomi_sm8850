@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	erofs_sync_decompress_uaf	adapt	stable	linux-6.12.y	86ab00cf81d44b675bb23db62b88fd76c8ac8cea	2026-06-19	be39d09867041c9ed5c3669b3085c5bc6b071c83	fs/erofs/zdata.c	patches/backports/erofs-sync-decompress-uaf-r21.patch	e186c004f60f89d8735c686bcdc3e72f16af3391a555b9e7e47bda4c12eea45e	90f4d940ce4b843a0ebeed750d8e8ecbfaaaa479

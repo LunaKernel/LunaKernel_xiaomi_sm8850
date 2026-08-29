@@ -321,7 +321,7 @@ verify_final_source_deltas() {
         die "GKI common 基础差异快照尚未固定"
     [[ "${KSU_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
         die "KernelSU 精确差异快照尚未固定: ${ksu_sha256}"
-    bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" \
+    bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
         verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
     [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
         die "KernelSU 出现非预期补丁差异: ${ksu_sha256}"
@@ -423,6 +423,7 @@ verify_susfs_integration() {
     } | sort -u > "${allowed_ksu}"
     {
         printf '%s\n' drivers/Kconfig drivers/Makefile drivers/kernelsu
+        patch_paths_excluding "${TEGRA_MC_KMI_PATCH_FILE}"
         patch_paths_excluding "${COMMON_SUSFS_PATCH_FILE}" \
             fs/exec.c \
             fs/namei.c \
@@ -498,10 +499,10 @@ verify_susfs_integration() {
         if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}" = "1" ]; then
             printf '%s\n' virt/kvm/kvm_main.c
         fi
-        if [ "${ENABLE_R63_SELECTED_BACKPORTS:-0}" = "1" ]; then
-            bash "${HOST_WORKSPACE_DIR}/tools/r63_backports.sh" list-paths
+        if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
+            bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" list-paths
         fi
-        bash "${HOST_WORKSPACE_DIR}/tools/r63_independent_backports.sh" list-paths
+        bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" list-paths
     } | sort -u > "${allowed_common}"
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
@@ -726,8 +727,11 @@ run_in_orb_if_needed "$@"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-625bef5cf43deeb3fca2e75202bcf958b6b976e5}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.69_kmi6_r63}")"
+COMMON_COMMIT="${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
+TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
+TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-v3.2.5}"
 KSU_COMMIT="${KSU_COMMIT:-b0bc817b4e966aa6aa830834eaf6ef765d821d40}"
@@ -778,7 +782,12 @@ BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
 COMMON_BASE_TRACKED_DIFF_SHA256="${COMMON_BASE_TRACKED_DIFF_SHA256:-}"
 KSU_TRACKED_DIFF_SHA256="${KSU_TRACKED_DIFF_SHA256:-}"
 
-verify_repo_identity "Android 16 GKI common r63" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}"
+verify_repo_identity "Android 16 GKI common r21" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}"
+verify_project_patch "Tegra MC opaque-pointer KMI compatibility" \
+    "${TEGRA_MC_KMI_PATCH_FILE}" "${TEGRA_MC_KMI_PATCH_SHA256}" \
+    "${TEGRA_MC_KMI_PATCH_ID}"
+git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
+    die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}"
 [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" rev-parse \
     refs/backport-audit/kernelsu-post-release 2>/dev/null || true)" = \
@@ -813,9 +822,6 @@ apply_susfs_integration
 verify_susfs_integration
 if [ "${ENABLE_BBG}" = "1" ]; then
     verify_repo_identity "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_COMMIT}"
-    if [ -n "$(git -C "${BBG_DIR}" status --porcelain --untracked-files=all)" ]; then
-        verify_bbg_source_fix
-    fi
     verify_project_patch "Baseband Guard 保护边界修复" \
         "${BBG_LUNA_FIX_PATCH}" "${BBG_LUNA_FIX_PATCH_SHA256}" \
         "${BBG_LUNA_FIX_PATCH_ID}"

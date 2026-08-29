@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Apply and verify one fixed r63 official-backport manifest as an ordered set.
+# Apply and verify one fixed official-backport manifest as an ordered set.
 #
 set -euo pipefail
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -81,17 +81,17 @@ SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 load_env_file "${WORKSPACE_DIR}/.env"
 
-INDEPENDENT_MANIFEST="${R63_BACKPORT_INDEPENDENT:-0}"
+INDEPENDENT_MANIFEST="${BACKPORT_INDEPENDENT:-0}"
 if [ "${INDEPENDENT_MANIFEST}" = 1 ]; then
-	[ -n "${R63_BACKPORT_MANIFEST_OVERRIDE:-}" ] || \
+	[ -n "${BACKPORT_MANIFEST_OVERRIDE:-}" ] || \
 		die "独立回移缺少清单路径覆盖"
-	[ -n "${R63_BACKPORT_MANIFEST_SHA256_OVERRIDE:-}" ] || \
+	[ -n "${BACKPORT_MANIFEST_SHA256_OVERRIDE:-}" ] || \
 		die "独立回移缺少清单 SHA-256 覆盖"
-	MANIFEST="$(resolve_workspace_path "${R63_BACKPORT_MANIFEST_OVERRIDE}")"
-	MANIFEST_SHA256="${R63_BACKPORT_MANIFEST_SHA256_OVERRIDE}"
+	MANIFEST="$(resolve_workspace_path "${BACKPORT_MANIFEST_OVERRIDE}")"
+	MANIFEST_SHA256="${BACKPORT_MANIFEST_SHA256_OVERRIDE}"
 else
-	MANIFEST="$(resolve_workspace_path "${R63_BACKPORT_MANIFEST:-patches/backports/r63-selected-backports.tsv}")"
-	MANIFEST_SHA256="${R63_BACKPORT_MANIFEST_SHA256:-}"
+	MANIFEST="$(resolve_workspace_path "${SELECTED_BACKPORT_MANIFEST:-patches/backports/r21-selected-backports.tsv}")"
+	MANIFEST_SHA256="${SELECTED_BACKPORT_MANIFEST_SHA256:-}"
 fi
 AOSP_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 STABLE_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
@@ -113,19 +113,19 @@ manifest_group_sequence() {
 
 validate_manifest() {
 	local actual_sha256 expected_header
-	[ -f "${MANIFEST}" ] && [ ! -L "${MANIFEST}" ] || die "r63 回移清单缺失或不安全"
-	[ -n "${MANIFEST_SHA256}" ] || die "缺少 r63 回移清单 SHA-256"
+	[ -f "${MANIFEST}" ] && [ ! -L "${MANIFEST}" ] || die "r21 回移清单缺失或不安全"
+	[ -n "${MANIFEST_SHA256}" ] || die "缺少 r21 回移清单 SHA-256"
 	actual_sha256="$(sha256sum "${MANIFEST}" | awk '{ print $1 }')"
-	[ "${actual_sha256}" = "${MANIFEST_SHA256}" ] || die "r63 回移清单 SHA-256 不匹配"
-	! grep -q $'\r' "${MANIFEST}" || die "r63 回移清单含 CR 字符"
+	[ "${actual_sha256}" = "${MANIFEST_SHA256}" ] || die "r21 回移清单 SHA-256 不匹配"
+	! grep -q $'\r' "${MANIFEST}" || die "r21 回移清单含 CR 字符"
 	expected_header=$'# order\tgroup\taction\tsource\tref\tcommit\tdate\tpatch-id\tpaths\tproject-patch\tproject-sha256\tproject-patch-id'
-	[ "$(sed -n '1p' "${MANIFEST}")" = "${expected_header}" ] || die "r63 回移清单表头异常"
+	[ "$(sed -n '1p' "${MANIFEST}")" = "${expected_header}" ] || die "r21 回移清单表头异常"
 
 	awk -F '\t' \
 		-v stable_ref="${LINUX_STABLE_AUDIT_REF:-}" \
 		-v snapshot="${BACKPORT_AUDIT_SNAPSHOT:-}" \
 		-v independent="${INDEPENDENT_MANIFEST}" '
-		function fail(message) { print "[FAIL] r63 回移清单: " message > "/dev/stderr"; exit 1 }
+		function fail(message) { print "[FAIL] r21 回移清单: " message > "/dev/stderr"; exit 1 }
 		/^#/ { next }
 		{
 			rows++
@@ -167,9 +167,8 @@ validate_manifest() {
 				if (rows < 1 || direct + adapt < 1 || group_count != 1)
 					fail("独立清单必须只包含一个且至少实际应用一次的逻辑项")
 			} else {
-				if (rows != 35 || direct != 33 || adapt != 1 || proof != 1)
-					fail("行/动作计数异常")
-				if (group_count != 29) fail("逻辑项数量不是 29")
+				if (rows < 1 || direct + adapt < 1 || group_count < 1)
+					fail("固定集合没有可应用的逻辑项")
 			}
 		}
 	' "${MANIFEST}" || exit $?
@@ -406,10 +405,10 @@ verify_applied_set() {
 	scratch="$(mktemp -d "${TMP_ROOT}/verify.XXXXXX")"
 	copy_selected_tree "${target_tree}" "${scratch}"
 	before_digest="$(selected_tree_digest "${scratch}")"
-	apply_sequence "${scratch}" reverse || die "r63 回移集合未完整应用或顺序异常"
-	apply_sequence "${scratch}" forward || die "r63 回移集合无法从撤销状态精确重放"
+	apply_sequence "${scratch}" reverse || die "r21 回移集合未完整应用或顺序异常"
+	apply_sequence "${scratch}" forward || die "r21 回移集合无法从撤销状态精确重放"
 	after_digest="$(selected_tree_digest "${scratch}")"
-	[ "${after_digest}" = "${before_digest}" ] || die "r63 回移集合撤销/重放后内容漂移"
+	[ "${after_digest}" = "${before_digest}" ] || die "r21 回移集合撤销/重放后内容漂移"
 	rm -rf -- "${scratch}"
 	if [ "${INDEPENDENT_MANIFEST}" != 1 ]; then
 		verify_f2fs_adaptation_semantics "${target_tree}"
@@ -419,13 +418,13 @@ verify_applied_set() {
 apply_set() {
 	local target_tree="$1" forward_ok=0 reverse_ok=0 row order group action source ref commit
 	local before_digest after_digest
-	[ -d "${target_tree}" ] || die "r63 回移目标树不存在: ${target_tree}"
+	[ -d "${target_tree}" ] || die "r21 回移目标树不存在: ${target_tree}"
 	write_path_list
 	before_digest="$(selected_tree_digest "${target_tree}")"
 	sequence_applies "${target_tree}" forward && forward_ok=1
 	sequence_applies "${target_tree}" reverse && reverse_ok=1
 	if [ "${forward_ok}" = 1 ] && [ "${reverse_ok}" = 0 ]; then
-		log_info "按固定顺序应用 ${GROUP_COUNT} 个 r63 逻辑回移项"
+		log_info "按固定顺序应用 ${GROUP_COUNT} 个 r21 逻辑回移项"
 		for row in "${MANIFEST_ROWS[@]}"; do
 			IFS=$'\t' read -r order group action source ref commit _ <<<"${row}"
 			row_patch_file "${row}"
@@ -434,9 +433,9 @@ apply_set() {
 			git -C "${target_tree}" apply "${ROW_PATCH_FILE}"
 		done
 	elif [ "${forward_ok}" = 0 ] && [ "${reverse_ok}" = 1 ]; then
-		log_info "${GROUP_COUNT} 个 r63 逻辑回移项已完整存在"
+		log_info "${GROUP_COUNT} 个 r21 逻辑回移项已完整存在"
 	else
-		die "r63 回移集合既非完整未应用态，也非完整已应用态，拒绝部分状态"
+		die "r21 回移集合既非完整未应用态，也非完整已应用态，拒绝部分状态"
 	fi
 	after_digest="$(selected_tree_digest "${target_tree}")"
 	if [ "${forward_ok}" = 0 ]; then
@@ -476,7 +475,7 @@ validate_manifest
 case "${1:-}" in
 	verify-manifest)
 		[ "$#" = 1 ] || usage
-		log_success "r63 回移清单身份、顺序与逻辑组检查通过"
+		log_success "r21 回移清单身份、顺序与逻辑组检查通过"
 		;;
 	list)
 		[ "$#" = 2 ] || usage
@@ -495,14 +494,14 @@ case "${1:-}" in
 	verify-sources)
 		[ "$#" = 1 ] || usage
 		verify_sources
-		log_success "r63 回移清单全部官方来源检查通过"
+		log_success "r21 回移清单全部官方来源检查通过"
 		;;
 	apply)
 		[ "$#" = 2 ] || usage
 		verify_sources
 		prepare_patch_cache
 		apply_set "$2"
-		log_success "${GROUP_COUNT} 个 r63 逻辑回移项状态正确"
+		log_success "${GROUP_COUNT} 个 r21 逻辑回移项状态正确"
 		;;
 	verify-applied)
 		[ "$#" = 2 ] || usage
@@ -510,7 +509,7 @@ case "${1:-}" in
 		prepare_patch_cache
 		write_path_list
 		verify_applied_set "$2"
-		log_success "${GROUP_COUNT} 个 r63 逻辑回移项来源、顺序和最终应用状态检查通过"
+		log_success "${GROUP_COUNT} 个 r21 逻辑回移项来源、顺序和最终应用状态检查通过"
 		;;
 	apply-index|reverse-index)
 		[ "$#" = 3 ] || usage

@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	f2fs_inline_xattr_bounds	adapt	stable	linux-6.12.y	2a9f9791653ba5ed3fb45bbffa8d63a7cd5cf706	2026-07-18	4aab651b2c354b6fe8f7c89aac4ae07f79351bb0	fs/f2fs/inode.c	patches/backports/f2fs-inline-xattr-bounds-r63.patch	b8255bee690cee60b9545ae883b2eb3782e9b0d91c846819b9428a7c0776597e	002e9a8ec2d9a61b6184694d8a24e86c6c58a255

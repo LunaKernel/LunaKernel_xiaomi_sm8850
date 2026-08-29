@@ -34,7 +34,7 @@ Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）
 
 已授权的内核直接修复仅包括 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 有清晰机制、与小米 17 实际路径相关、来自稳定官方历史、没有回退或明显回归证据，并通过第 3、5 节的可启动兼容性硬门禁及完整差异审计；收益极小、路径无关、来源不清或逻辑证据不足的改动一律拒绝。缺少实机性能数据本身不构成否决，但不得把无法说明机制的猜测包装成优化。r63 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得再作为项目回移重复应用。
 
-r63 后续回移由 `patches/backports/r63-selected-backports.tsv` 固定为一个有序、不可拆分的集合：29 项逻辑修复、34 个实际应用提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r63-independent/`，每个清单只承载一个可独立回退的逻辑项；不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
+r63 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一个有序、不可拆分的集合：29 项逻辑修复、34 个实际应用提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r21-independent/`，每个清单只承载一个可独立回退的逻辑项；不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
 
 ## 3. 小米 17 可启动兼容性硬门禁
 
@@ -84,7 +84,7 @@ r63 后续回移由 `patches/backports/r63-selected-backports.tsv` 固定为一�
 
 ## 5. 构建与发布门槛
 
-- `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/r63_backports.sh tools/r63_independent_backports.sh` 必须通过。
+- `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
 - common 版本必须为 6.12.69，QCOM/Xiaomi symbol list 必须存在。
 - 当前参考配置为 8198 行、摘要 `802a5f160d470e5b07b638db65a13c6ce7a52d93bd5796035e8d831b2e61a423`；当前参考 `modules.order` 为 103 个活动模块、摘要 `23542e351835f1dca3b80cbaa975f86d7144a32c329d42efa7b502a8ca5033fb`。构建 MUST 报告参考值与本次值并保留本次配置及模块清单；经审查的必要配置变化、项目新增模块或排序变化可接受，不得仅以行数、数量或摘要不同拒绝，也不得以此绕过下一项关键配置和模块闭包门禁。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
