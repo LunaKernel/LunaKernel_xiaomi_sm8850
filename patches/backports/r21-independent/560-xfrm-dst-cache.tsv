@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	xfrm_dst_cache	direct	stable	linux-6.12.y	8dd8929b71c4f06c614f8f54c2cc070453faae16	2026-08-27	c5e825c3f5ca6652db2fcd1afffaf9cf3176e28b	net/xfrm/xfrm_state.c	-	-	-
