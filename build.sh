@@ -2219,7 +2219,7 @@ bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
 [ "$(sed -n '2p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化"
 
 BUILD_JOBS="$(detect_cpu_count)"
-BUILD_DIR="${BUILD_DIR:-/tmp/luna_xiaomi17_android17_aosp_6.12.81_r21_out}"
+BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-r21}")"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
 STAGE_MODULE_COUNT="${STAGE_MODULE_COUNT:-}"
