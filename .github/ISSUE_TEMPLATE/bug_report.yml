@@ -1,0 +1,43 @@
+name: Bug report
+description: 报告 Luna Kernel 构建、启动或运行问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: 请先移除日志中的账号、序列号、令牌和其他隐私信息。
+  - type: input
+    id: commit
+    attributes:
+      label: Luna 提交或版本
+      placeholder: 完整项目提交或产物名
+    validations:
+      required: true
+  - type: input
+    id: rom
+    attributes:
+      label: ROM
+      placeholder: 例如 OS4.0.0.9.XPCCNXM
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述与复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 已脱敏的必要证据
+      description: 请只提供定位问题所需的最小日志。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 设备为小米 17 pudding，ROM 与项目支持范围一致
+          required: true
+        - label: 已删除隐私、凭证和无关日志内容
+          required: true
