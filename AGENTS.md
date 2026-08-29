@@ -104,13 +104,13 @@ luna-xiaomi17-g<项目提交前8位>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<项目提交前8位>-YYYYMMDD
 ```
 
-AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
+AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。模板必须由 `ak3_template/` 中固定的官方脚本基线与 Luna 差异补丁重新组装；BusyBox 和 MagiskBoot 必须来自 `.env` 固定来源并在使用前校验摘要，禁止重新提交预制模板 ZIP。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
 
 当前 KernelSU 仍为 built-in，本轮不得借门禁重构改变交付边界。若后续经专项审计切换为 LKM，面向用户必须保持单一安装入口，不得要求分别管理或手工刷入两个分区镜像；该专项还必须新增模块交付、逐项依赖与真机加载门禁，不能把 `modules.order` 中存在 `.ko` 当成已完成验证。首次安装后只有在驻留 LKM 与新 `Image` 的完整依赖闭包通过同等硬门禁时，才允许仅更新或直接刷入已组装的 boot 镜像。
 
 ## 6. 真机验证
 
-Android 17 分支尚未完成真机启动与功能验证；`pudding` 是唯一候选目标，不代表已经验证，更不得外推其他设备。发布前必须先完成同一 OTA 的 `system_dlkm` 闭包证明，再记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore，并排除 panic、Oops、watchdog、关键 vendor 模块 ABI 失败以及显示/存储启动故障。
+公开历史整理前的 r21 项目提交 `838d2857` 已在 `pudding` 与固定 HyperOS 4 OTA 上完成启动、功能和持续使用验证；对应内核 release 为 `6.12.81-android16-luna-g838d2857-4k`，且未在提供的日志中发现 panic、Oops、watchdog、关键 vendor 模块 ABI 失败或持续性显示/存储错误。该结论不得外推到其他设备、OTA 或因历史整理产生的新项目哈希。公开主分支最终提交在发布前仍 MUST 重新完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，并记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。
 
 必须分别验证 KernelSU/SUSFS/BBG、SELinux/LSM 和 IPSet。环境隐藏可使属性显示为 green/locked；验收时必须结合 bootconfig 和测试环境说明，不能把预期隐藏行为误判为内核失败。
 
