@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	conntrack_invalid_rst_direction	direct	stable	linux-6.12.y	f206def4e86d810f927ba1d8e322ea72b29bce58	2026-06-09	0675a774f430318731dbf2825987bfe692936066	net/netfilter/nf_conntrack_proto_tcp.c	-	-	-
