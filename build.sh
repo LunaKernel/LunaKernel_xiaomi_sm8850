@@ -1594,12 +1594,35 @@ KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
 KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-06-01 18:52:16 HKT}"
 KERNEL_BUILD_VERSION="${KERNEL_BUILD_VERSION:-1}"
 AK3_BOOT_PARTITION_SIZE="${AK3_BOOT_PARTITION_SIZE:-100663296}"
+AK3_UPSTREAM_COMMIT="${AK3_UPSTREAM_COMMIT:-}"
+AK3_ARM64_TOOLS_COMMIT="${AK3_ARM64_TOOLS_COMMIT:-}"
+AK3_BUSYBOX_SHA256="${AK3_BUSYBOX_SHA256:-}"
+AK3_ANYKERNEL_SH_SHA256="${AK3_ANYKERNEL_SH_SHA256:-}"
+AK3_UPDATE_BINARY_SHA256="${AK3_UPDATE_BINARY_SHA256:-}"
+AK3_UPDATER_SCRIPT_SHA256="${AK3_UPDATER_SCRIPT_SHA256:-}"
+AK3_CORE_SHA256="${AK3_CORE_SHA256:-}"
+AK3_LICENSE_SHA256="${AK3_LICENSE_SHA256:-}"
+AK3_LUNA_PATCH_SHA256="${AK3_LUNA_PATCH_SHA256:-}"
+AK3_LUNA_ANYKERNEL_SH_SHA256="${AK3_LUNA_ANYKERNEL_SH_SHA256:-}"
+AK3_LUNA_UPDATE_BINARY_SHA256="${AK3_LUNA_UPDATE_BINARY_SHA256:-}"
+AK3_LUNA_UPDATER_SCRIPT_SHA256="${AK3_LUNA_UPDATER_SCRIPT_SHA256:-}"
+AK3_LUNA_CORE_SHA256="${AK3_LUNA_CORE_SHA256:-}"
 MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf793baef9804ccbe5a52ce34a8b6242725d3c77}"
 [ "${KERNEL_BUILD_USER}" = "luna" ] || die "内核构建用户必须固定为 luna"
 [ "${KERNEL_BUILD_HOST}" = "luna-build" ] || die "内核构建主机标识必须固定为 luna-build"
 [ "${AK3_BOOT_PARTITION_SIZE}" = "100663296" ] || die "小米 17 boot 分区容量必须固定为 100663296 字节"
+[[ "${AK3_UPSTREAM_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 脚本 commit 格式错误"
+[[ "${AK3_ARM64_TOOLS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 工具 commit 格式错误"
+for ak3_sha256 in \
+    "${AK3_BUSYBOX_SHA256}" "${AK3_ANYKERNEL_SH_SHA256}" \
+    "${AK3_UPDATE_BINARY_SHA256}" "${AK3_UPDATER_SCRIPT_SHA256}" \
+    "${AK3_CORE_SHA256}" "${AK3_LICENSE_SHA256}" "${AK3_LUNA_PATCH_SHA256}" \
+    "${AK3_LUNA_ANYKERNEL_SH_SHA256}" "${AK3_LUNA_UPDATE_BINARY_SHA256}" \
+    "${AK3_LUNA_UPDATER_SCRIPT_SHA256}" "${AK3_LUNA_CORE_SHA256}"; do
+    [[ "${ak3_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "AnyKernel3 SHA-256 pin 格式错误"
+done
 [[ "${MAGISK_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Magisk commit 格式错误"
 [[ "${MAGISKBOOT_ARM64_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "arm64 magiskboot SHA-256 格式错误"
 [[ "${STAGE_CONFIG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "阶段配置 SHA-256 快照格式错误或尚未固定"
@@ -1611,6 +1634,8 @@ ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}
 CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 MAGISKBOOT_ARM64_PATH="${ENVIRONMENT_DIR}/magisk/v${MAGISK_VERSION}/magiskboot-arm64"
+AK3_TEMPLATE_DIR="${HOST_WORKSPACE_DIR}/ak3_template"
+AK3_BUSYBOX_PATH="${ENVIRONMENT_DIR}/anykernel3/${AK3_ARM64_TOOLS_COMMIT}/busybox-arm64"
 CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-67da74f00a801440ca7c256b028d94e6c85bf7168fbdecab62c3710384a25d5a}"
 
 [ -x "${CI_TOOLCHAIN_DIR}/bin/clang" ] || die "工具链未初始化，请先运行 ./init.sh"
@@ -1620,6 +1645,9 @@ CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-67da74f00a801440ca7c256b02
 [ -x "${MAGISKBOOT_ARM64_PATH}" ] || die "arm64 magiskboot 未初始化，请先运行 ./init.sh"
 [ "$(sha256sum "${MAGISKBOOT_ARM64_PATH}" | awk '{ print $1 }')" = "${MAGISKBOOT_ARM64_SHA256}" ] || \
     die "arm64 magiskboot SHA-256 校验失败，请重新运行 ./init.sh"
+[ -x "${AK3_BUSYBOX_PATH}" ] || die "AnyKernel3 arm64 BusyBox 未初始化，请先运行 ./init.sh"
+[ "$(sha256sum "${AK3_BUSYBOX_PATH}" | awk '{ print $1 }')" = "${AK3_BUSYBOX_SHA256}" ] || \
+    die "AnyKernel3 arm64 BusyBox SHA-256 校验失败，请重新运行 ./init.sh"
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
 [ "$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" = "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
     die "工具链安装树完整性校验失败，请重新运行 ./init.sh"
@@ -1880,50 +1908,88 @@ if [ "${ENABLE_SUSFS}" = "1" ]; then
     log_success "官方 SUSFS helper 与模块已输出: ${SUSFS_MODULE_NAME}"
 fi
 
-if [ -f "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" ]; then
-    unzip -tq "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" >/dev/null || die "AnyKernel3 模板 ZIP 损坏"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | grep -Fx 'do.devicecheck=0' >/dev/null || die "AnyKernel3 模板未禁用 do.devicecheck"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
-        grep -Fx 'kernel.string=Luna Kernel for Xiaomi 17' >/dev/null || \
-        die "AnyKernel3 模板品牌或设备标识不正确"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
-        grep -Fx "boot_partition_size=${AK3_BOOT_PARTITION_SIZE};" >/dev/null || \
-        die "AnyKernel3 模板未固定小米 17 boot 分区容量"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
-        grep -Fx '  partition_size="$(blockdev --getsize64 "$block" 2>/dev/null)";' >/dev/null || \
-        die "AnyKernel3 模板未读取真实 boot 块设备容量"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
-        grep -Fx '  if [ "$partition_size" -ne "$boot_partition_size" ]; then' >/dev/null || \
-        die "AnyKernel3 模板未校验小米 17 boot 分区容量"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" anykernel.sh | \
-        grep -Fx '  elif [ "$image_size" -gt "$partition_size" ]; then' >/dev/null || \
-        die "AnyKernel3 模板未限制新 boot 镜像大小"
-    unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" tools/ak3-core.sh | \
-        grep -Fx '  luna_verify_boot_image_size boot-new.img;' >/dev/null || \
-        die "AnyKernel3 模板未使用真实 boot 分区容量门禁"
-    if unzip -p "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" tools/ak3-core.sh | \
-        grep -F 'wc -c < boot.img' >/dev/null; then
-        die "AnyKernel3 模板仍按原 boot 镜像文件长度拒绝刷写"
-    fi
-    log_step "打包 AnyKernel3 刷机包"
-    ZIP_NAME="${PRODUCT_DIR}/luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}.zip"
-    AK3_STAGE="$(mktemp -d "${BUILD_DIR}/ak3-package.XXXXXX")"
-    mkdir -p "${AK3_STAGE}/tools"
-    cp -f "${MAGISKBOOT_ARM64_PATH}" "${AK3_STAGE}/tools/magiskboot"
-    chmod 0755 "${AK3_STAGE}/tools/magiskboot"
-    cp -f "${HOST_WORKSPACE_DIR}/ak3_template/template.zip" "${ZIP_NAME}"
-    (cd "${AK3_STAGE}" && 7z u -tzip "${ZIP_NAME}" tools/magiskboot >/dev/null)
-    (cd "${PRODUCT_DIR}" && 7z u -tzip "${ZIP_NAME}" Image >/dev/null)
-    unzip -p "${ZIP_NAME}" anykernel.sh | grep -Fx 'do.devicecheck=0' >/dev/null || die "刷机包 do.devicecheck 校验失败"
-    unzip -p "${ZIP_NAME}" anykernel.sh | grep -Fx 'kernel.string=Luna Kernel for Xiaomi 17' >/dev/null || \
-        die "刷机包品牌或设备标识校验失败"
-    [ "$(unzip -p "${ZIP_NAME}" tools/magiskboot | sha256sum | awk '{ print $1 }')" = \
-      "${MAGISKBOOT_ARM64_SHA256}" ] || die "刷机包 arm64 magiskboot SHA-256 校验失败"
-    unzip -tq "${ZIP_NAME}" >/dev/null || die "刷机包 ZIP 完整性校验失败"
-    rm -rf -- "${AK3_STAGE}"
-    RELEASE_ARTIFACTS+=("$(basename "${ZIP_NAME}")")
-    log_success "AnyKernel3 刷机包已生成: ${ZIP_NAME}"
+AK3_UPSTREAM_DIR="${AK3_TEMPLATE_DIR}/upstream"
+AK3_LUNA_PATCH="${AK3_TEMPLATE_DIR}/luna.patch"
+for ak3_source in \
+    "${AK3_UPSTREAM_DIR}/anykernel.sh:${AK3_ANYKERNEL_SH_SHA256}" \
+    "${AK3_UPSTREAM_DIR}/META-INF/com/google/android/update-binary:${AK3_UPDATE_BINARY_SHA256}" \
+    "${AK3_UPSTREAM_DIR}/META-INF/com/google/android/updater-script:${AK3_UPDATER_SCRIPT_SHA256}" \
+    "${AK3_UPSTREAM_DIR}/tools/ak3-core.sh:${AK3_CORE_SHA256}" \
+    "${AK3_TEMPLATE_DIR}/LICENSE:${AK3_LICENSE_SHA256}" \
+    "${AK3_LUNA_PATCH}:${AK3_LUNA_PATCH_SHA256}"; do
+    ak3_source_path=${ak3_source%%:*}
+    ak3_source_sha256=${ak3_source#*:}
+    [ -f "${ak3_source_path}" ] || die "AnyKernel3 固定源码缺失: ${ak3_source_path}"
+    [ "$(sha256sum "${ak3_source_path}" | awk '{ print $1 }')" = "${ak3_source_sha256}" ] || \
+        die "AnyKernel3 固定源码 SHA-256 校验失败: ${ak3_source_path}"
+done
+[ -f "${AK3_TEMPLATE_DIR}/SOURCE.md" ] || die "AnyKernel3 来源记录缺失"
+
+log_step "从固定源码组装 AnyKernel3 刷机包"
+ZIP_NAME="${PRODUCT_DIR}/luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}.zip"
+AK3_STAGE="$(mktemp -d "${BUILD_DIR}/ak3-package.XXXXXX")"
+cp -a "${AK3_UPSTREAM_DIR}/." "${AK3_STAGE}/"
+cp -f "${AK3_TEMPLATE_DIR}/LICENSE" "${AK3_STAGE}/LICENSE"
+cp -f "${AK3_TEMPLATE_DIR}/SOURCE.md" "${AK3_STAGE}/SOURCE.md"
+patch -d "${AK3_STAGE}" -p1 --batch --forward < "${AK3_LUNA_PATCH}" >/dev/null || \
+    die "OS3 Luna AnyKernel3 差异补丁无法应用到固定上游"
+cp -f "${AK3_BUSYBOX_PATH}" "${AK3_STAGE}/tools/busybox"
+cp -f "${MAGISKBOOT_ARM64_PATH}" "${AK3_STAGE}/tools/magiskboot"
+cp -f "${PRODUCT_DIR}/Image" "${AK3_STAGE}/Image"
+chmod 0755 \
+    "${AK3_STAGE}/META-INF/com/google/android/update-binary" \
+    "${AK3_STAGE}/tools/ak3-core.sh" \
+    "${AK3_STAGE}/tools/busybox" \
+    "${AK3_STAGE}/tools/magiskboot"
+
+[ "$(sha256sum "${AK3_STAGE}/anykernel.sh" | awk '{ print $1 }')" = "${AK3_LUNA_ANYKERNEL_SH_SHA256}" ] || \
+    die "OS3 Luna anykernel.sh 结果摘要不匹配"
+[ "$(sha256sum "${AK3_STAGE}/META-INF/com/google/android/update-binary" | awk '{ print $1 }')" = \
+  "${AK3_LUNA_UPDATE_BINARY_SHA256}" ] || die "OS3 Luna update-binary 结果摘要不匹配"
+[ "$(sha256sum "${AK3_STAGE}/META-INF/com/google/android/updater-script" | awk '{ print $1 }')" = \
+  "${AK3_LUNA_UPDATER_SCRIPT_SHA256}" ] || die "OS3 Luna updater-script 结果摘要不匹配"
+[ "$(sha256sum "${AK3_STAGE}/tools/ak3-core.sh" | awk '{ print $1 }')" = "${AK3_LUNA_CORE_SHA256}" ] || \
+    die "OS3 Luna ak3-core.sh 结果摘要不匹配"
+for AK3_SHELL_SCRIPT in META-INF/com/google/android/update-binary tools/ak3-core.sh anykernel.sh; do
+    bash -n "${AK3_STAGE}/${AK3_SHELL_SCRIPT}" || die "AnyKernel3 脚本语法错误: ${AK3_SHELL_SCRIPT}"
+done
+grep -Fx 'do.devicecheck=0' "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未禁用 do.devicecheck"
+grep -Fx 'kernel.string=Luna Kernel for Xiaomi 17' "${AK3_STAGE}/anykernel.sh" >/dev/null || \
+    die "AnyKernel3 品牌或设备标识不正确"
+grep -Fx "boot_partition_size=${AK3_BOOT_PARTITION_SIZE};" "${AK3_STAGE}/anykernel.sh" >/dev/null || \
+    die "AnyKernel3 未固定小米 17 boot 分区容量"
+grep -Fx '  partition_size="$(blockdev --getsize64 "$block" 2>/dev/null)";' \
+    "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未读取真实 boot 块设备容量"
+grep -Fx '  if [ "$partition_size" -ne "$boot_partition_size" ]; then' \
+    "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未校验小米 17 boot 分区容量"
+grep -Fx '  elif [ "$image_size" -gt "$partition_size" ]; then' \
+    "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未限制新 boot 镜像大小"
+grep -Fx '  luna_verify_boot_image_size boot-new.img;' "${AK3_STAGE}/tools/ak3-core.sh" >/dev/null || \
+    die "AnyKernel3 未使用真实 boot 分区容量门禁"
+if grep -F 'wc -c < boot.img' "${AK3_STAGE}/tools/ak3-core.sh" >/dev/null; then
+    die "AnyKernel3 仍按原 boot 镜像文件长度拒绝刷写"
 fi
+
+(cd "${AK3_STAGE}" && TZ=UTC 7z a -tzip "${ZIP_NAME}" \
+    Image LICENSE SOURCE.md anykernel.sh \
+    META-INF/com/google/android/update-binary \
+    META-INF/com/google/android/updater-script \
+    patch/placeholder ramdisk/placeholder \
+    tools/ak3-core.sh tools/busybox tools/magiskboot >/dev/null)
+unzip -tq "${ZIP_NAME}" >/dev/null || die "刷机包 ZIP 完整性校验失败"
+AK3_FILE_LIST="$(unzip -Z1 "${ZIP_NAME}" | sed '/\/$/d' | LC_ALL=C sort)"
+[ "${AK3_FILE_LIST}" = $'Image\nLICENSE\nMETA-INF/com/google/android/update-binary\nMETA-INF/com/google/android/updater-script\nSOURCE.md\nanykernel.sh\npatch/placeholder\nramdisk/placeholder\ntools/ak3-core.sh\ntools/busybox\ntools/magiskboot' ] || \
+    die "刷机包文件白名单不匹配"
+[ "$(unzip -p "${ZIP_NAME}" tools/busybox | sha256sum | awk '{ print $1 }')" = "${AK3_BUSYBOX_SHA256}" ] || \
+    die "刷机包 arm64 BusyBox SHA-256 校验失败"
+[ "$(unzip -p "${ZIP_NAME}" tools/magiskboot | sha256sum | awk '{ print $1 }')" = \
+  "${MAGISKBOOT_ARM64_SHA256}" ] || die "刷机包 arm64 magiskboot SHA-256 校验失败"
+case "${AK3_STAGE}" in
+    "${BUILD_DIR}"/ak3-package.*) rm -rf -- "${AK3_STAGE}" ;;
+    *) die "拒绝清理异常 AnyKernel3 暂存目录" ;;
+esac
+RELEASE_ARTIFACTS+=("$(basename "${ZIP_NAME}")")
+log_success "AnyKernel3 刷机包已生成: ${ZIP_NAME}"
 rm -f -- "${PRODUCT_DIR}/Image"
 
 for artifact in "${RELEASE_ARTIFACTS[@]}"; do

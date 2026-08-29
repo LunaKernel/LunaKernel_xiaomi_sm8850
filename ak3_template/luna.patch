@@ -1,0 +1,243 @@
+diff -urN a/META-INF/com/google/android/update-binary b/META-INF/com/google/android/update-binary
+--- a/META-INF/com/google/android/update-binary	2026-08-29 22:47:01.130505425 +0800
++++ b/META-INF/com/google/android/update-binary	2026-08-29 22:55:59.156319639 +0800
+@@ -33,7 +33,39 @@
+ }
+ show_progress() { echo "progress $1 $2" >> /proc/self/fd/$OUTFD; }
+ file_getprop() { grep "^$2=" "$1" | tail -n1 | cut -d= -f2-; }
++find_slot_from_propfiles() {
++  local propdir propfile slot raw;
++  for propdir in / /system_root /system /vendor /product /product/etc /system_ext/etc /odm /odm/etc; do
++    for propfile in prop.default default.prop build.prop; do
++      slot="$(file_getprop "$propdir/$propfile" ro.boot.slot_suffix 2>/dev/null)";
++      [ "$slot" ] && break 2;
++    done;
++  done;
++  if [ ! "$slot" ]; then
++    for propdir in / /system_root /system /vendor /product /product/etc /system_ext/etc /odm /odm/etc; do
++      for propfile in prop.default default.prop build.prop; do
++        raw="$(file_getprop "$propdir/$propfile" ro.boot.slot 2>/dev/null)";
++        if [ "$raw" ]; then
++          slot="_$raw";
++          break 2;
++        fi;
++      done;
++    done;
++  fi;
++  [ "$slot" ] && echo "$slot";
++}
+ find_slot() {
++  if [ -f /tmp/ak3-slot-compat.env ]; then
++    . /tmp/ak3-slot-compat.env 2>/dev/null
++    if [ "$ACTIVE_SLOT_SUFFIX" ]; then
++      echo "$ACTIVE_SLOT_SUFFIX"
++      return 0
++    fi
++    if [ "$ACTIVE_SLOT" ]; then
++      echo "_$ACTIVE_SLOT"
++      return 0
++    fi
++  fi
+   local slot=$(getprop ro.boot.slot_suffix 2>/dev/null);
+   [ "$slot" ] || slot=$(grep -o 'androidboot.slot_suffix=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
+   if [ ! "$slot" ]; then
+@@ -41,6 +73,7 @@
+     [ "$slot" ] || slot=$(grep -o 'androidboot.slot=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
+     [ "$slot" ] && slot=_$slot;
+   fi;
++  [ "$slot" ] || slot=$(find_slot_from_propfiles);
+   [ "$slot" == "normal" ] && unset slot;
+   [ "$slot" ] && echo "$slot";
+ }
+@@ -209,7 +242,7 @@
+     getprop() {
+       local propdir propfile propval;
+       for propdir in / /system_root /system /vendor /product /product/etc /system_ext/etc /odm/etc; do
+-        for propfile in default.prop build.prop; do
++        for propfile in prop.default default.prop build.prop; do
+           if [ "$propval" ]; then
+             break 2;
+           else
+diff -urN a/META-INF/com/google/android/updater-script b/META-INF/com/google/android/updater-script
+--- a/META-INF/com/google/android/updater-script	2026-08-29 22:47:01.132505437 +0800
++++ b/META-INF/com/google/android/updater-script	2026-08-29 22:55:59.157319647 +0800
+@@ -3,4 +3,4 @@
+ # Dummy file; update-binary is a shell script (DO NOT CHANGE)
+ #
+ #
+-# AK_BASE_VERSION=20231020
++# AK_BASE_VERSION=20240203
+diff -urN a/anykernel.sh b/anykernel.sh
+--- a/anykernel.sh	2026-08-29 22:47:01.128505413 +0800
++++ b/anykernel.sh	2026-08-29 22:55:59.154319624 +0800
+@@ -4,22 +4,41 @@
+ ### AnyKernel setup
+ # global properties
+ properties() { '
+-kernel.string=ExampleKernel by osm0sis @ xda-developers
+-do.devicecheck=1
++kernel.string=Luna Kernel for Xiaomi 17
++do.devicecheck=0
+ do.modules=0
+-do.systemless=1
++do.systemless=0
+ do.cleanup=1
+ do.cleanuponabort=0
+-device.name1=maguro
+-device.name2=toro
+-device.name3=toroplus
+-device.name4=tuna
+-device.name5=
++device.name1=nezha
++device.name2=popsicle
++device.name3=pandora
++device.name4=pudding
+ supported.versions=
+ supported.patchlevels=
+ supported.vendorpatchlevels=
+ '; } # end properties
+ 
++luna_verify_boot_image_size() {
++  local image="$1" image_size partition_size;
++
++  image_size="$(wc -c < "$image" 2>/dev/null)";
++  case "$image_size" in
++    ''|*[!0-9]*) abort "Unable to determine new boot image size. Aborting...";;
++  esac;
++
++  partition_size="$(blockdev --getsize64 "$block" 2>/dev/null)";
++  case "$partition_size" in
++    ''|*[!0-9]*) abort "Unable to determine target boot partition size. Aborting...";;
++  esac;
++
++  if [ "$partition_size" -ne "$boot_partition_size" ]; then
++    abort "Unexpected boot partition size: $partition_size bytes (expected $boot_partition_size). Aborting...";
++  elif [ "$image_size" -gt "$partition_size" ]; then
++    abort "New boot image is too large: $image_size > $partition_size bytes. Aborting...";
++  fi;
++  ui_print " " "Boot image size: $image_size / $partition_size bytes";
++}
+ 
+ ### AnyKernel install
+ ## boot files attributes
+@@ -29,8 +48,9 @@
+ } # end attributes
+ 
+ # boot shell variables
+-block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;
+-is_slot_device=0;
++block=/dev/block/by-name/boot;
++is_slot_device=1;
++boot_partition_size=100663296;
+ ramdisk_compression=auto;
+ patch_vbmeta_flag=auto;
+ 
+@@ -38,25 +58,25 @@
+ . tools/ak3-core.sh;
+ 
+ # boot install
+-dump_boot; # use split_boot to skip ramdisk unpack, e.g. for devices with init_boot ramdisk
++split_boot; # use split_boot to skip ramdisk unpack, e.g. for devices with init_boot ramdisk
+ 
+ # init.rc
+-backup_file init.rc;
+-replace_string init.rc "cpuctl cpu,timer_slack" "mount cgroup none /dev/cpuctl cpu" "mount cgroup none /dev/cpuctl cpu,timer_slack";
++# backup_file init.rc;
++# replace_string init.rc "cpuctl cpu,timer_slack" "mount cgroup none /dev/cpuctl cpu" "mount cgroup none /dev/cpuctl cpu,timer_slack";
+ 
+ # init.tuna.rc
+-backup_file init.tuna.rc;
+-insert_line init.tuna.rc "nodiratime barrier=0" after "mount_all /fstab.tuna" "\tmount ext4 /dev/block/platform/omap/omap_hsmmc.0/by-name/userdata /data remount nosuid nodev noatime nodiratime barrier=0";
+-append_file init.tuna.rc "bootscript" init.tuna;
++# backup_file init.tuna.rc;
++# insert_line init.tuna.rc "nodiratime barrier=0" after "mount_all /fstab.tuna" "\tmount ext4 /dev/block/platform/omap/omap_hsmmc.0/by-name/userdata /data remount nosuid nodev noatime nodiratime barrier=0";
++# append_file init.tuna.rc "bootscript" init.tuna;
+ 
+ # fstab.tuna
+-backup_file fstab.tuna;
+-patch_fstab fstab.tuna /system ext4 options "noatime,barrier=1" "noatime,nodiratime,barrier=0";
+-patch_fstab fstab.tuna /cache ext4 options "barrier=1" "barrier=0,nomblk_io_submit";
+-patch_fstab fstab.tuna /data ext4 options "data=ordered" "nomblk_io_submit,data=writeback";
+-append_file fstab.tuna "usbdisk" fstab;
++# backup_file fstab.tuna;
++# patch_fstab fstab.tuna /system ext4 options "noatime,barrier=1" "noatime,nodiratime,barrier=0";
++# patch_fstab fstab.tuna /cache ext4 options "barrier=1" "barrier=0,nomblk_io_submit";
++# patch_fstab fstab.tuna /data ext4 options "data=ordered" "nomblk_io_submit,data=writeback";
++# append_file fstab.tuna "usbdisk" fstab;
+ 
+-write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk
++flash_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk
+ ## end boot install
+ 
+ 
+@@ -118,4 +138,3 @@
+ 
+ #write_boot; # use flash_boot to skip ramdisk repack, e.g. for dtb on devices with hdr v4 but no vendor_kernel_boot
+ ## end vendor_boot install
+-
+diff -urN a/tools/ak3-core.sh b/tools/ak3-core.sh
+--- a/tools/ak3-core.sh	2026-08-29 22:47:01.134505449 +0800
++++ b/tools/ak3-core.sh	2026-08-29 22:55:59.158319655 +0800
+@@ -37,6 +37,27 @@
+ file_getprop() {
+   grep "^$2=" "$1" | tail -n1 | cut -d= -f2-;
+ }
++find_slot_from_propfiles() {
++  local propdir propfile slot raw;
++  for propdir in / /system_root /system /vendor /product /product/etc /system_ext/etc /odm /odm/etc; do
++    for propfile in prop.default default.prop build.prop; do
++      slot="$(file_getprop "$propdir/$propfile" ro.boot.slot_suffix 2>/dev/null)";
++      [ "$slot" ] && break 2;
++    done;
++  done;
++  if [ ! "$slot" ]; then
++    for propdir in / /system_root /system /vendor /product /product/etc /system_ext/etc /odm /odm/etc; do
++      for propfile in prop.default default.prop build.prop; do
++        raw="$(file_getprop "$propdir/$propfile" ro.boot.slot 2>/dev/null)";
++        if [ "$raw" ]; then
++          slot="_$raw";
++          break 2;
++        fi;
++      done;
++    done;
++  fi;
++  [ "$slot" ] && echo "$slot";
++}
+ ###
+ 
+ ### file/directory attributes functions:
+@@ -436,9 +457,8 @@
+ 
+   if [ ! -f boot-new.img ]; then
+     abort "No repacked image found to flash. Aborting...";
+-  elif [ "$(wc -c < boot-new.img)" -gt "$(wc -c < boot.img)" ]; then
+-    abort "New image larger than target partition. Aborting...";
+   fi;
++  luna_verify_boot_image_size boot-new.img;
+   blockdev --setrw $block 2>/dev/null;
+   if [ -f "$bin/flash_erase" -a -f "$bin/nandwrite" ]; then
+     $bin/flash_erase $block 0 0;
+@@ -811,13 +831,22 @@
+   # slot detection enabled by is_slot_device=1 or auto (from anykernel.sh)
+   case $is_slot_device in
+     1|auto)
+-      slot=$(getprop ro.boot.slot_suffix 2>/dev/null);
++      if [ -f /tmp/ak3-slot-compat.env ]; then
++        . /tmp/ak3-slot-compat.env 2>/dev/null
++        if [ "$ACTIVE_SLOT_SUFFIX" ]; then
++          slot="$ACTIVE_SLOT_SUFFIX";
++        elif [ "$ACTIVE_SLOT" ]; then
++          slot="_$ACTIVE_SLOT";
++        fi;
++      fi;
++      [ "$slot" ] || slot=$(getprop ro.boot.slot_suffix 2>/dev/null);
+       [ "$slot" ] || slot=$(grep -o 'androidboot.slot_suffix=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
+       if [ ! "$slot" ]; then
+         slot=$(getprop ro.boot.slot 2>/dev/null);
+         [ "$slot" ] || slot=$(grep -o 'androidboot.slot=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
+         [ "$slot" ] && slot=_$slot;
+       fi;
++      [ "$slot" ] || slot=$(find_slot_from_propfiles);
+       [ "$slot" == "normal" ] && unset slot;
+       if [ "$slot" ]; then
+         if [ -d /postinstall/tmp -a ! "$slot_select" ]; then

@@ -413,6 +413,30 @@ prepare_magiskboot() {
     log_success "官方 MagiskBoot v${MAGISK_VERSION} 校验通过"
 }
 
+prepare_anykernel_tools() {
+    local tools_dir binary_path part_path actual_sha256
+
+    tools_dir="${ENVIRONMENT_DIR}/anykernel3/${AK3_ARM64_TOOLS_COMMIT}"
+    binary_path="${tools_dir}/busybox-arm64"
+    mkdir -p "${tools_dir}"
+    if [ ! -f "${binary_path}" ]; then
+        part_path="${binary_path}.part"
+        log_step "下载固定 AnyKernel3 arm64 BusyBox"
+        curl --proto '=https' --tlsv1.2 -fSL --retry 3 \
+            -o "${part_path}" "${AK3_BUSYBOX_URL}" || die "AnyKernel3 BusyBox 下载失败"
+        actual_sha256="$(sha256sum "${part_path}" | awk '{ print $1 }')"
+        [ "${actual_sha256}" = "${AK3_BUSYBOX_SHA256}" ] || \
+            die "AnyKernel3 BusyBox SHA-256 不匹配: ${actual_sha256}"
+        chmod 0755 "${part_path}"
+        mv "${part_path}" "${binary_path}"
+    fi
+    actual_sha256="$(sha256sum "${binary_path}" | awk '{ print $1 }')"
+    [ "${actual_sha256}" = "${AK3_BUSYBOX_SHA256}" ] || \
+        die "AnyKernel3 BusyBox 缓存 SHA-256 不匹配: ${actual_sha256}"
+    [ -x "${binary_path}" ] || chmod 0755 "${binary_path}"
+    log_success "AnyKernel3 arm64 BusyBox 校验通过"
+}
+
 prepare_source_archive() {
     local label="$1" url="$2" archive="$3" checksum_tool="$4" expected_checksum="$5" source_dir="$6" extracted_name="$7" expected_tree="$8"
     local actual_checksum actual_tree marker
@@ -541,6 +565,10 @@ MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISK_APK_URL="${MAGISK_APK_URL:-https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk}"
 MAGISK_APK_SHA256="${MAGISK_APK_SHA256:-e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5}"
 MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf793baef9804ccbe5a52ce34a8b6242725d3c77}"
+AK3_UPSTREAM_COMMIT="${AK3_UPSTREAM_COMMIT:-f63f136037d74f0e6b7eab941eadec5ff30e34c4}"
+AK3_ARM64_TOOLS_COMMIT="${AK3_ARM64_TOOLS_COMMIT:-e9101f0378055aa844fd80b7d819e0e1b3f59aed}"
+AK3_BUSYBOX_URL="${AK3_BUSYBOX_URL:-https://raw.githubusercontent.com/osm0sis/AnyKernel3/${AK3_ARM64_TOOLS_COMMIT}/tools/busybox}"
+AK3_BUSYBOX_SHA256="${AK3_BUSYBOX_SHA256:-c629fce4b0dd3ba9775f851d0941e74582115f423258d3a79800f2bd11d30f5c}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
@@ -718,8 +746,13 @@ CI_BUSYBOX_SHA256="${CI_BUSYBOX_SHA256:-6e123e7f3202a8c1e9b1f94d8941580a25135382
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
 [[ "${AOSP_CLANG_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP clang commit 格式错误"
 [[ "${MAGISK_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Magisk commit 格式错误"
+[[ "${AK3_UPSTREAM_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 脚本 commit 格式错误"
+[[ "${AK3_ARM64_TOOLS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 工具 commit 格式错误"
 [[ "${MAGISK_APK_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Magisk APK SHA-256 格式错误"
 [[ "${MAGISKBOOT_ARM64_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "arm64 magiskboot SHA-256 格式错误"
+[[ "${AK3_BUSYBOX_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "AnyKernel3 BusyBox SHA-256 格式错误"
+[ "${AK3_BUSYBOX_URL}" = "https://raw.githubusercontent.com/osm0sis/AnyKernel3/${AK3_ARM64_TOOLS_COMMIT}/tools/busybox" ] || \
+    die "AnyKernel3 BusyBox 必须来自固定官方工具提交"
 [[ "${AOSP_RUST_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP Rust commit 格式错误"
 [[ "${AOSP_BUILD_TOOLS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP build-tools commit 格式错误"
 [ "${CI_CLANG_URL}" = "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/${AOSP_CLANG_COMMIT}/clang-r536225.tar.gz" ] || \
@@ -1043,6 +1076,7 @@ fi
 verify_source_baseline
 setup_toolchain
 prepare_magiskboot
+prepare_anykernel_tools
 [ "${ENABLE_KERNELSU}" != "1" ] || prepare_kernelsu_manager
 
 log_success "源码与编译环境初始化完成"
@@ -1076,3 +1110,4 @@ log_info "GKI common: ${COMMON_DIR}"
 [ "${ENABLE_IPSET}" != "1" ] || log_info "IPSet userspace: ${IPSET_DIR} + libmnl ${LIBMNL_DIR} (NDK ${ANDROID_NDK_VERSION})"
 log_info "toolchain: ${CI_TOOLCHAIN_DIR}"
 log_info "MagiskBoot: v${MAGISK_VERSION} (${MAGISK_COMMIT})"
+log_info "AnyKernel3: scripts ${AK3_UPSTREAM_COMMIT}, arm64 tools ${AK3_ARM64_TOOLS_COMMIT}"
