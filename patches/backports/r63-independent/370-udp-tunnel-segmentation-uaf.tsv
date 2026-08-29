@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	udp_tunnel_segmentation_uaf	direct	stable	linux-6.12.y	5161e67c561c4f28a5d9335a6e859b02511de92b	2026-08-19	bd15f5f973f414b774816b736821e0241cd736c9	net/ipv4/udp_offload.c	-	-	-
