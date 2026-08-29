@@ -34,7 +34,7 @@ Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）
 
 已授权的内核直接修复仅包括 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 有清晰机制、与小米 17 实际路径相关、来自稳定官方历史、没有回退或明显回归证据，并通过第 3、5 节的可启动兼容性硬门禁及完整差异审计；收益极小、路径无关、来源不清或逻辑证据不足的改动一律拒绝。缺少实机性能数据本身不构成否决，但不得把无法说明机制的猜测包装成优化。r21 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得再作为项目回移重复应用。
 
-r21 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一个有序、不可拆分的集合：23 项逻辑修复、28 个实际应用提交和 1 个来源证明提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r21-independent/`，当前为 31 个可独立回退的逻辑项；每个清单只承载一个逻辑项，不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
+r21 后续回移由 `patches/backports/r21-selected-backports.tsv` 固定为一个有序、不可拆分的集合：23 项逻辑修复、28 个实际应用提交和 1 个来源证明提交，其中普通 F2FS write-end 生命周期修复使用绑定官方 stable/mainline 的两行上下文适配。后续新增的高置信回移 MUST 置于 `patches/backports/r21-independent/`，当前为 42 个可独立回退的逻辑项；每个清单只承载一个逻辑项，不可拆的官方前置/补修链必须保留在同一清单。每个清单必须有独立 SHA-256 pin，并通过临时 Git index 证明可从固定基础差异单独应用、撤销以及按固定顺序完整重放。清单之外的提交不得借用该授权；触及配置、UAPI、syscall、ABI 或 KMI 的候选必须逐项说明影响，不得破坏目标 OTA 模块闭包、关键启动配置或既有用户态语义。
 
 r21 对 `struct tegra_mc` 的私有类型重构使固定 OTA 实际消费的 `devm_tegra_memory_controller_get` 与 `tegra_mc_probe_device` 产生 CRC 漂移。`patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch` 只使用 `ANDROID_KABI_TYPE_STRING` 固定这两个不透明指针接口的版本字符串，不改变函数机器 ABI、运行时代码或结构体布局；该窄兼容补丁及其 SHA-256、patch-id MUST 固定并纳入源码差异门禁。
 
