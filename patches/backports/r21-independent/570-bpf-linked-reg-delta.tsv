@@ -1,0 +1,3 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	bpf_linked_reg_delta	direct	stable	linux-6.12.y	1509c1ae9185ec7103899967ed788b6eebab3fcc	2026-08-23	c3f5ad2baab7964cb080f09e22ebd7d65c93bab1	kernel/bpf/verifier.c	-	-	-
+002	bpf_linked_reg_delta	direct	stable	linux-6.12.y	6321ebf2a1052306e778410ed1e0229611a69500	2026-08-23	a4209c7a089be2f5c02e5e2187bcc2d32cd3ca9b	kernel/bpf/verifier.c	-	-	-
