@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	f2fs_orphan_entry_count	direct	stable	linux-6.12.y	550511a2470f6d204fa07b331f048bd2d3c51280	2026-07-18	7dadcdcbbf0f85ac764fe2828ab7df046a6f512f	fs/f2fs/checkpoint.c,include/linux/f2fs_fs.h	-	-	-
