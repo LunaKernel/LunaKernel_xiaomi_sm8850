@@ -1,0 +1,3 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	udp_wildcard_bind_conflict	direct	stable	linux-6.12.y	afb7c7f20f2e03205887465a6d52d4e7f910bf58	2026-04-02	d8141288a8f06718c72feb3b2c18f08c154f2a7f	net/ipv4/inet_connection_sock.c	-	-	-
+002	udp_wildcard_bind_conflict	direct	stable	linux-6.12.y	f1bed05a832ae79be5f7a105da56810eaa59a5f1	2026-04-02	c125fd567ada2746ff221b2b03d7005713742822	include/net/inet_hashtables.h,net/ipv4/inet_connection_sock.c,net/ipv4/udp.c	-	-	-
