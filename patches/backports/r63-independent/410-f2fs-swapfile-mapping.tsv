@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	f2fs_swapfile_mapping	direct	stable	linux-6.12.y	1ff415eef513bf12deb058fc50d57788c46c48e6	2026-02-19	f2af2ee43ba90c4bd10d6e05512300459f737473	fs/f2fs/data.c	-	-	-
