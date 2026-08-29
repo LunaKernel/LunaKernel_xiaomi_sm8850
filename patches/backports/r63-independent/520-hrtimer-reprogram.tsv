@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	hrtimer_reprogram	direct	stable	linux-6.12.y	d8d7b0043accdbf641d9a3138a93af83641f1f1c	2026-05-23	d676e04ba42aa01639556925547901aa609f6fbf	kernel/time/hrtimer.c	-	-	-
