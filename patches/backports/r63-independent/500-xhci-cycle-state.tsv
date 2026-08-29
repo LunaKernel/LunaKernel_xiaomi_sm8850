@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	xhci_cycle_state	direct	aosp	android16-6.12	7ee04de323f7eb1fc4f31e8bb0fd7dcd80781c77	2026-08-25	0661d670ec8e04e7d0c112e9a2d8dc15b882c044	drivers/usb/host/xhci-mem.c,drivers/usb/host/xhci.h	-	-	-
