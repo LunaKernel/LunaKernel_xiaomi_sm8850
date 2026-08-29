@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	hid_set_field_usage_bounds	direct	stable	linux-6.12.y	a38212687519f2a72f43e62dec1348a690412404	2026-08-27	eb24bc47403df03ecb20656cc6ae96cd098a7e2e	drivers/hid/hid-core.c	-	-	-
