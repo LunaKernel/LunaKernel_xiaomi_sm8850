@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	inet_fragment_gso	direct	stable	linux-6.12.y	dec2edb7aaf12a8878b3a03172ea8fc277b8eaad	2026-08-28	87021ba73b3775d4954d7c19c0046ac4669f6b4c	net/ipv4/inet_fragment.c	-	-	-
