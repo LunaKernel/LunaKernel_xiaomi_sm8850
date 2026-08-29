@@ -659,6 +659,7 @@ verify_susfs_source_state() {
     } | sort -u > "${allowed_ksu}"
     {
         printf '%s\n' drivers/Kconfig drivers/Makefile drivers/kernelsu
+        patch_paths_excluding "${TEGRA_MC_KMI_PATCH_FILE}"
         patch_paths_excluding "${common_patch}" \
             fs/exec.c \
             fs/namei.c \
