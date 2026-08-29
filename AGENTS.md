@@ -88,7 +88,7 @@ luna-xiaomi17-g<项目提交前8位>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<项目提交前8位>-YYYYMMDD
 ```
 
-AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
+AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。模板必须由 `ak3_template/` 的固定官方脚本与本分支 Luna 差异补丁重新组装；BusyBox 和 MagiskBoot 必须按 `.env` 摘要校验，禁止提交预制模板 ZIP。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
 
 ## 6. 真机验证
 
