@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	xfrm_state_mtu	direct	stable	linux-6.12.y	820e501be8aee4b365d218d83227b314309c5fda	2026-06-09	32e686ea89a0901ea10eeda05fc2c2fa9b36b1ed	net/xfrm/xfrm_state.c	-	-	-
