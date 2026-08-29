@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	futex_robust_exit_race	direct	stable	linux-6.12.y	925628656b73b70930972ccde421de4f758d8650	2026-08-19	72740b80bbf38dfcf064052faa0fdc93089715d0	kernel/futex/core.c	-	-	-
