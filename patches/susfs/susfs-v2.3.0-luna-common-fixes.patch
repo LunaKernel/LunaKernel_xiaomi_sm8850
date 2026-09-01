@@ -207,25 +207,6 @@ index bdc243fc4e0350085867eb53ac741d5acb38d490..adfec0905ebcf00ca0e8e3d19dc277b0
  	if (!(file->f_mode & FMODE_CREATED))
  		audit_inode(nd->name, nd->path.dentry, 0);
  	idmap = mnt_idmap(nd->path.mnt);
-diff --git a/fs/namespace.c b/fs/namespace.c
-index 8c5a31cdfc45075cc015c1d5e5a5c4ff7717496a..7dc54bb1038799c171f750df445c6dde86dffd82 100644
---- a/fs/namespace.c
-+++ b/fs/namespace.c
-@@ -1514,6 +1514,7 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
- 	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
- 
- #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	mnt->mnt.mnt_flags &= ~VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
- 	if (unlikely(is_mnt_ksu_unshared))
- 		mnt->mnt.mnt_flags |= VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
- #endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-@@ -6173,4 +6174,4 @@ struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt) {
- 	unlock_mount_hash();
- 	return &mnt->mnt;
- }
--#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-\ No newline at end of file
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 diff --git a/fs/proc/fd.c b/fs/proc/fd.c
 index ed6be4741eb0185e96811f7c1f6080918e0b35a3..caa90eee1a10d04592446d0b928928e38360b6c8 100644
 --- a/fs/proc/fd.c

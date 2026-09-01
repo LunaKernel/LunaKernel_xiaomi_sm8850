@@ -34,7 +34,7 @@ index 965fdc593d65eccbe987e9f89d78a8b4f4ef9cea..6b5b10949b5bfe8d7cbc7d4a98996b07
  		return PTR_ERR(filename);
  
 +#ifdef CONFIG_KSU_SUSFS
-+	if (likely(susfs_is_current_proc_umounted()))
++	if (likely(susfs_is_current_proc_no_su()))
 +		goto orig_flow;
 +
 +	if (static_branch_likely(&ksu_su_compat_enabled)) {

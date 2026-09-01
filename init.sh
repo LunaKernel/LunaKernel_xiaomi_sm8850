@@ -334,27 +334,6 @@ verify_aosp_backport_source() {
     log_success "${label} 官方来源已固定"
 }
 
-verify_kernelsu_backport_source() {
-    local label="$1" commit="$2" commit_date="$3" patch_id="$4" expected_paths="$5"
-    local actual_date actual_patch_id actual_paths
-    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
-        "${KSU_COMMIT}" "${commit}" || die "${label} 不在 KernelSU ${KSU_REF} 之后"
-    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
-        "${commit}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
-        die "${label} 不属于固定 KernelSU main 快照"
-    actual_date="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
-        -C "${KSU_DIR}" show -s --format=%cs "${commit}")"
-    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
-    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${actual_paths}" = "${expected_paths}" ] || die "${label} 触及非预期路径: ${actual_paths}"
-    actual_patch_id="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
-        -C "${KSU_DIR}" show --format= "${commit}" |
-        git patch-id --stable | awk '{ print $1 }')"
-    [ "${actual_patch_id}" = "${patch_id}" ] || die "${label} patch-id 不匹配"
-    log_success "${label} 官方来源已固定"
-}
-
 verify_source_baseline() {
     local branch kmi_generation version tracked_files xiaomi_ack_commit xiaomi_ack_tag
     version="$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")"
@@ -827,28 +806,14 @@ ABI_BASELINE_COMMIT="${ABI_BASELINE_COMMIT:-160343479eb972500e11fe76957fdb41b177
 ABI_BASELINE_STG_SHA256="${ABI_BASELINE_STG_SHA256:-f9802b066d9ffd4a0363ee57615e9af34360a84b3427549d9398de3eadb54691}"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
-KSU_REF="${KSU_REF:-v3.2.5}"
-KSU_COMMIT="${KSU_COMMIT:-b0bc817b4e966aa6aa830834eaf6ef765d821d40}"
+KSU_REF="${KSU_REF:-v3.3.0}"
+KSU_COMMIT="${KSU_COMMIT:-932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
-KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2525}"
+KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2601}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
-KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.2.5_32525-release.apk}"
-KSU_MANAGER_URL="${KSU_MANAGER_URL:-https://github.com/tiann/KernelSU/releases/download/v3.2.5/KernelSU_v3.2.5_32525-release.apk}"
-KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-1417081413bf7ab1de8e440ecbcb62685037c8f28f048f0f8b79e305b31ab916}"
-ENABLE_KSU_POST_RELEASE_FIXES="${ENABLE_KSU_POST_RELEASE_FIXES:-0}"
-KSU_POST_RELEASE_AUDIT_COMMIT="${KSU_POST_RELEASE_AUDIT_COMMIT:-62e88ca93df8affff54064e74948a37945c1865a}"
-KSU_ALLOCATION_FAILURE_COMMIT="${KSU_ALLOCATION_FAILURE_COMMIT:-e9e5b616a433b32c286dbf3f6708afd0c5ef7485}"
-KSU_ALLOCATION_FAILURE_DATE="${KSU_ALLOCATION_FAILURE_DATE:-2026-07-19}"
-KSU_ALLOCATION_FAILURE_PATCH_ID="${KSU_ALLOCATION_FAILURE_PATCH_ID:-2abefc35882130184b6399f60481c66d4261bb2b}"
-KSU_APK_SHORT_READ_COMMIT="${KSU_APK_SHORT_READ_COMMIT:-be53d75fd360a9f75231c58970bee1f20a870a4e}"
-KSU_APK_SHORT_READ_DATE="${KSU_APK_SHORT_READ_DATE:-2026-07-27}"
-KSU_APK_SHORT_READ_PATCH_ID="${KSU_APK_SHORT_READ_PATCH_ID:-1c906b1d21e4a79efaa307aa94fd73c445b09e07}"
-KSU_APK_AOSP_PARSER_COMMIT="${KSU_APK_AOSP_PARSER_COMMIT:-e6cc0ef7b0cf7a96af553dedd3282eb3f8ad8d03}"
-KSU_APK_AOSP_PARSER_DATE="${KSU_APK_AOSP_PARSER_DATE:-2026-08-07}"
-KSU_APK_AOSP_PARSER_PATCH_ID="${KSU_APK_AOSP_PARSER_PATCH_ID:-46da4ee6a88ea901ecfd58ec3a255f03b302312a}"
-KSU_APK_EOCD_VALIDATION_COMMIT="${KSU_APK_EOCD_VALIDATION_COMMIT:-aab67974f1210cad94880ce1fdc14cf63f6e30e0}"
-KSU_APK_EOCD_VALIDATION_DATE="${KSU_APK_EOCD_VALIDATION_DATE:-2026-08-11}"
-KSU_APK_EOCD_VALIDATION_PATCH_ID="${KSU_APK_EOCD_VALIDATION_PATCH_ID:-74e074cec2eb4e43467619d3dbc952e31769b39c}"
+KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.3.0_32601-release.apk}"
+KSU_MANAGER_URL="${KSU_MANAGER_URL:-https://github.com/tiann/KernelSU/releases/download/v3.3.0/KernelSU_v3.3.0_32601-release.apk}"
+KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-c197060ecb89702e7d54a4c95e29cf5e8d97369bbbb436979ab7fd6bcde7b077}"
 MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISK_APK_URL="${MAGISK_APK_URL:-https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk}"
@@ -861,9 +826,9 @@ AK3_BUSYBOX_SHA256="${AK3_BUSYBOX_SHA256:-c629fce4b0dd3ba9775f851d0941e74582115f
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-0e43d12a6cb5e6b2814c8214466784285d64ebec}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-c7db8cb367ef3ed4126ed7e222d77757ccb5c05b}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-ef69c8322232340f43c78c7fc491b32cb9f7da86}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-c7db8cb367ef3ed4126ed7e222d77757ccb5c05b}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
@@ -989,14 +954,6 @@ CI_BUSYBOX_SHA256="${CI_BUSYBOX_SHA256:-6e123e7f3202a8c1e9b1f94d8941580a25135382
 [[ "${MAGISK_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Magisk commit 格式错误"
 [[ "${AK3_UPSTREAM_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 脚本 commit 格式错误"
 [[ "${AK3_ARM64_TOOLS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 工具 commit 格式错误"
-for ksu_fix_commit in \
-    "${KSU_POST_RELEASE_AUDIT_COMMIT}" \
-    "${KSU_ALLOCATION_FAILURE_COMMIT}" \
-    "${KSU_APK_SHORT_READ_COMMIT}" \
-    "${KSU_APK_AOSP_PARSER_COMMIT}" \
-    "${KSU_APK_EOCD_VALIDATION_COMMIT}"; do
-    [[ "${ksu_fix_commit}" =~ ^[0-9a-f]{40}$ ]] || die "KernelSU 回移 commit 格式错误"
-done
 [[ "${MAGISK_APK_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Magisk APK SHA-256 格式错误"
 [[ "${MAGISKBOOT_ARM64_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "arm64 magiskboot SHA-256 格式错误"
 [[ "${AK3_BUSYBOX_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "AnyKernel3 BusyBox SHA-256 格式错误"
@@ -1042,35 +999,6 @@ if [ "${ENABLE_KERNELSU}" = "1" ]; then
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
     git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
         die "固定 KernelSU 版本未包含官方增强安全功能移除提交"
-    if [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ]; then
-        if ! env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
-            cat-file -e "${KSU_POST_RELEASE_AUDIT_COMMIT}^{commit}" 2>/dev/null; then
-            log_step "获取固定 KernelSU main 修复快照"
-            git_network -C "${KSU_DIR}" fetch --no-tags origin \
-                "${KSU_POST_RELEASE_AUDIT_COMMIT}"
-        fi
-        env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
-            "${KSU_COMMIT}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
-            die "KernelSU 修复快照不以 ${KSU_REF} 为祖先"
-        git -C "${KSU_DIR}" update-ref \
-            refs/backport-audit/kernelsu-post-release \
-            "${KSU_POST_RELEASE_AUDIT_COMMIT}"
-        [ "$(git -C "${KSU_DIR}" rev-parse refs/backport-audit/kernelsu-post-release)" = \
-            "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || die "KernelSU 修复快照保活引用异常"
-        verify_kernelsu_backport_source "KernelSU 分配失败处理修复" \
-            "${KSU_ALLOCATION_FAILURE_COMMIT}" "${KSU_ALLOCATION_FAILURE_DATE}" \
-            "${KSU_ALLOCATION_FAILURE_PATCH_ID}" \
-            "kernel/manager/throne_tracker.c kernel/selinux/sepolicy.c"
-        verify_kernelsu_backport_source "KernelSU APK 签名块短读修复" \
-            "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
-            "${KSU_APK_SHORT_READ_PATCH_ID}" "kernel/manager/apk_sign.c"
-        verify_kernelsu_backport_source "KernelSU AOSP APK 签名块解析修复" \
-            "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
-            "${KSU_APK_AOSP_PARSER_PATCH_ID}" "kernel/manager/apk_sign.c"
-        verify_kernelsu_backport_source "KernelSU APK EOCD 边界验证修复" \
-            "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
-            "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" "kernel/manager/apk_sign.c"
-    fi
 fi
 if [ "${ENABLE_SUSFS}" = "1" ]; then
     [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"

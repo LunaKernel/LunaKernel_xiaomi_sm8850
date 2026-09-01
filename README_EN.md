@@ -27,8 +27,8 @@ The `android16` text is the GKI/KMI branch name; the target ROM is Android 17.
 
 ## Features and improvements
 
-- Built-in KernelSU v3.2.5 with selected reviewed official follow-up fixes.
-- SUSFS v2.2.0; `OPEN_REDIRECT` is not built and debug logging defaults to off.
+- Built-in KernelSU v3.3.0.
+- SUSFS v2.3.0; `OPEN_REDIRECT` is not built and debug logging defaults to off.
 - Baseband Guard protection for baseband and critical block-device write paths.
 - IPSet 7.24 kernel support plus a separate KernelSU userspace module.
 - seccomp, CFI, BPF JIT, FUSE BPF, Rust, pKVM guest, BBR v1, and FQ support.

@@ -64,23 +64,6 @@ index 99dcb7dd1fc682824657c47067dbc291312808f8..04cc1ae09da8f4b86af0513b289f4359
      pr_info("on_post_fs_data!\n");
  
      ksu_load_allow_list();
-diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
-index 24e1b361cd6bdfb9dc0893065415ee54e461e0ad..51417a09c13a923fc27359fb62144bbdf565e828 100644
---- a/kernel/runtime/ksud_integration.c
-+++ b/kernel/runtime/ksud_integration.c
-@@ -488,12 +488,6 @@ int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *v
-         if (val) {
-             // key pressed, count it
-             volumedown_pressed_count += 1;
--            if (is_volumedown_enough(volumedown_pressed_count)) {
--                if (static_key_enabled(&ksu_is_input_hook_enabled)) {
--                    static_branch_disable(&ksu_is_input_hook_enabled);
--                    pr_info("ksu_input_hook is disabled\n");
--                }
--            }
-         }
-     }
- 
 diff --git a/kernel/selinux/selinux.c b/kernel/selinux/selinux.c
 index dda45d8b553fcc92828312b0dce172b8fed00ae8..fe3feeb199f6a676cb01d0d6b6879354426557a7 100644
 --- a/kernel/selinux/selinux.c

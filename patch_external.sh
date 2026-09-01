@@ -141,109 +141,6 @@ verify_project_patch() {
     [ "${actual_patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
 }
 
-verify_kernelsu_backport_metadata() {
-    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
-    local expected_paths="$5"
-    local patch_file patch_id actual_date actual_paths
-    patch_file="$(mktemp)"
-    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" rev-parse \
-        refs/backport-audit/kernelsu-post-release 2>/dev/null || true)" = \
-        "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || \
-        die "KernelSU 固定修复快照引用缺失，请先运行 ./init.sh"
-    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
-        cat-file -e "${commit}^{commit}" 2>/dev/null || \
-        die "${label}对象缺失，请先运行 ./init.sh"
-    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
-        "${KSU_COMMIT}" "${commit}" || die "${label} 不在 KernelSU ${KSU_REF} 之后"
-    env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" merge-base --is-ancestor \
-        "${commit}" "${KSU_POST_RELEASE_AUDIT_COMMIT}" || \
-        die "${label} 不属于固定 KernelSU main 快照"
-    actual_date="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
-        -C "${KSU_DIR}" show -s --format=%cs "${commit}")"
-    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
-    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${actual_paths}" = "${expected_paths}" ] || die "${label} 触及非预期路径: ${actual_paths}"
-    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${KSU_DIR}" \
-        show --format= "${commit}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
-    rm -f "${patch_file}"
-}
-
-apply_kernelsu_backport_once() {
-    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
-    local expected_paths="$5" patch_file
-
-    verify_kernelsu_backport_metadata "${label}" "${commit}" "${commit_date}" \
-        "${expected_patch_id}" "${expected_paths}"
-    patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${KSU_DIR}" \
-        show --format= "${commit}" > "${patch_file}"
-    apply_patch_once "${label}" "${KSU_DIR}" "${patch_file}"
-    rm -f "${patch_file}"
-}
-
-apply_kernelsu_post_release_fixes() {
-    [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ] || return
-    apply_kernelsu_backport_once "KernelSU 分配失败处理修复" \
-        "${KSU_ALLOCATION_FAILURE_COMMIT}" "${KSU_ALLOCATION_FAILURE_DATE}" \
-        "${KSU_ALLOCATION_FAILURE_PATCH_ID}" \
-        "kernel/manager/throne_tracker.c kernel/selinux/sepolicy.c"
-    verify_kernelsu_backport_metadata "KernelSU APK 签名块短读修复" \
-        "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
-        "${KSU_APK_SHORT_READ_PATCH_ID}" "kernel/manager/apk_sign.c"
-    verify_kernelsu_backport_metadata "KernelSU AOSP APK 签名块解析修复" \
-        "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
-        "${KSU_APK_AOSP_PARSER_PATCH_ID}" "kernel/manager/apk_sign.c"
-    verify_kernelsu_backport_metadata "KernelSU APK EOCD 边界验证修复" \
-        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
-        "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" "kernel/manager/apk_sign.c"
-    if kernelsu_file_matches_commit \
-        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "kernel/manager/apk_sign.c"; then
-        log_info "KernelSU APK 签名验证完整修复链 已存在"
-    else
-        apply_kernelsu_backport_once "KernelSU APK 签名块短读修复" \
-            "${KSU_APK_SHORT_READ_COMMIT}" "${KSU_APK_SHORT_READ_DATE}" \
-            "${KSU_APK_SHORT_READ_PATCH_ID}" "kernel/manager/apk_sign.c"
-        apply_kernelsu_backport_once "KernelSU AOSP APK 签名块解析修复" \
-            "${KSU_APK_AOSP_PARSER_COMMIT}" "${KSU_APK_AOSP_PARSER_DATE}" \
-            "${KSU_APK_AOSP_PARSER_PATCH_ID}" "kernel/manager/apk_sign.c"
-        apply_kernelsu_backport_once "KernelSU APK EOCD 边界验证修复" \
-            "${KSU_APK_EOCD_VALIDATION_COMMIT}" "${KSU_APK_EOCD_VALIDATION_DATE}" \
-            "${KSU_APK_EOCD_VALIDATION_PATCH_ID}" "kernel/manager/apk_sign.c"
-    fi
-}
-
-kernelsu_file_matches_commit() {
-    local commit="$1" path="$2" expected status
-    expected="$(mktemp)"
-    if env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" show \
-        "${commit}:${path}" > "${expected}" 2>/dev/null &&
-        cmp -s "${expected}" "${KSU_DIR}/${path}"; then
-        status=0
-    else
-        status=1
-    fi
-    rm -f "${expected}"
-    return "${status}"
-}
-
-verify_kernelsu_file_at_commit() {
-    local label="$1" commit="$2" path="$3"
-    kernelsu_file_matches_commit "${commit}" "${path}" || die "${label}最终源码不匹配"
-}
-
-verify_kernelsu_post_release_fixes() {
-    [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ] || return
-    verify_kernelsu_file_at_commit "KernelSU Manager 扫描分配失败修复" \
-        "${KSU_ALLOCATION_FAILURE_COMMIT}" "kernel/manager/throne_tracker.c"
-    verify_kernelsu_file_at_commit "KernelSU SELinux 分配失败修复" \
-        "${KSU_ALLOCATION_FAILURE_COMMIT}" "kernel/selinux/sepolicy.c"
-    verify_kernelsu_file_at_commit "KernelSU APK 签名验证完整链" \
-        "${KSU_APK_EOCD_VALIDATION_COMMIT}" "kernel/manager/apk_sign.c"
-}
-
 verify_allowed_paths() {
     local label="$1" repo_dir="$2" allowed_file="$3"
     local status_line path
@@ -406,17 +303,10 @@ verify_susfs_integration() {
             kernel/Kconfig \
             kernel/policy/app_profile.c \
             kernel/runtime/boot_event.c \
-            kernel/runtime/ksud_integration.c \
             kernel/selinux/selinux.c \
             kernel/sulog/event.c \
             kernel/supercall/dispatch.c
         patch_paths_excluding "${SUSFS_KSU_FIX_PATCH_FILE}"
-        if [ "${ENABLE_KSU_POST_RELEASE_FIXES}" = "1" ]; then
-            printf '%s\n' \
-                kernel/manager/apk_sign.c \
-                kernel/manager/throne_tracker.c \
-                kernel/selinux/sepolicy.c
-        fi
         if [ "${ENABLE_BBG}" = "1" ]; then
             patch_paths_excluding "${BBG_KSU_CREDENTIAL_PATCH}"
         fi
@@ -427,7 +317,6 @@ verify_susfs_integration() {
         patch_paths_excluding "${COMMON_SUSFS_PATCH_FILE}" \
             fs/exec.c \
             fs/namei.c \
-            fs/namespace.c \
             fs/notify/fdinfo.c \
             fs/proc/base.c \
             fs/proc/task_mmu.c \
@@ -498,8 +387,7 @@ verify_susfs_integration() {
     git -C "${COMMON_DIR}" diff --check
     git -C "${KSU_DIR}" diff --check
     verify_kernelsu_overlay
-    verify_kernelsu_post_release_fixes
-    log_success "SUSFS v2.2.0 官方补丁、经审计拒绝项与 Luna 修正版状态校验通过"
+    log_success "SUSFS v2.3.0 官方补丁、经审计拒绝项与 Luna 修正版状态校验通过"
 }
 
 verify_bbg_integration() {
@@ -637,7 +525,7 @@ apply_susfs_integration() {
     else
         apply_patch_once "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁" \
             "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}"
-        apply_patch_once "基于 SUSFS v2.2.0 官方补丁的 KernelSU Luna fixup" \
+        apply_patch_once "基于 SUSFS v2.3.0 官方补丁的 KernelSU Luna fixup" \
             "${KSU_DIR}" "${SUSFS_KSU_FIX_PATCH_FILE}"
     fi
 
@@ -677,7 +565,7 @@ apply_susfs_integration() {
             die "目标已存在未授权的 SUSFS 修正源码: ${source_file}"
     done
 
-    apply_patch_once "基于 SUSFS v2.2.0 官方补丁的 common Luna 修正版" \
+    apply_patch_once "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
         "${COMMON_DIR}" "${SUSFS_COMMON_FIX_PATCH_FILE}"
 }
 
@@ -721,31 +609,17 @@ TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
-KSU_REF="${KSU_REF:-v3.2.5}"
-KSU_COMMIT="${KSU_COMMIT:-b0bc817b4e966aa6aa830834eaf6ef765d821d40}"
+KSU_REF="${KSU_REF:-v3.3.0}"
+KSU_COMMIT="${KSU_COMMIT:-932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
-ENABLE_KSU_POST_RELEASE_FIXES="${ENABLE_KSU_POST_RELEASE_FIXES:-0}"
-KSU_POST_RELEASE_AUDIT_COMMIT="${KSU_POST_RELEASE_AUDIT_COMMIT:-62e88ca93df8affff54064e74948a37945c1865a}"
-KSU_ALLOCATION_FAILURE_COMMIT="${KSU_ALLOCATION_FAILURE_COMMIT:-e9e5b616a433b32c286dbf3f6708afd0c5ef7485}"
-KSU_ALLOCATION_FAILURE_DATE="${KSU_ALLOCATION_FAILURE_DATE:-2026-07-19}"
-KSU_ALLOCATION_FAILURE_PATCH_ID="${KSU_ALLOCATION_FAILURE_PATCH_ID:-2abefc35882130184b6399f60481c66d4261bb2b}"
-KSU_APK_SHORT_READ_COMMIT="${KSU_APK_SHORT_READ_COMMIT:-be53d75fd360a9f75231c58970bee1f20a870a4e}"
-KSU_APK_SHORT_READ_DATE="${KSU_APK_SHORT_READ_DATE:-2026-07-27}"
-KSU_APK_SHORT_READ_PATCH_ID="${KSU_APK_SHORT_READ_PATCH_ID:-1c906b1d21e4a79efaa307aa94fd73c445b09e07}"
-KSU_APK_AOSP_PARSER_COMMIT="${KSU_APK_AOSP_PARSER_COMMIT:-e6cc0ef7b0cf7a96af553dedd3282eb3f8ad8d03}"
-KSU_APK_AOSP_PARSER_DATE="${KSU_APK_AOSP_PARSER_DATE:-2026-08-07}"
-KSU_APK_AOSP_PARSER_PATCH_ID="${KSU_APK_AOSP_PARSER_PATCH_ID:-46da4ee6a88ea901ecfd58ec3a255f03b302312a}"
-KSU_APK_EOCD_VALIDATION_COMMIT="${KSU_APK_EOCD_VALIDATION_COMMIT:-aab67974f1210cad94880ce1fdc14cf63f6e30e0}"
-KSU_APK_EOCD_VALIDATION_DATE="${KSU_APK_EOCD_VALIDATION_DATE:-2026-08-11}"
-KSU_APK_EOCD_VALIDATION_PATCH_ID="${KSU_APK_EOCD_VALIDATION_PATCH_ID:-74e074cec2eb4e43467619d3dbc952e31769b39c}"
 [ "${KSU_INTEGRATION_MODE}" = "builtin" ] || die "本阶段只允许经批准的 KernelSU built-in 模式"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-0e43d12a6cb5e6b2814c8214466784285d64ebec}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-c7db8cb367ef3ed4126ed7e222d77757ccb5c05b}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-ef69c8322232340f43c78c7fc491b32cb9f7da86}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-c7db8cb367ef3ed4126ed7e222d77757ccb5c05b}"
 SUSFS_CONTEXT_ADAPTATION="${HOST_WORKSPACE_DIR}/${SUSFS_CONTEXT_PATCH}"
 SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
 SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
@@ -763,8 +637,8 @@ BBG_LUNA_FIX_PATCH_ID="${BBG_LUNA_FIX_PATCH_ID:-3b5c92af344640f6ea4d508709f3f491
 BBG_COMMON_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_COMMON_CREDENTIAL_PATCH:-patches/bbg/aosp-6.12.69-credential-api.patch}"
 BBG_COMMON_CREDENTIAL_PATCH_SHA256="${BBG_COMMON_CREDENTIAL_PATCH_SHA256:-2898be21ea20f4b80cacb12459f0e3cab25faff25921a9b81bae0d9226ab42be}"
 BBG_COMMON_CREDENTIAL_PATCH_ID="${BBG_COMMON_CREDENTIAL_PATCH_ID:-a770f38f4f9c7a1a14e7cf46b81bfa1f6a7db897}"
-BBG_KSU_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_KSU_CREDENTIAL_PATCH:-patches/bbg/kernelsu-v3.2.5-credential-marking.patch}"
-BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-5a45f53584575275f905f73c33158554a052c0a3ed6bec37ad004cb03601d1f9}"
+BBG_KSU_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_KSU_CREDENTIAL_PATCH:-patches/bbg/kernelsu-v3.3.0-credential-marking.patch}"
+BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-aa36091231601c4b16894db100e6b91b06da5b0af1ee41ba93c5bd10190ac725}"
 BBG_KSU_CREDENTIAL_PATCH_ID="${BBG_KSU_CREDENTIAL_PATCH_ID:-4e65a84b50566c8e6ebd3c73e8e474fb76801b94}"
 BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
 COMMON_BASE_TRACKED_DIFF_SHA256="${COMMON_BASE_TRACKED_DIFF_SHA256:-}"
@@ -777,10 +651,6 @@ verify_project_patch "Tegra MC opaque-pointer KMI compatibility" \
 git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
     die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}"
-[ "$(env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" rev-parse \
-    refs/backport-audit/kernelsu-post-release 2>/dev/null || true)" = \
-    "${KSU_POST_RELEASE_AUDIT_COMMIT}" ] || \
-    die "KernelSU 固定修复快照引用缺失，请先运行 ./init.sh"
 verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
 [ -z "$(git -C "${SUSFS_DIR}" status --porcelain)" ] || die "SUSFS 上游工作树不干净"
 [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
@@ -790,22 +660,21 @@ verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSF
 verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
     "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_CONTEXT_PATCH_SHA256}" \
     "${SUSFS_CONTEXT_PATCH_ID}"
-verify_project_patch "基于 SUSFS v2.2.0 官方补丁的 common Luna 修正版" \
+verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
     "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
     "${SUSFS_COMMON_FIX_PATCH_ID}"
-verify_project_patch "基于 SUSFS v2.2.0 官方补丁的 KernelSU Luna 修正版" \
+verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 KernelSU Luna 修正版" \
     "${SUSFS_KSU_FIX_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_SHA256}" \
     "${SUSFS_KSU_FIX_PATCH_ID}"
 
 log_step "应用 KernelSU ${KSU_REF} built-in 外部补丁"
 apply_kernelsu_integration
-apply_kernelsu_post_release_fixes
 KSU_SUSFS_PATCH_FILE="$(mktemp)"
 COMMON_SUSFS_PATCH_FILE="$(mktemp)"
 trap 'rm -f "${KSU_SUSFS_PATCH_FILE:-}" "${COMMON_SUSFS_PATCH_FILE:-}"' EXIT
 git -C "${SUSFS_DIR}" show "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${KSU_SUSFS_PATCH_FILE}"
 cp "${SUSFS_DIR}/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" "${COMMON_SUSFS_PATCH_FILE}"
-log_step "应用 SUSFS v2.2.0 官方 Android 16/6.12 补丁"
+log_step "应用 SUSFS v2.3.0 官方 Android 16/6.12 补丁"
 apply_susfs_integration
 verify_susfs_integration
 if [ "${ENABLE_BBG}" = "1" ]; then

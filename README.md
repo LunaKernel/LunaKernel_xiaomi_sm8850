@@ -27,8 +27,8 @@ AOSP 分支名中的 `android16` 是 GKI/KMI 分支名称；目标 ROM 为 Andro
 
 ## 功能与改进
 
-- KernelSU v3.2.5（内置）及经过审查的官方后续修复。
-- SUSFS v2.2.0；`OPEN_REDIRECT` 未编译，调试日志默认关闭。
+- KernelSU v3.3.0（内置）。
+- SUSFS v2.3.0；`OPEN_REDIRECT` 未编译，调试日志默认关闭。
 - Baseband Guard，保护基带及关键块设备写入口。
 - IPSet 7.24 内核支持与独立 KernelSU 用户态模块。
 - 保留 seccomp、CFI、BPF JIT、FUSE BPF、Rust、pKVM guest、BBR v1 与 FQ 等能力。

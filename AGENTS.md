@@ -27,8 +27,8 @@ Luna Kernel 面向小米 17（设备代号 `pudding`）HyperOS 4（Android 17）
 
 当前固定组件：
 
-- KernelSU v3.2.5：`b0bc817b4e966aa6aa830834eaf6ef765d821d40`，built-in，version code `32525`；只选择性回移经审计的 `e9e5b616` 与 `be53d75f` → `e6cc0ef7` → `aab67974` 官方修复链，不整体追随 main。`c20d48a` 修改的 object 已被 SUSFS 官方兼容层从 Kbuild 移除，不得作为当前组合的有效回移项。
-- SUSFS v2.2.0：`0e43d12a6cb5e6b2814c8214466784285d64ebec`；KernelSU 兼容补丁 `ef69c8322232340f43c78c7fc491b32cb9f7da86`。`OPEN_REDIRECT` MUST 在编译期关闭；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
+- KernelSU v3.3.0：`932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e`，built-in，version code `32601`。此前单独回移的 `e9e5b616` 与 `be53d75f` → `e6cc0ef7` → `aab67974` 修复链已原样进入该 stable，MUST 使用上游实现并删除重复回移层。`c20d48a` 修改的 object 被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。
+- SUSFS v2.3.0：`c7db8cb367ef3ed4126ed7e222d77757ccb5c05b`；KernelSU 官方兼容补丁取自同一提交并原样应用。`OPEN_REDIRECT` MUST 在编译期关闭；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
 - Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r29：固定归档摘要和解压树摘要。
 
