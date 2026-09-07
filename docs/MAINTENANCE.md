@@ -5,7 +5,7 @@
 - `main`：小米 17 HyperOS 4 / Android 17，AOSP r21 主线。
 - `os3-android16-6.12.23`：HyperOS 3 / Android 16 历史维护分支。
 
-不保留已经被 r21 完全取代的中间基线分支。旧私有仓库及其历史标签不属于公开仓库。
+不保留已被 r21 完全取代的中间基线分支。旧私有仓库及其历史标签不属于公开仓库。
 
 ## 改动分层
 
@@ -22,7 +22,7 @@
 
 [`patches/backports/r21-selected-backports.tsv`](../patches/backports/r21-selected-backports.tsv) 是随基线整体携带的有序官方回移集合。
 
-[`patches/backports/r21-independent/`](../patches/backports/r21-independent/) 中每个 TSV 只描述一个可独立回退的逻辑项。不可拆分的官方前置/补修链可以放在同一清单，但不得混入无关提交。
+[`patches/backports/r21-independent/`](../patches/backports/r21-independent/) 中每个 TSV 只描述一个可独立回退的逻辑项，可包含不可拆分的官方前置/补修链，不得混入无关提交。
 
 每条记录必须固定：
 
@@ -30,17 +30,11 @@
 - 完整上游 commit、日期、patch-id 和受影响路径。
 - 必要时使用的项目适配补丁、SHA-256 与 patch-id。
 
-新增回移前，应证明当前固定基线确实缺少该改动，检查上游后续修正或回退，并运行临时 Git index 的单项 apply、reverse、replay 与全量顺序重放。不能用“补丁能应用”代替逻辑审查。
+新增回移前，应证明固定基线缺少该改动，检查上游后续修正或回退，并通过临时 Git index 执行单项 apply、reverse、replay 与全量顺序重放。不能用“补丁能应用”代替逻辑审查。
 
 ## 提交
 
-标题格式：
-
-```text
-<type>: <准确精炼中文描述>
-```
-
-`type` 只使用 `chore`、`feat`、`fix`、`refactor`、`docs`。官方回移在标题中注明来源，例如：
+标题格式为 `<type>: <准确精炼中文描述>`，`type` 限 `chore`、`feat`、`fix`、`refactor`、`docs`。官方回移需注明来源，例如：
 
 ```text
 fix: 修复 IPv4 分片 MTU 下限校验（回移 Linux stable）

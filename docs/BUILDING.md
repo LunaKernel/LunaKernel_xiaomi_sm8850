@@ -4,7 +4,7 @@
 
 推荐使用 x86_64 Linux。macOS 会通过已配置的 OrbStack Linux 环境执行相同流程。
 
-主机需要 Bash、Git、curl、tar、bzip2、xz、unzip、7-Zip、patch、Python 3、GNU coreutils 以及常规内核构建依赖。源码、固定工具链和完整输出合计会占用数十 GiB，建议预留至少 45 GiB 可用空间。
+主机需要 Bash、Git、curl、tar、bzip2、xz、unzip、7-Zip、patch、Python 3、GNU coreutils 以及常规内核构建依赖。源码、固定工具链和完整输出会占用数十 GiB，建议预留至少 45 GiB 空间。
 
 所有版本、提交和摘要都记录在根目录 [`.env`](../.env)。不要在 `sources/` 或构建输出中手工改文件。
 
@@ -16,9 +16,9 @@
 tmp/os4/system_dlkm.img
 ```
 
-脚本会校验该镜像的大小、SHA-256、AVB hashtree、EROFS 内容和 stock 模块清单。它只参与兼容性验证，不会进入刷机包。
+脚本会校验镜像大小、SHA-256、AVB hashtree、EROFS 内容和 stock 模块清单。镜像仅用于兼容性验证，不进入刷机包。
 
-只有重新生成 [`abi/xiaomi17-android17-stock-common-abi.tsv`](../abi/xiaomi17-android17-stock-common-abi.tsv) 时，才另外需要同一 OTA 的：
+重新生成 [`abi/xiaomi17-android17-stock-common-abi.tsv`](../abi/xiaomi17-android17-stock-common-abi.tsv) 时，需要同一 OTA 的完整四个镜像：
 
 ```text
 tmp/os4/boot.img
@@ -47,13 +47,7 @@ tmp/os4/system_dlkm.img
 
 ## 产物
 
-默认输出目录为：
-
-```text
-kernel_out/android17-r21/
-```
-
-主要产物：
+主要产物默认写入 `kernel_out/android17-r21/`：
 
 ```text
 luna-xiaomi17-g<项目提交前8位>-YYYYMMDD.zip
@@ -66,4 +60,4 @@ AnyKernel3 ZIP 从固定官方脚本、可审查的 [`ak3_template/luna.patch`](
 
 ## 提交身份
 
-内核 release 字符串和产物名取自干净项目提交。工作区有未提交更改时，`build.sh` 不会生成可发布闭包。历史整理后的新提交必须重新完整构建，不能沿用旧提交的产物摘要。
+内核 release 字符串和产物名取自干净项目提交；有未提交更改时，`build.sh` 不会生成可发布闭包。历史整理后的新提交必须完整重建，不能沿用旧提交的产物摘要。

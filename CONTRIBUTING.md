@@ -2,7 +2,7 @@
 
 感谢对 Luna Kernel 的改进。
 
-提交变更前请先确认它只面向小米 17 `pudding` 的固定 HyperOS 4 / Android 17 基线，并阅读 [`AGENTS.md`](AGENTS.md) 与 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)。较大的功能或基线变更建议先创建 issue 说明用途、来源和兼容性影响。
+变更仅面向小米 17 `pudding` 的固定 HyperOS 4 / Android 17 基线。提交前请阅读 [`AGENTS.md`](AGENTS.md) 与 [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)；较大的功能或基线变更建议先创建 issue，说明用途、来源和兼容性影响。
 
 提交时请：
 
@@ -12,4 +12,4 @@
 - 至少运行 `git diff --check`、相关 shell 语法检查和与风险相称的回移/构建验证。
 - 在合并请求中列出验证结果、未覆盖项目和可独立回退位置。
 
-提交贡献即表示你有权提供该内容，并同意项目按适用于该文件的现有许可证分发。不同许可证的第三方代码必须独立标明来源与许可证，不能通过复制代码规避兼容性审查。
+提交贡献即表示你有权提供该内容，并同意按该文件的现有许可证分发。不同许可证的第三方代码必须独立标明来源与许可证，不得通过复制代码规避兼容性审查。

@@ -13,7 +13,7 @@
 
 固定清单覆盖 boot、vendor_boot、vendor_dlkm 与 system_dlkm 中目标设备可能使用的模块，并验证 4083 个实际 vmlinux 依赖的符号、CRC、provider、导出类型和 namespace。
 
-system_dlkm 含 103 个 stock 模块。其中 102 个必须完整匹配；`rust_binder.ko` 是唯一固定例外：234 项需求中 167 项匹配、67 项为 stock Rust 构建上下文符号，且不存在 CRC/provider 异常。目标启动输入没有选择 Rust Binder，系统使用 C Binder；该例外不能扩展到其他模块或符号。
+system_dlkm 的 103 个 stock 模块中，102 个必须完整匹配；唯一固定例外 `rust_binder.ko` 的 234 项需求中，167 项匹配、67 项为 stock Rust 构建上下文符号，无 CRC/provider 异常。目标启动输入未选择 Rust Binder，系统使用 C Binder；例外不得扩展到其他模块或符号。
 
 完整配置、模块矩阵和 ABI/KMI 快照会随构建保留。快照漂移必须审计，但只有目标 OTA 消费接口或关键启动语义不兼容时才构成硬失败。
 
@@ -33,7 +33,7 @@ system_dlkm 含 103 个 stock 模块。其中 102 个必须完整匹配；`rust_
 - 使用期日志未发现内核 panic、Oops、watchdog 或持续性严重内核错误。
 - 系统按预期使用 C Binder；未观察到 `rust_binder.ko` 被启动路径选择。
 
-公开历史整理没有改变补丁集合和内核源码结果，但会改变项目提交哈希与内核 release 字符串；AnyKernel3 也改为从固定源码重新组装。因此公开主分支的最终提交仍需完成一次干净构建、闭包复核和真机复测，才可标记二进制版本。
+公开历史整理不改变补丁集合和内核源码结果，但会改变项目提交哈希与内核 release 字符串；AnyKernel3 也改为从固定源码组装。公开主分支最终提交仍须完成干净构建、闭包复核和真机复测，才可标记二进制版本。
 
 ## 发布验收
 

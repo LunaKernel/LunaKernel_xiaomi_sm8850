@@ -23,7 +23,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 - 小米 SM8850 公开基线：[MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource)，`popsicle-w-oss` @ `45705be1220b4cfa8100516ad86711656c0b634e`
 - 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-06_r21` @ `0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28`
 
-AOSP 分支名中的 `android16` 是 GKI/KMI 分支名称；目标 ROM 为 Android 17。
+`android16` 是 GKI/KMI 分支名；目标 ROM 为 Android 17。
 
 ## 功能与改进
 
@@ -34,7 +34,7 @@ AOSP 分支名中的 `android16` 是 GKI/KMI 分支名称；目标 ROM 为 Andro
 - 保留 seccomp、CFI、BPF JIT、FUSE BPF、Rust、pKVM guest、BBR v1 与 FQ 等能力。
 - 回移 AOSP、Linux stable 和 mainline 中当前基线仍缺少的文件系统、内存、调度、块层、网络与安全修复。
 
-完整回移来源与顺序记录在 [`patches/backports/`](patches/backports/)；每个独立回移都可以单独审计和回退。
+完整回移来源与顺序见 [`patches/backports/`](patches/backports/)；独立回移可单独审计和回退。
 
 ## 构建
 
@@ -52,18 +52,14 @@ luna-xiaomi17-g<短提交>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<短提交>-YYYYMMDD
 ```
 
-详细环境、输入与验证方法见 [构建文档](docs/BUILDING.md)。
-
 ## 验证状态
 
-r21 内核树已在小米 17、HyperOS 4 `OS4.0.0.9.XPCCNXM` 上完成启动和持续使用验证；目标 OTA 的模块闭包也已通过。公开历史整理改变了项目提交哈希，因此新的公开提交仍需重新完整构建并复测后才会发布二进制版本。
-
-详见 [验证记录](docs/VALIDATION.md)。
+r21 内核树已在小米 17、HyperOS 4 `OS4.0.0.9.XPCCNXM` 上通过启动、持续使用验证和目标 OTA 模块闭包检查。公开历史整理改变了项目提交哈希，新公开提交仍需完整重建并复测，才能发布二进制版本。
 
 ## 文档
 
-- [构建](docs/BUILDING.md)
-- [验证](docs/VALIDATION.md)
+- [构建环境、输入与验证方法](docs/BUILDING.md)
+- [验证记录](docs/VALIDATION.md)
 - [维护与回移](docs/MAINTENANCE.md)
 - [贡献说明](CONTRIBUTING.md)
 - [安全问题](SECURITY.md)
