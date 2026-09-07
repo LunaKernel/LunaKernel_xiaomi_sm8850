@@ -2,9 +2,11 @@
 
 分析日期：2026-09-07。对象为用户提供的 `tmp/Kernel-Hanamaki-6.12-26w36e-021748.zip`。本次仅静态分析，未执行包内程序、安装模块、刷机或回移补丁。
 
-最值得关注的新增实现是 **混合链 zsmalloc、ZstdP 页压缩、memcompress/kreclaimd、kFAS 帧反馈调频**。其中压缩和回收改动深入内存管理；游戏性能还混有温控、频率限制和 Android 用户态策略变化。没有该版本源码及同条件实测，不能宣称它比 Luna 更快、更省电或更稳定。
+后续已按用户选择完成[03/06/07/08/09/10 与 stock 模块、防护、Binder 深入对比](HANAMAKI-26W36E-SELECTED-ANALYSIS.md)，并形成[独立配套模块分析](HANAMAKI-26W36E-COMPANION-ANALYSIS.md)。本报告保留完整拆解清单，当前不推进 01/02/04/05；新增取证与修正以这两份报告为准。
 
-供选择的编号见下一表。建议先考虑 **06、07 的独立参数实验**；源码方向优先继续审计 **01、02**，其次 **03、05**。**04 是大范围内存机制替换，09、10 的设备适用性证据不足。** 目前没有从这个包中追溯出可直接加入 Luna 清单的新增官方修复提交。选择某项后仍需完成相应来源和兼容性审计；本报告不构成回移授权。
+拆解确认的新增实现包括 **混合链 zsmalloc、ZstdP 页压缩、memcompress/kreclaimd、kFAS 帧反馈调频**。其中压缩和回收改动深入内存管理；游戏性能还混有温控、频率限制和 Android 用户态策略变化。没有该版本源码及同条件实测，不能宣称它比 Luna 更快、更省电或更稳定。
+
+编号见下一表。当前建议优先研究 **06 的单个小尺寸 mTHP、08 的单项水位/预读，再评估 07 TTL**；10 已确认目标 OTA 接口，适合定向缓存策略研究。03 仅继续研究可排除 memcompress 的传统 WRITEPAGE 分派；09 正常路径没有确认的有效调用。尚未从这个包中追溯出可直接加入 Luna 清单的新增官方修复提交；本报告不构成回移或调参授权。
 
 ## 1. 决策清单
 
@@ -20,8 +22,8 @@
 | **06** | **THP/mTHP 与按进程 THP 入口**；模块对大内存机器全局启用 THP、多尺寸继承、积极整理 | 较大的匿名页可减少缺页和 TLB 开销；**适合先研究定向、小尺寸实验** | GKI/Luna 已有 THP/mTHP；全局默认 `madvise`，PMD 尺寸继承，其他 mTHP 尺寸默认 `never`，实际值需采样。无需为了此能力回移算法。包内 `defrag=always`、启动阶段 `scan_sleep=0` 不建议照搬；基础页仍保持 4 KiB |
 | **07** | **MGLRU 工作集保护 `min_ttl_ms=1000`** | 尽量保留最近 1 秒工作集，减轻反复回收/重新缺页造成的卡顿；**适合独立参数实验** | Luna 已有 MGLRU 及主动回收修复。只需评估已有接口；内存无法容纳受保护工作集时可能更早 OOM。须观察 LMKD、应用重启和卡顿，不能只看缓存应用数量 |
 | **08** | **回收水位、换页和写回参数**，包括 `watermark_scale_factor=200`、`page-cluster=0`、`swappiness=1` | 提前启动后台回收、减少 swap 预读或改变匿名/文件页回收比例；**部分参数可单项研究** | 全部是现有接口，部分值本来就是默认。高水位占用可用内存；低 swappiness 未必适合 ZRAM。建议先确认 stock 实值，只挑水位/预读独立比较，不复制整组 |
-| **09** | **schedutil 调频余量修正**，对包含 CPU0 的 policy 条件性生效，`schedutil_little_margin` 默认 10 | 尝试把通常的 25% 余量调至约 10%，同时保留 1 GHz 下界；**优先级低** | Luna 已有 schedutil/EAS/UCLAMP 和相关官方修复。此 hook 受 vendor/kFAS/sched_ext 状态限制；SM8850 的 CPU0 组不能简单称为传统“小核”。下界可能增加低负载功耗，余量降低可能拖慢突发响应，不能笼统称为省电 |
-| **10** | **SM8850 MPAM/SLC 参数**，更改 apps/gpu gear、缓存配额与优先级 | 尝试调整 CPU/GPU 对共享缓存的分配，可能影响缓存命中和竞争；**仅作为 vendor 路径线索** | 脚本有 SM8850 分支，但未验证目标 OTA 消费者和写入效果。来源应追溯固定小米/QCOM 实现；不能据参数名声称性能提升，也不应塞入 common 通用路径 |
+| **09** | **schedutil 调频余量修正主体**，`schedutil_little_margin` 默认 10 | 公式试图把通常的 25% 余量调至约 10%，同时保留 1 GHz 下界；**优先级低** | 后续确认正常 QCOM 不注册该 hook，WALT 不走此路径；MTK 注册后又被 IS_MTK 静态键挡住。不能把公式存在当作本包正常路径已生效，详见后续报告 |
+| **10** | **SM8850 MPAM/SLC 参数**，更改 apps/gpu gear、CPU 缓存配额与 SLC 分区映射 | 缓存竞争管理有合理价值，适合定向场景研究 | 后续已确认固定 OTA 的模块与 DT 接口；CPU MSC 对应 L2_0/L2_1，SLC 是另一路 client/partition 设置。固件接受情况和实际收益仍未验证，应在配套策略层研究 |
 
 01 与 02 是不同方向；03 与 04 在本包中紧密协作。06–08 是运行时策略，不能将其数量计作“新增官方回移补丁”。本包的 THP/MGLRU/VM 参数初始化受 `service.sh:305` 检出 `pandora_config/enable_mm_vhs` 节点的条件控制，写入效果未验证。当前直接内核回移仍只接受稳定 AOSP/Linux 官方来源；可审计第三方源码可用于理解机制，不自动获得准入。任何新增 `.ko` 或 provider 改变都必须遵守 [AGENTS.md](../AGENTS.md) 的同次构建、闭包和真机加载要求；本次没有提出或实施放宽这些门禁。
 
@@ -97,7 +99,7 @@ Image 中有 `pdr_cpu_util_report_frame`、`pdr_cpu_util_report_sf_drop`、`pdr_
 
 `mm_vh_init` 注册了 swappiness、scan type 和匿名/文件页回收平衡三个 hook。机器码显示 `android_vh_use_vm_swappiness` 请求使用全局 swappiness，并在非正数时写成 1；`android_vh_tune_scan_type` 直接返回，不能将这个空回调列为额外扫描优化；开启 `enable_mm_vhs` 时，平衡回调将其布尔输出清零。另有 `mm_vhs.task_thp` / `set_task_thp` 入口。
 
-这些证据不等于“更好的通用回收算法”。Luna 已有 THP/mTHP 与 MGLRU；可先使用原生接口评估目标进程的缺页、尾延迟、内存峰值和回收表现。官方 THP 文档也说明大页清零/整理存在延迟成本，mTHP 可以减少一次分配过大的冲击。[Linux THP 文档](https://docs.kernel.org/admin-guide/mm/transhuge.html)
+这些证据不等于“更好的通用回收算法”。后续已确认按进程入口写 0 设置 MMF_DISABLE_THP，因此脚本对 HWC 的操作是禁用大页；清除该位也不等于 MADV_HUGEPAGE。Luna 已有 THP/mTHP 与 MGLRU；可先使用原生接口评估目标进程的缺页、尾延迟、内存峰值和回收表现。官方 THP 文档也说明大页清零/整理存在延迟成本，mTHP 可以减少一次分配过大的冲击。[Linux THP 文档](https://docs.kernel.org/admin-guide/mm/transhuge.html)
 
 ## 4. 包中用户态策略：不能全部计作 Image 优化
 
@@ -111,11 +113,11 @@ Image 中有 `pdr_cpu_util_report_frame`、`pdr_cpu_util_report_sf_drop`、`pdr_
 | WALT/PELT/时间片 | `service.sh:10,27–28,68–69,112,118–120`：请求 WALT、升降频限速 1 ms、90/70 迁移阈值、PELT multiplier 4、迁移成本 5 ms、base slice 10 ms | 响应、迁移和吞吐取舍；不能将已有 vendor WALT 说成包里新发明的调度器 |
 | CPU/IRQ 亲和性 | `service.sh:104–109`：后台/IRQ 限于 cpu0 集群，部分 cpuset 放开全部 CPU | cpu0 集群不能自动称为传统“小核”；default_smp_affinity 使用列表格式与标准 bitmap 接口不符，可能拒绝 |
 | 核心与频率 | `service.sh:95–97`、`utils.sh:123`：core_ctl min/max 写 99 后关闭、解 CPU 频率范围；另改 DDR/LLCC/L3 限制 | 可能以更高功耗换短时速度；越界值是否被拒绝/钳制尚未证明，不建议写入通用内核 |
-| MPAM/SLC | `service.sh:64–75` 的 SM8850 分支修改 gear/schemata | 与 10 同属 vendor 研究线索；没有实际写入和收益证明 |
+| MPAM/SLC | `service.sh:64–75` 的 SM8850 分支修改 gear/schemata | 后续已核实目标 OTA 接口与 DT，实际写入和收益仍需证明 |
 | UFS/块队列 | `service.sh:123–129`：所有块设备 `scheduler=none`、`nomerges=2`、`iostats=0`、预读 128 KiB | 禁用调度/合并未必适合前台延迟和顺序 I/O；停统计影响诊断，不建议整组照搬 |
 | 热控/GPU | `service.sh:35–62,131–137`：throttling/bcl/cxl 写 0、trip point 写 100000、停 thermal-engine、杀 mi_thermald；action 模式还写 105000 和 UFS 高频 | 有明确降低保护/解除限制的意图。不能断言所有硬件保护实际失效，也不能据此认定算法更高效；不建议引入 |
 | Joyose 游戏配置 | `gen_cloud_config.sh:83` 选择 pudding JSON，脚本覆盖云配置；含目标负载、时延投票、perfmgr、分辨率/SR/FI/VRS/高帧率设置 | 属于应用/厂商游戏路径；画质、分辨率、插帧变化会混淆性能比较 |
-| 保后台/LMKD/freezer | `service.sh:339–347,365`、`system.prop:85–104`、`miui.prop`：提高缓存/phantom 上限、关闭多种冻结/回收、改 LMKD | 能影响后台驻留，但可能增加耗电和内存压力；不属于内核算法，不建议整组迁入 |
+| 保后台/LMKD/freezer | `service.sh:339–347,365`、`system.prop:85–104`、`miui.prop`：提高缓存/phantom 上限、尝试关闭多种冻结/回收、改 LMKD | 部分值确有消费者，但标准 CachedAppOptimizer 的命名空间/取值与脚本不匹配，不能说成功关闭缓存冻结；适合在未来配套模块中逐项评估 |
 | ART/JIT/渲染 | `system.prop:5–76,119–136`：dex2oat 多线程/过滤器、堆目标、JIT 和渲染属性 | Android 版本与属性消费者相关；无法证明每项适用于固定 OTA，不应归为内核优化 |
 | TCP/DNS | `service.sh:350–355,371–383`：连接回收、乱序阈值、buffer、DNS 并行等 | 网络条件相关；四个 rmem/wmem default/max 参数写到 `net/ipv4`，标准节点在 `net/core`，这些写法有误 |
 | 日志/监控 | 停部分诊断服务，用返回成功的空脚本替代 tcpdump/cnss_diag，关闭部分监控属性 | 影响可观测性；不作为 Luna 性能改进 |
@@ -158,7 +160,7 @@ Image 中有 `pdr_cpu_util_report_frame`、`pdr_cpu_util_report_sf_drop`、`pdr_
 
 | 已证实差异 | 为什么不能当作可直接接受的优化 |
 | --- | --- |
-| C Binder 关闭、Rust Binder built-in | 固定 OTA 和 Luna 基线使用 C Binder/BinderFS；换实现涉及 vendor hook、对象类型和用户态语义，不能由版本名或导出存在判断兼容，更不能挪用现有 `rust_binder.ko` 精确例外 |
+| C Binder 关闭、Rust Binder built-in | 后续确认实际由 Rust 注册，Rust 自带 BinderFS；固定 OTA 消费的 13 类 C Binder vendor hook 在正常 Rust 路径缺少等效触发证据，不能由导出存在判断语义兼容，更不能挪用现有 `rust_binder.ko` 精确例外 |
 | ZRAM 关闭、zsmalloc 改 built-in，其他大量 stock 功能由模块改 built-in | 会改变 module provider、加载及交付关系；固定 OTA 的原有 zram/zsmalloc 模块不能被忽略 |
 | `PANDORA_GKI_ABI_KEEPER=y` | 没有源码可审核其具体做法。抽查发现 Binder traceiter 有正常函数体，**不能凭名称断言伪造导出/空实现**；仍然不能替代 Luna 完整闭包门禁 |
 | 内嵌 cmdline 含 `nokaslr`、`mitigations=off`、`hardened_usercopy=off`、`audit=0`、`norandmaps`、`kasan=off` 等 | 有明确减少随机化、防护和诊断的意图；各参数实际生效还依赖解析器与最终 cmdline。不作为 Luna 性能候选 |
