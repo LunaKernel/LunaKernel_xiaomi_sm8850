@@ -32,4 +32,29 @@ Tegra 两个不透明指针接口仍保留原有窄 KMI 标注。剩余直接修
 
 ## 验证状态
 
-源码迁移及剩余补丁已完成应用。构建与固定 OTA 闭包验证进行中，参考快照尚未更新。真机复测未执行；r21 真机结论不得外推到本版本。
+首次完整构建已生成 Image 与 104 个模块，固定 OTA 的 4083 项 vmlinux 依赖及完整 tuple、Rust Binder 精确例外、vermagic、关键配置、LSM 槽位与项目功能构建检查全部通过。脚本在 12 项参考漂移处按预期拒绝打包；已保留首次完整快照、完成下述审查并更新 `.env`。最终打包仍由同一脚本执行零漂移检查。真机复测未执行；r21 真机结论不得外推到本版本。
+
+## 参考快照漂移审查
+
+| 对象 | r21 | 九月 | 结论 |
+| --- | ---: | ---: | --- |
+| 配置行数 | 8236 | 8246 | 关键启动与安全配置守卫通过 |
+| modules.order | 104 | 104 | 内容及排序摘要不变 |
+| 全量导出 | 19703 | 19794 | 固定消费者无删除或变更 |
+| vmlinux 导出 / STG 根符号 | 19105 | 19196 | 同上 |
+| QCOM/Xiaomi 列表并集 | 4723 | 4740 | 原 4723 项 CRC 全部不变，新增 17 项 |
+
+全量差异包含 1121 个新增、1030 个删除、173 个 CRC 变化。删除项全部是 Rust 生成符号；新增项包括 1032 个 Rust 生成符号与 89 个 C 导出。173 个变化仅涉及 CRC，provider、export type 和 namespace 未变化；50 个是 Rust 符号，123 个 C 接口分别属于 fscrypt（48）、KVM/VFIO（66）、nfqueue（4）、FunctionFS（2）、dm-verity hooks（2）和 PCI endpoint MSI-X（1）。上述删除及 CRC 变化均无固定 OTA 消费者，不扩大 Rust Binder 缺失例外。新建模块和内核仍同次构建，原有 104 项模块矩阵不变。
+
+C 变化来自固定官方源码：fscrypt 密钥管理修复、pKVM 与 KVM 内部类型、nfqueue 生命周期保护、FunctionFS endpoint/rw_proxy、dm-verity 私有类型解耦及 PCI 类型依赖。代表来源包括 `89ffa47ebb4b`、`6a379f037a29`、`5c165027e17c`、`de3d34623482` 与 `50bf35d628ad`。新增 C 导出主要是原生 vendor hooks、Tegra/音频接口及通用 helper；现有消费者接口的签名、CRC 和 tuple 不变。运行时回归仍需固定 OTA 真机复测。
+
+消费者 STG 以 4083 项 stock 依赖和 Rust Binder 167 项匹配需求的去重并集（4142 个根符号）比较，只有四处类型差异：
+
+- `task_struct` 使用 `ANDROID_KABI_USE(3, ...)` 占用既有保留槽，原类型大小及其他字段偏移不变。
+- `cfs_rq.min_vruntime` 使用 `ANDROID_KABI_REPLACE` 增加同宽 union，原字段位置和大小保持。
+- `trace_buffer` 是 `ring_buffer.h` 中仅前置声明的不透明对象，内部删除冗余 subbuf_size；相关消费接口 CRC 不变。
+- `fscrypt_master_key` 只在 `fs/crypto/fscrypt_private.h` 定义，密钥列表和缓存布局属于内核内部实现；消费接口及对外类型布局保持兼容。
+
+配置漂移来自 AOSP 原生配置：`54d5133dd5d9` 开启 DAMON 分析接口，但 DAMON_RECLAIM/LRU_SORT 未启用；`1d5d2bee38d2` 统一 RCU lazy 默认关闭策略，仍保留 RCU_LAZY 能力；`aa2b7dc0d9bc`、`7ae1ce18e14d` 与 `8334d1199d20` 提供 Tegra context bus、音频 MMIO 和 VPR 初始化。VPR 只匹配 `nvidia,tegra-video-protection-region` DT 节点，system/CMA DMA-BUF heaps 仍关闭。
+
+首次完整审计快照与结构化 `snapshot-delta.json`、全量/消费者 STG 差异保留在 `kernel_out/kmi6-2026-09-migration-audit/`；最终完整快照随构建审计归档交付。不得把全量 Rust 或内部类型变化推广为其他设备或 OTA 的兼容性结论。

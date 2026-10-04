@@ -50,12 +50,12 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 目标闭包符号删除、CRC/provider/namespace/相关类型不兼容或关键启动配置破坏均为绝对拒绝项，安全性或性能收益不能豁免。禁止删除验证对象、伪造导出、硬编码跳过、扩大例外或以空模块掩盖失败；唯一固定 `rust_binder.ko` 例外见第 5 节。
 
-全量导出、STG 类型图、配置和模块矩阵是参考快照：哈希、项目数或顺序变化本身不是 ABI/KMI 硬失败或补丁拒绝理由。构建 MUST 报告参考值与本次值、生成结构化漂移摘要并保留本次完整快照。r21 历史参考值如下（新基线构建漂移须逐项审查后更新）（配置与模块清单见第 5 节）：
+全量导出、STG 类型图、配置和模块矩阵是参考快照：哈希、项目数或顺序变化本身不是 ABI/KMI 硬失败或补丁拒绝理由。构建 MUST 报告参考值与本次值、生成结构化漂移摘要并保留本次完整快照。九月基线已审查参考值如下（配置与模块清单见第 5 节）：
 
-- 完整 `Module.symvers`：`19703` 项，五列摘要 `a43d640d6146385d8d71f6e38d2e84487d9f47d15ff5418b78764accc477bb09`
-- `vmlinux`：`19105` 项导出，CRC 摘要 `aa089112cbed9f681b329520cb01f0f2ec6fc50a51399c3e7a39ab26026ec91b`
-- QCOM/Xiaomi vendor KMI 并集：`4723` 项，摘要 `f60e16b2517ba1be4cafc1855688d26ac6c8ef6b7fea848a08de552627a70664`
-- 上述 `19105` 项导出的完整 STG 类型图摘要：`d8176f381baff13ba86271412ff76712c749432c8e039feb68cf3be4a35c0073`
+- 完整 `Module.symvers`：`19794` 项，五列摘要 `f7f81f027595c407e8c6c76067881708bbc13b722e9f966b407ce46159f0d2cc`
+- `vmlinux`：`19196` 项导出，CRC 摘要 `ca9e9cbdda869820760a28ebc519c9aaae92c3f94685b57a667e115937977cea`
+- QCOM/Xiaomi vendor KMI 并集：`4740` 项，摘要 `8f453d50968782a7e0abb33c250836b62e23328e0b72e91f817e045f7cf2108f`
+- 上述 `19196` 项导出的完整 STG 类型图摘要：`3190e8781beec838c5be40c9a7970b7e47cc27f342085e8f88b847391fc63c35`
 
 差异审计必须分开记录目标闭包硬门禁与全量快照漂移。目标消费者相关变化须证明完全兼容；无目标消费者的变化须用途明确且无回归。必要配置变化、新增项目模块及其必要导出、模块排序变化均须遵守上述要求，不得绕过关键配置和闭包门禁。出现 `DRIFT` 时必须先保留本次快照、完成影响审查，并在同一变更中更新参考摘要；未确认漂移不得进入发布闭包，也不得放宽 UAPI、syscall 或用户态语义审查。
 
@@ -82,7 +82,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 - `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
-- 参考配置：8236 行、摘要 `b35ffd54c23acf009c1819d01614ecc40b53845b1bb3e7b6b7018622e872c935`；参考 `modules.order`：104 个活动模块、摘要 `03c98eead97e20de6f0fb74c8103e1bcde6ffddd254016b49dfd0aa5097d389d`。按第 3 节报告、保留并审查快照。
+- 参考配置：8246 行、摘要 `fdb48e2cb118f9f821630cdd9d062209306725a91b302098218014320c248672`；参考 `modules.order`：104 个活动模块、摘要 `03c98eead97e20de6f0fb74c8103e1bcde6ffddd254016b49dfd0aa5097d389d`。按第 3 节报告、保留并审查快照。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
 - `BPF_UNPRIV_DEFAULT_OFF=y`；DMA-BUF system/CMA heaps、GUNYAH_QCOM_PLATFORM、ARM_SMMU、ARM_SMMU_V3、ARM_SMMU_V3_PKVM 与 QCOM_IOMMU 必须保持关闭。ARM_PKVM_GUEST、VFIO_PKVM_IOMMU 与 PKVM_PVIOMMU 必须启用。
