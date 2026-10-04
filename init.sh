@@ -337,7 +337,7 @@ verify_aosp_backport_source() {
 verify_source_baseline() {
     local branch kmi_generation version tracked_files xiaomi_ack_commit xiaomi_ack_tag
     version="$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")"
-    [ "${version}" = "6.12.81" ] || die "GKI common 版本不是 6.12.81: ${version}"
+    [ "${version}" = "${COMMON_VERSION:?缺少 COMMON_VERSION}" ] || die "GKI common 版本不是 ${COMMON_VERSION}: ${version}"
     branch="$(sed -n 's/^BRANCH=//p' "${COMMON_DIR}/build.config.constants")"
     kmi_generation="$(sed -n 's/^KMI_GENERATION=//p' "${COMMON_DIR}/build.config.constants")"
     [ "${branch}" = "android16-6.12" ] || die "GKI common BRANCH 异常: ${branch}"
@@ -393,11 +393,15 @@ prepare_fixed_git_subtree() {
     git -C "${cache_dir}" config remote.origin.promisor true
     git -C "${cache_dir}" config remote.origin.partialclonefilter blob:none
 
-    log_step "获取固定 ${label} 提交与对象树"
-    git_network -c fetch.fsckObjects=true \
-        -C "${cache_dir}" fetch --no-tags --filter=blob:none origin "${commit}" || \
-        die "获取固定 ${label} 提交失败"
-    actual_commit="$(git -C "${cache_dir}" rev-parse FETCH_HEAD^{commit})"
+    if ! git -C "${cache_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+        log_step "获取固定 ${label} 提交与对象树"
+        git_network -c fetch.fsckObjects=true \
+            -C "${cache_dir}" fetch --no-tags --filter=blob:none origin "${commit}" || \
+            die "获取固定 ${label} 提交失败"
+    else
+        log_success "复用固定 ${label} 本地提交"
+    fi
+    actual_commit="$(git -C "${cache_dir}" rev-parse "${commit}^{commit}")"
     [ "${actual_commit}" = "${commit}" ] || die "${label} commit 不匹配: ${actual_commit}"
     actual_tree="$(git -C "${cache_dir}" rev-parse "${commit}:${subtree}")"
     [ "${actual_tree}" = "${expected_tree}" ] || \
@@ -798,9 +802,9 @@ KERNEL_BRANCH="${KERNEL_BRANCH:-popsicle-w-oss}"
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-06_r21}"
-COMMON_COMMIT="${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-09}"
+COMMON_COMMIT="${COMMON_COMMIT:-0316e9866fdf55601aae97b14ee08d1b38a3916c}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 COMMON_ABI_STG_SHA256="${COMMON_ABI_STG_SHA256:-5b1f1a3c95fe1cfd8020666730cb1aef1de54498ff037afc2c541e119b18e39f}"
 ABI_BASELINE_COMMIT="${ABI_BASELINE_COMMIT:-160343479eb972500e11fe76957fdb41b1772f97}"
 ABI_BASELINE_STG_SHA256="${ABI_BASELINE_STG_SHA256:-f9802b066d9ffd4a0363ee57615e9af34360a84b3427549d9398de3eadb54691}"
@@ -878,16 +882,6 @@ TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF="${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF:-androi
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE:-2025-10-27}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
-EROFS_DIR_TAIL_OOB_FIX_AOSP_REF="${EROFS_DIR_TAIL_OOB_FIX_AOSP_REF:-android16-6.12-lts}"
-EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
-EROFS_DIR_TAIL_OOB_FIX_COMMIT_DATE="${EROFS_DIR_TAIL_OOB_FIX_COMMIT_DATE:-2026-05-07}"
-EROFS_DIR_TAIL_OOB_FIX_PATCH_ID="${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID:-86095c51c9af49433ddbba4d32f194c2d3a7a6da}"
-ENABLE_EXT4_XATTR_OOB_FIX="${ENABLE_EXT4_XATTR_OOB_FIX:-0}"
-EXT4_XATTR_OOB_FIX_AOSP_REF="${EXT4_XATTR_OOB_FIX_AOSP_REF:-android16-6.12-lts}"
-EXT4_XATTR_OOB_FIX_COMMIT="${EXT4_XATTR_OOB_FIX_COMMIT:-5a5314d2387633a272a04d1bd8727f99058e4e68}"
-EXT4_XATTR_OOB_FIX_COMMIT_DATE="${EXT4_XATTR_OOB_FIX_COMMIT_DATE:-2026-05-07}"
-EXT4_XATTR_OOB_FIX_PATCH_ID="${EXT4_XATTR_OOB_FIX_PATCH_ID:-98a7513db9abe6f0c8c0713c9e03bca09d99af6c}"
 ENABLE_IPV6_MLD_UAF_FIX="${ENABLE_IPV6_MLD_UAF_FIX:-0}"
 IPV6_MLD_UAF_FIX_AOSP_REF="${IPV6_MLD_UAF_FIX_AOSP_REF:-android-mainline}"
 IPV6_MLD_UAF_FIX_COMMIT="${IPV6_MLD_UAF_FIX_COMMIT:-791c91dc7a9dfb2457d5e29b8216a6484b9c4b40}"
@@ -896,11 +890,6 @@ IPV6_MLD_UAF_FIX_PATCH_ID="${IPV6_MLD_UAF_FIX_PATCH_ID:-1358ebc3d619657f50c2f0f5
 ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX="${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}"
 IPV6_MLD_DELAYED_WORK_STABLE_COMMIT="${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-ebbebf6cee950d7f1c81990256c0eae9e62572ae}"
 IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT="${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT:-9b26518b6896a16b809b1e42986f4ebac7bccc1e}"
-ENABLE_KVM_COMPOUND_HEAD_PIN_FIX="${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}"
-KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF="${KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF:-android16-6.12}"
-KVM_COMPOUND_HEAD_PIN_FIX_COMMIT="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-1a138e24e292579ddcf417ed09e78df667f51396}"
-KVM_COMPOUND_HEAD_PIN_FIX_COMMIT_DATE="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT_DATE:-2026-07-31}"
-KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID="${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID:-e57c8f60ba72c69067f5f1327a5b9dd9cf956e3d}"
 ENABLE_IPSET="${ENABLE_IPSET:-0}"
 IPSET_VERSION="${IPSET_VERSION:-7.24}"
 IPSET_URL="${IPSET_URL:-https://ipset.netfilter.org/ipset-7.24.tar.bz2}"
@@ -1033,10 +1022,10 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     fi
     bash "${INDEPENDENT_BACKPORT_TOOL}" verify-manifests
 
-    aosp_audit_commits=("${COMMON_COMMIT}" "${ABI_BASELINE_COMMIT}")
+    aosp_audit_commits=("${AOSP_BACKPORT_AUDIT_BASE_COMMIT:?缺少回移审计快照基线}" "${ABI_BASELINE_COMMIT}")
     ensure_audit_repo "AOSP common 后续历史" "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_REPO}"
-    fetch_audit_ref "AOSP common r21 构建基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
-        "aosp/build-base-r21" "${COMMON_COMMIT}" "2025-01-01"
+    fetch_audit_ref "AOSP common September KMI6 构建基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
+        "aosp/build-base-kmi6-2026-09" "${COMMON_COMMIT}" "${AOSP_BACKPORT_AUDIT_SHALLOW_SINCE}"
     fetch_audit_ref "AOSP generation-6 ABI 历史基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
         "aosp/abi-generation-6-base" "${ABI_BASELINE_COMMIT}" "2025-01-01"
     for audit_ref in ${AOSP_BACKPORT_AUDIT_REFS}; do
@@ -1052,7 +1041,7 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     hydrate_audit_blob "AOSP generation-6 历史 ABI STG" \
         "${AOSP_BACKPORT_AUDIT_DIR}" "${ABI_BASELINE_COMMIT}" \
         "gki/aarch64/abi.stg" "${ABI_BASELINE_STG_SHA256}"
-    hydrate_audit_blob "AOSP r21 ABI STG" \
+    hydrate_audit_blob "AOSP 九月 ABI STG" \
         "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_COMMIT}" \
         "gki/aarch64/abi.stg" "${COMMON_ABI_STG_SHA256}"
     [ "$(git -C "${AOSP_BACKPORT_AUDIT_DIR}" rev-parse \
@@ -1073,10 +1062,7 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}:${BLK_WBT_DONE_FAST_PATH_COMMIT:-}" \
         "${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}:${MEMCG_RSTAT_FAST_PATH_COMMIT:-}" \
         "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}:${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-}" \
-        "${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}:${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-}" \
-        "${ENABLE_EXT4_XATTR_OOB_FIX:-0}:${EXT4_XATTR_OOB_FIX_COMMIT:-}" \
-        "${ENABLE_IPV6_MLD_UAF_FIX:-0}:${IPV6_MLD_UAF_FIX_COMMIT:-}" \
-        "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}:${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-}"; do
+        "${ENABLE_IPV6_MLD_UAF_FIX:-0}:${IPV6_MLD_UAF_FIX_COMMIT:-}"; do
         [ "${selected_aosp_entry%%:*}" = "1" ] || continue
         selected_aosp_patches+=("${selected_aosp_entry#*:}")
     done
@@ -1104,7 +1090,6 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         die "Linux stable 审计历史未形成 v6.12.69 到固定终点的完整祖先链"
     selected_stable_patches=()
     for selected_stable_entry in \
-        "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}:${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT:-}" \
         "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}:${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-}" \
         "${ENABLE_F2FS_LISTXATTR_BOUNDS_FIX:-0}:${F2FS_LISTXATTR_BOUNDS_STABLE_COMMIT:-}" \
         "${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}:${BLKCG_RSTAT_RELEASE_STABLE_COMMIT:-}" \
@@ -1196,22 +1181,6 @@ if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
         "${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID}" \
         "net/ipv4/tcp.c net/ipv4/tcp_input.c"
 fi
-if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
-    verify_aosp_backport_source "EROFS 目录尾项越界读取修复" \
-        "${EROFS_DIR_TAIL_OOB_FIX_AOSP_REF}" \
-        "${EROFS_DIR_TAIL_OOB_FIX_COMMIT}" \
-        "${EROFS_DIR_TAIL_OOB_FIX_COMMIT_DATE}" \
-        "${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID}" \
-        "fs/erofs/dir.c"
-fi
-if [ "${ENABLE_EXT4_XATTR_OOB_FIX}" = "1" ]; then
-    verify_aosp_backport_source "ext4 扩展属性边界越界读取修复" \
-        "${EXT4_XATTR_OOB_FIX_AOSP_REF}" \
-        "${EXT4_XATTR_OOB_FIX_COMMIT}" \
-        "${EXT4_XATTR_OOB_FIX_COMMIT_DATE}" \
-        "${EXT4_XATTR_OOB_FIX_PATCH_ID}" \
-        "fs/ext4/xattr.c"
-fi
 if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
     verify_aosp_backport_source "IPv6 MLD 查询释放后访问修复" \
         "${IPV6_MLD_UAF_FIX_AOSP_REF}" \
@@ -1219,14 +1188,6 @@ if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
         "${IPV6_MLD_UAF_FIX_COMMIT_DATE}" \
         "${IPV6_MLD_UAF_FIX_PATCH_ID}" \
         "net/ipv6/mcast.c"
-fi
-if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" = "1" ]; then
-    verify_aosp_backport_source "KVM compound head 引用修复" \
-        "${KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF}" \
-        "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT}" \
-        "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT_DATE}" \
-        "${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID}" \
-        "virt/kvm/kvm_main.c"
 fi
 if [ "${ENABLE_IPSET}" = "1" ]; then
     prepare_source_archive "ipset ${IPSET_VERSION}" "${IPSET_URL}" \
@@ -1255,10 +1216,7 @@ log_info "GKI common: ${COMMON_DIR}"
 [ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" != "1" ] || log_info "AOSP blk-wbt completion fast path: ${BLK_WBT_DONE_FAST_PATH_COMMIT} (${BLK_WBT_DONE_FAST_PATH_AOSP_REF})"
 [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" != "1" ] || log_info "Linux memcg rstat fast path: ${MEMCG_RSTAT_FAST_PATH_COMMIT} (${MEMCG_RSTAT_FAST_PATH_AOSP_REF})"
 [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" != "1" ] || log_info "Linux TCP recv timestamp fast path: ${TCP_RECV_MSTAMP_FAST_PATH_COMMIT} (${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF})"
-[ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" != "1" ] || log_info "AOSP EROFS directory tail OOB fix: ${EROFS_DIR_TAIL_OOB_FIX_COMMIT} (${EROFS_DIR_TAIL_OOB_FIX_AOSP_REF})"
-[ "${ENABLE_EXT4_XATTR_OOB_FIX}" != "1" ] || log_info "AOSP ext4 xattr OOB fix: ${EXT4_XATTR_OOB_FIX_COMMIT} (${EXT4_XATTR_OOB_FIX_AOSP_REF})"
 [ "${ENABLE_IPV6_MLD_UAF_FIX}" != "1" ] || log_info "AOSP IPv6 MLD UAF fix: ${IPV6_MLD_UAF_FIX_COMMIT} (${IPV6_MLD_UAF_FIX_AOSP_REF})"
-[ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" != "1" ] || log_info "AOSP KVM compound head pin fix: ${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT} (${KVM_COMPOUND_HEAD_PIN_FIX_AOSP_REF})"
 [ "${ENABLE_IPSET}" != "1" ] || log_info "IPSet userspace: ${IPSET_DIR} + libmnl ${LIBMNL_DIR} (NDK ${ANDROID_NDK_VERSION})"
 log_info "toolchain: ${CI_TOOLCHAIN_DIR}"
 log_info "MagiskBoot: v${MAGISK_VERSION} (${MAGISK_COMMIT})"

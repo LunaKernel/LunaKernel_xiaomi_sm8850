@@ -124,9 +124,9 @@ ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
 ORB_LINUX_WORKSPACE="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME:-workspace}/workspace"
 run_in_orb_if_needed "$@"
 
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 [ -d "${COMMON_DIR}/.git" ] || die "GKI common 未初始化，请先运行 ./init.sh"
-[ "$(git -C "${COMMON_DIR}" rev-parse HEAD)" = "${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}" ] || die "GKI common pin 不匹配"
+[ "$(git -C "${COMMON_DIR}" rev-parse HEAD)" = "${COMMON_COMMIT:-0316e9866fdf55601aae97b14ee08d1b38a3916c}" ] || die "GKI common pin 不匹配"
 
 AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
@@ -141,9 +141,6 @@ reject_git_object_overrides "Linux mainline 审计仓库" "${LINUX_MAINLINE_AUDI
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
-ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX="${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}"
-FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT="${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT:-0aacb6d18f76552e3e0ee25d9f40d21b3486f4cf}"
-FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID="${FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID:-88d19e4a03bfc1fdc6b126a65489e9d62eae2780}"
 ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX="${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}"
 F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT="${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-aba4f94ac1832c7299c33e1b4fe5f87eef6dc8f1}"
 F2FS_ACL_ENTRY_BOUNDS_PATCH_ID="${F2FS_ACL_ENTRY_BOUNDS_PATCH_ID:-3021795cf81293828302c01bb7d52bb4d52a7259}"
@@ -179,12 +176,6 @@ MEMCG_RSTAT_FAST_PATH_PATCH_ID="${MEMCG_RSTAT_FAST_PATH_PATCH_ID:-5b12701394b4f6
 ENABLE_TCP_RECV_MSTAMP_FAST_PATH="${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
-EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
-EROFS_DIR_TAIL_OOB_FIX_PATCH_ID="${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID:-86095c51c9af49433ddbba4d32f194c2d3a7a6da}"
-ENABLE_EXT4_XATTR_OOB_FIX="${ENABLE_EXT4_XATTR_OOB_FIX:-0}"
-EXT4_XATTR_OOB_FIX_COMMIT="${EXT4_XATTR_OOB_FIX_COMMIT:-5a5314d2387633a272a04d1bd8727f99058e4e68}"
-EXT4_XATTR_OOB_FIX_PATCH_ID="${EXT4_XATTR_OOB_FIX_PATCH_ID:-98a7513db9abe6f0c8c0713c9e03bca09d99af6c}"
 ENABLE_IPV6_MLD_UAF_FIX="${ENABLE_IPV6_MLD_UAF_FIX:-0}"
 IPV6_MLD_UAF_FIX_COMMIT="${IPV6_MLD_UAF_FIX_COMMIT:-791c91dc7a9dfb2457d5e29b8216a6484b9c4b40}"
 IPV6_MLD_UAF_FIX_PATCH_ID="${IPV6_MLD_UAF_FIX_PATCH_ID:-1358ebc3d619657f50c2f0f50f5408f60ea5b732}"
@@ -197,9 +188,6 @@ IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ip
 IPV6_MLD_DELAYED_WORK_PATCH_SHA256="${IPV6_MLD_DELAYED_WORK_PATCH_SHA256:-7bd3339c3a5db6b1aa034585a5bb5eb53d90a0ac98775e5bdfc941547d5c1c5b}"
 IPV6_MLD_DELAYED_WORK_PATCH_ID="${IPV6_MLD_DELAYED_WORK_PATCH_ID:-8d28904741b04eefe83489706946e55a0682fe08}"
 IPV6_MLD_DELAYED_WORK_PATCH_FILE="${HOST_WORKSPACE_DIR}/${IPV6_MLD_DELAYED_WORK_PATCH}"
-ENABLE_KVM_COMPOUND_HEAD_PIN_FIX="${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}"
-KVM_COMPOUND_HEAD_PIN_FIX_COMMIT="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-1a138e24e292579ddcf417ed09e78df667f51396}"
-KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID="${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID:-e57c8f60ba72c69067f5f1327a5b9dd9cf956e3d}"
 apply_official_backport_once() {
     local label="$1" repo_mode="$2" repo_dir="$3" commit="$4" expected_patch_id="$5"
     local patch_file patch_id
@@ -419,20 +407,6 @@ if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
     log_success "Linux TCP recv 时间戳快路径优化状态正确"
 fi
 
-if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
-    apply_aosp_backport_once "AOSP EROFS 目录尾项越界读取修复" \
-        "${EROFS_DIR_TAIL_OOB_FIX_COMMIT}" \
-        "${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID}"
-    log_success "AOSP EROFS 目录尾项越界读取修复状态正确"
-fi
-
-if [ "${ENABLE_EXT4_XATTR_OOB_FIX}" = "1" ]; then
-    apply_aosp_backport_once "AOSP ext4 扩展属性边界越界读取修复" \
-        "${EXT4_XATTR_OOB_FIX_COMMIT}" \
-        "${EXT4_XATTR_OOB_FIX_PATCH_ID}"
-    log_success "AOSP ext4 扩展属性边界越界读取修复状态正确"
-fi
-
 if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
     apply_aosp_backport_once "AOSP IPv6 MLD 查询释放后访问修复" \
         "${IPV6_MLD_UAF_FIX_COMMIT}" \
@@ -459,30 +433,6 @@ if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX}" = "1" ]; then
         "${COMMON_DIR}/include/net/addrconf.h" || \
         die "IPv6 MLD delayed-work 仍可能复活零引用 inet6_dev"
     log_success "Linux IPv6 MLD delayed-work 生命周期修复状态正确"
-fi
-
-if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" = "1" ]; then
-    apply_aosp_backport_once "AOSP KVM compound head 引用修复" \
-        "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT}" \
-        "${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID}"
-    grep -Fq 'return folio_try_get(page_folio(page));' \
-        "${COMMON_DIR}/virt/kvm/kvm_main.c" || \
-        die "KVM 仍直接获取 compound tail page 引用"
-    log_success "AOSP KVM compound head 引用修复状态正确"
-fi
-
-if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX}" = "1" ]; then
-    apply_linux_stable_backport_once "Linux futex requeue-PI 超时竞态活锁修复" \
-        "${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT}" \
-        "${FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID}"
-    grep -A5 -F 'if (!futex_requeue_pi_prepare(top_waiter, NULL)) {' \
-        "${COMMON_DIR}/kernel/futex/requeue.c" |
-        grep -Fq 'plist_del(&top_waiter->list, &hb1->chain);' || \
-        die "futex requeue-PI 失败路径未摘除顶层 waiter"
-    grep -Fq 'if (!plist_node_empty(&q->list)) {' \
-        "${COMMON_DIR}/kernel/futex/requeue.c" || \
-        die "futex early requeue-PI wakeup 仍无条件重复摘链"
-    log_success "Linux futex requeue-PI 超时竞态活锁修复状态正确"
 fi
 
 if [ "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX}" = "1" ]; then

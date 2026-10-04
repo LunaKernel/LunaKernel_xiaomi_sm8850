@@ -1,5 +1,4 @@
 diff --git a/fs/exec.c b/fs/exec.c
-index 965fdc593d65eccbe987e9f89d78a8b4f4ef9cea..6b5b10949b5bfe8d7cbc7d4a98996b0778977b88 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -69,6 +69,9 @@
@@ -12,7 +11,7 @@ index 965fdc593d65eccbe987e9f89d78a8b4f4ef9cea..6b5b10949b5bfe8d7cbc7d4a98996b07
  #include <linux/dma-buf.h>
  
  #include <linux/uaccess.h>
-@@ -1932,6 +1935,16 @@ out:
+@@ -1932,6 +1935,16 @@
  	return retval;
  }
  
@@ -29,10 +28,11 @@ index 965fdc593d65eccbe987e9f89d78a8b4f4ef9cea..6b5b10949b5bfe8d7cbc7d4a98996b07
  static int do_execveat_common(int fd, struct filename *filename,
  			      struct user_arg_ptr argv,
  			      struct user_arg_ptr envp,
-@@ -1943,6 +1956,20 @@ static int do_execveat_common(int fd, struct filename *filename,
+@@ -1942,6 +1955,20 @@
+ 
  	if (IS_ERR(filename))
  		return PTR_ERR(filename);
- 
++
 +#ifdef CONFIG_KSU_SUSFS
 +	if (likely(susfs_is_current_proc_no_su()))
 +		goto orig_flow;
@@ -46,12 +46,10 @@ index 965fdc593d65eccbe987e9f89d78a8b4f4ef9cea..6b5b10949b5bfe8d7cbc7d4a98996b07
 +
 +orig_flow:
 +#endif
-+
+ 
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
- 	 * set*uid() to execve() because too many poorly written programs
 diff --git a/fs/proc/base.c b/fs/proc/base.c
-index 9d9a98f0392d86b73d76c3da32027a935f8eab7d..cb2238218229275c637c0257d2c72beba2ecef3f 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -100,6 +100,10 @@
@@ -65,7 +63,7 @@ index 9d9a98f0392d86b73d76c3da32027a935f8eab7d..cb2238218229275c637c0257d2c72beb
  #include <uapi/linux/lsm.h>
  #include <linux/dma-buf.h>
  #include <trace/events/oom.h>
-@@ -2467,6 +2471,10 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
+@@ -2467,6 +2471,10 @@
  	for_each_vma(vmi, vma) {
  		if (!vma->vm_file)
  			continue;
@@ -77,7 +75,6 @@ index 9d9a98f0392d86b73d76c3da32027a935f8eab7d..cb2238218229275c637c0257d2c72beb
  			continue;
  
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727e08fca0b 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -27,6 +27,9 @@
@@ -106,7 +103,7 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
  void task_mem(struct seq_file *m, struct mm_struct *mm)
  {
  	unsigned long text, lib, swap, anon, file, shmem;
-@@ -455,6 +467,10 @@ static void show_vma_header_prefix(struct seq_file *m,
+@@ -531,6 +543,10 @@
  	seq_putc(m, ' ');
  }
  
@@ -117,7 +114,7 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
  static void
  show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  {
-@@ -468,10 +484,16 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -544,10 +560,16 @@
  
  	if (vma->vm_file) {
  		const struct inode *inode = file_user_inode(vma->vm_file);
@@ -135,7 +132,7 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
  	}
  
  	start = vma->vm_start;
-@@ -1330,6 +1352,11 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -1549,6 +1571,11 @@
  	struct vm_area_struct *vma = v;
  	struct mem_size_stats mss = {};
  
@@ -147,46 +144,30 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
  	if (!vma_data_pages(vma))
  		goto show_pad;
  
-@@ -1390,7 +1417,10 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
- 
- 	vma_start = vma->vm_start;
- 	do {
--		smap_gather_stats(vma, &mss, 0);
+@@ -1625,10 +1652,16 @@
+ 			 * again. Gather stats for the remaining portion by
+ 			 * starting at last_vma_end.
+ 			 */
+-			smap_gather_stats_range(priv, vma, &mss, last_vma_end);
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-+		if (!vma_is_sus_map(vma))
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
-+			smap_gather_stats(vma, &mss, 0);
++			if (!vma_is_sus_map(vma))
++#endif
++				smap_gather_stats_range(priv, vma, &mss, last_vma_end);
+ 		} else {
+ 			/* Found next unreported VMA, start from its beginning */
+-			smap_gather_stats(priv, vma, &mss);
++#ifdef CONFIG_KSU_SUSFS_SUS_MAP
++			if (!vma_is_sus_map(vma))
++#endif
++				smap_gather_stats(priv, vma, &mss);
+ 		}
  		last_vma_end = vma->vm_end;
  
- 		/*
-@@ -1456,14 +1486,22 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
- 
- 			/* Case 1 and 2 above */
- 			if (vma->vm_start >= last_vma_end) {
--				smap_gather_stats(vma, &mss, 0);
-+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-+				if (!vma_is_sus_map(vma))
-+#endif
-+					smap_gather_stats(vma, &mss, 0);
- 				last_vma_end = vma->vm_end;
- 				continue;
- 			}
- 
- 			/* Case 4 above */
- 			if (vma->vm_end > last_vma_end) {
-+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-+				if (!vma_is_sus_map(vma))
-+					smap_gather_stats(vma, &mss, last_vma_end);
-+#else
- 				smap_gather_stats(vma, &mss, last_vma_end);
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
- 				last_vma_end = vma->vm_end;
- 			}
- 		}
-@@ -1896,6 +1934,34 @@ out:
+@@ -2089,6 +2122,34 @@
+ out:
  	return err;
  }
- 
++
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP
 +static int pagemap_test_walk(unsigned long start, unsigned long end,
 +			     struct mm_walk *walk)
@@ -214,11 +195,10 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
 +	return 0;
 +}
 +#endif
-+
+ 
  static pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
  		struct vm_area_struct *vma, unsigned long addr, pte_t pte)
- {
-@@ -2120,6 +2186,9 @@ static int pagemap_hugetlb_range(pte_t *ptep, unsigned long hmask,
+@@ -2314,6 +2375,9 @@
  #endif /* HUGETLB_PAGE */
  
  static const struct mm_walk_ops pagemap_ops = {
@@ -228,7 +208,7 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
  	.pmd_entry	= pagemap_pmd_range,
  	.pte_hole	= pagemap_pte_hole,
  	.hugetlb_entry	= pagemap_hugetlb_range,
-@@ -2560,8 +2629,14 @@ static int pagemap_scan_test_walk(unsigned long start, unsigned long end,
+@@ -2754,8 +2818,14 @@
  	struct pagemap_scan_private *p = walk->private;
  	struct vm_area_struct *vma = walk->vma;
  	unsigned long vma_category = 0;
@@ -246,7 +226,6 @@ index 7294b14811bcf86998755eeac17544db2a4080b2..c1f281c5822ff94ba6c3dbd7e2ece727
  	if (!wp_allowed) {
  		/* User requested explicit failure over wp-async capability */
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index fb7e7d17230b714a66843bf3f4e6359b1ba3fb7f..7c497e8f8c58e4450b8712513bbbe3bb6fec09f2 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
 @@ -110,6 +110,12 @@
@@ -262,7 +241,7 @@ index fb7e7d17230b714a66843bf3f4e6359b1ba3fb7f..7c497e8f8c58e4450b8712513bbbe3bb
  
  /*
   * ANDROID: selinux_state is part of the KMI, and backporting capabilities into
-@@ -6623,6 +6629,42 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
+@@ -6624,6 +6630,42 @@
  	return -EINVAL;
  }
  
@@ -305,7 +284,7 @@ index fb7e7d17230b714a66843bf3f4e6359b1ba3fb7f..7c497e8f8c58e4450b8712513bbbe3bb
  static int selinux_ismaclabel(const char *name)
  {
  	return (strcmp(name, XATTR_SELINUX_SUFFIX) == 0);
-@@ -7253,7 +7295,11 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
+@@ -7254,7 +7296,11 @@
  	LSM_HOOK_INIT(getselfattr, selinux_getselfattr),
  	LSM_HOOK_INIT(setselfattr, selinux_setselfattr),
  	LSM_HOOK_INIT(getprocattr, selinux_getprocattr),

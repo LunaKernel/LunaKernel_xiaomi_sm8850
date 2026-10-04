@@ -47,7 +47,7 @@ WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 load_env_file "${WORKSPACE_DIR}/.env"
 
 MANIFEST_TOOL="${WORKSPACE_DIR}/tools/backport_manifest.sh"
-MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/r21-independent"
+MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/kmi6-2026-09-independent"
 TMP_ROOT=""
 declare -a MANIFESTS=()
 
@@ -104,7 +104,7 @@ run_manifest() {
 verify_manifests() {
 	local manifest source duplicates overlap new_commits old_commits
 	[ -f "${MANIFEST_TOOL}" ] && [ ! -L "${MANIFEST_TOOL}" ] || \
-		die "缺少 r21 回移清单工具"
+		die "缺少 九月回移清单工具"
 	discover_manifests
 	for manifest in "${MANIFESTS[@]}"; do
 		run_manifest "${manifest}" verify-manifest >/dev/null
@@ -244,7 +244,7 @@ case "${1:-}" in
 	verify-manifests)
 		[ "$#" = 1 ] || usage
 		verify_manifests
-		log_success "r21 独立回移清单身份与互斥性检查通过"
+		log_success "九月独立回移清单身份与互斥性检查通过"
 		;;
 	list)
 		[ "$#" = 2 ] || usage
@@ -258,17 +258,17 @@ case "${1:-}" in
 	verify-sources)
 		[ "$#" = 1 ] || usage
 		verify_sources
-		log_success "r21 独立回移全部官方来源检查通过"
+		log_success "九月独立回移全部官方来源检查通过"
 		;;
 	apply)
 		[ "$#" = 2 ] || usage
 		apply_all "$2"
-		log_success "r21 独立回移状态正确"
+		log_success "九月独立回移状态正确"
 		;;
 	verify-applied)
 		[ "$#" = 2 ] || usage
 		verify_applied "$2"
-		log_success "r21 独立回移最终应用状态正确"
+		log_success "九月独立回移最终应用状态正确"
 		;;
 	verify-base-diff)
 		[ "$#" = 3 ] || usage

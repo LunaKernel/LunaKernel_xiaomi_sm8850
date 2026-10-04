@@ -511,7 +511,7 @@ verify_susfs_source_state() {
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
         "${SUSFS_KSU_PATCH_COMMIT}" ] || \
         die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
-    verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
+    verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁" \
         "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_CONTEXT_PATCH_SHA256}" \
         "${SUSFS_CONTEXT_PATCH_ID}"
     verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
@@ -552,7 +552,7 @@ verify_susfs_source_state() {
         "${common_patch}" || \
         die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_CONTEXT_ADAPTATION}" || \
-        die "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁状态异常"
+        die "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
         die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
     git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
@@ -609,23 +609,11 @@ verify_susfs_source_state() {
         if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
             printf '%s\n' net/ipv4/tcp.c net/ipv4/tcp_input.c
         fi
-        if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ]; then
-            printf '%s\n' fs/erofs/dir.c
-        fi
-        if [ "${ENABLE_EXT4_XATTR_OOB_FIX}" = "1" ]; then
-            printf '%s\n' fs/ext4/xattr.c
-        fi
         if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
             printf '%s\n' net/ipv6/mcast.c
         fi
         if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
             printf '%s\n' include/net/addrconf.h net/ipv6/mcast.c
-        fi
-        if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}" = "1" ]; then
-            printf '%s\n' virt/kvm/kvm_main.c
-        fi
-        if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/futex/requeue.c
         fi
         if [ "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}" = "1" ]; then
             printf '%s\n' fs/f2fs/acl.c
@@ -881,12 +869,6 @@ verify_linux_mainline_backport_applied() {
 }
 
 verify_first_batch_linux_backports() {
-    if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX}" = "1" ]; then
-        verify_linux_stable_backport_applied "futex requeue-PI 超时竞态活锁修复" \
-            "${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT}" \
-            "${FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID}" \
-            "kernel/futex/requeue.c"
-    fi
     if [ "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX}" = "1" ]; then
         verify_linux_stable_backport_applied "F2FS ACL 条目边界修复" \
             "${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT}" \
@@ -982,24 +964,6 @@ verify_tcp_recv_mstamp_fast_path() {
     log_success "TCP recv 时间戳快路径优化检查通过"
 }
 
-verify_erofs_dir_tail_oob_fix() {
-    [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "EROFS 目录尾项越界读取修复" \
-        "${EROFS_DIR_TAIL_OOB_FIX_COMMIT}" \
-        "${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID}" \
-        "fs/erofs/dir.c"
-    log_success "EROFS 目录尾项越界读取修复检查通过"
-}
-
-verify_ext4_xattr_oob_fix() {
-    [ "${ENABLE_EXT4_XATTR_OOB_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "ext4 扩展属性边界越界读取修复" \
-        "${EXT4_XATTR_OOB_FIX_COMMIT}" \
-        "${EXT4_XATTR_OOB_FIX_PATCH_ID}" \
-        "fs/ext4/xattr.c"
-    log_success "ext4 扩展属性边界越界读取修复检查通过"
-}
-
 verify_ipv6_mld_uaf_fix() {
     [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ] || return
     verify_aosp_backport_applied "IPv6 MLD 查询释放后访问修复" \
@@ -1035,22 +999,13 @@ verify_ipv6_mld_delayed_work_uaf_fix() {
 }
 
 verify_android17_selected_fixes() {
-    if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX}" = "1" ]; then
-        verify_aosp_backport_applied "KVM compound head 引用修复" \
-            "${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT}" \
-            "${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID}" \
-            "virt/kvm/kvm_main.c"
-        grep -Fq 'return folio_try_get(page_folio(page));' \
-            "${COMMON_DIR}/virt/kvm/kvm_main.c" || \
-            die "KVM compound head 引用修复语义检查失败"
-    fi
     grep -Fq 'unlikely(sc->proactive && signal_pending(current))' \
         "${COMMON_DIR}/mm/vmscan.c" || \
-        die "r21 基线缺少主动回收内层扫描 freezer 检查"
+        die "九月基线缺少主动回收内层扫描 freezer 检查"
     grep -A1 -F 'if (signal_pending(current))' \
         "${COMMON_DIR}/mm/memcontrol.c" | grep -Fq 'return -ERESTARTSYS;' || \
-        die "r21 基线主动回收 freezer 返回值语义异常"
-    log_success "Android 17 r21 基线与所选后续修复检查通过"
+        die "九月基线主动回收 freezer 返回值语义异常"
+    log_success "Android 17 九月基线与所选后续修复检查通过"
 }
 
 verify_lsm_slot_capacity() {
@@ -1678,8 +1633,8 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.g
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+COMMON_COMMIT="${COMMON_COMMIT:-0316e9866fdf55601aae97b14ee08d1b38a3916c}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
@@ -1729,9 +1684,6 @@ LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DI
 LINUX_STABLE_AUDIT_COMMIT="${LINUX_STABLE_AUDIT_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
 LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
-ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX="${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}"
-FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT="${FUTEX_REQUEUE_PI_LOCKUP_STABLE_COMMIT:-0aacb6d18f76552e3e0ee25d9f40d21b3486f4cf}"
-FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID="${FUTEX_REQUEUE_PI_LOCKUP_PATCH_ID:-88d19e4a03bfc1fdc6b126a65489e9d62eae2780}"
 ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX="${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}"
 F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT="${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-aba4f94ac1832c7299c33e1b4fe5f87eef6dc8f1}"
 F2FS_ACL_ENTRY_BOUNDS_PATCH_ID="${F2FS_ACL_ENTRY_BOUNDS_PATCH_ID:-3021795cf81293828302c01bb7d52bb4d52a7259}"
@@ -1768,12 +1720,6 @@ MEMCG_RSTAT_FAST_PATH_PATCH_ID="${MEMCG_RSTAT_FAST_PATH_PATCH_ID:-5b12701394b4f6
 ENABLE_TCP_RECV_MSTAMP_FAST_PATH="${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}"
 TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
 TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_EROFS_DIR_TAIL_OOB_FIX="${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}"
-EROFS_DIR_TAIL_OOB_FIX_COMMIT="${EROFS_DIR_TAIL_OOB_FIX_COMMIT:-48b27a955d22391c7f30169fa7b6b2e1977f1ce4}"
-EROFS_DIR_TAIL_OOB_FIX_PATCH_ID="${EROFS_DIR_TAIL_OOB_FIX_PATCH_ID:-86095c51c9af49433ddbba4d32f194c2d3a7a6da}"
-ENABLE_EXT4_XATTR_OOB_FIX="${ENABLE_EXT4_XATTR_OOB_FIX:-0}"
-EXT4_XATTR_OOB_FIX_COMMIT="${EXT4_XATTR_OOB_FIX_COMMIT:-5a5314d2387633a272a04d1bd8727f99058e4e68}"
-EXT4_XATTR_OOB_FIX_PATCH_ID="${EXT4_XATTR_OOB_FIX_PATCH_ID:-98a7513db9abe6f0c8c0713c9e03bca09d99af6c}"
 ENABLE_IPV6_MLD_UAF_FIX="${ENABLE_IPV6_MLD_UAF_FIX:-0}"
 IPV6_MLD_UAF_FIX_COMMIT="${IPV6_MLD_UAF_FIX_COMMIT:-791c91dc7a9dfb2457d5e29b8216a6484b9c4b40}"
 IPV6_MLD_UAF_FIX_PATCH_ID="${IPV6_MLD_UAF_FIX_PATCH_ID:-1358ebc3d619657f50c2f0f50f5408f60ea5b732}"
@@ -1786,9 +1732,6 @@ IPV6_MLD_DELAYED_WORK_PATCH="${IPV6_MLD_DELAYED_WORK_PATCH:-patches/backports/ip
 IPV6_MLD_DELAYED_WORK_PATCH_SHA256="${IPV6_MLD_DELAYED_WORK_PATCH_SHA256:-7bd3339c3a5db6b1aa034585a5bb5eb53d90a0ac98775e5bdfc941547d5c1c5b}"
 IPV6_MLD_DELAYED_WORK_PATCH_ID="${IPV6_MLD_DELAYED_WORK_PATCH_ID:-8d28904741b04eefe83489706946e55a0682fe08}"
 IPV6_MLD_DELAYED_WORK_PATCH_FILE="${HOST_WORKSPACE_DIR}/${IPV6_MLD_DELAYED_WORK_PATCH}"
-ENABLE_KVM_COMPOUND_HEAD_PIN_FIX="${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}"
-KVM_COMPOUND_HEAD_PIN_FIX_COMMIT="${KVM_COMPOUND_HEAD_PIN_FIX_COMMIT:-1a138e24e292579ddcf417ed09e78df667f51396}"
-KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID="${KVM_COMPOUND_HEAD_PIN_FIX_PATCH_ID:-e57c8f60ba72c69067f5f1327a5b9dd9cf956e3d}"
 COMMON_BASE_TRACKED_DIFF_SHA256="${COMMON_BASE_TRACKED_DIFF_SHA256:-}"
 KSU_TRACKED_DIFF_SHA256="${KSU_TRACKED_DIFF_SHA256:-}"
 ENABLE_STAGE5_NAMESPACES="${ENABLE_STAGE5_NAMESPACES:-0}"
@@ -1807,17 +1750,15 @@ XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
 verify_repo_identity "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_COMMIT}"
-verify_repo_identity "Android 16 GKI common r21" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
-[ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "6.12.81" ] || \
-    die "GKI common 版本不是 6.12.81"
+verify_repo_identity "Android 16 GKI common 九月 KMI6" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
+[ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "${COMMON_VERSION:?缺少 COMMON_VERSION}" ] || \
+    die "GKI common 版本不是 ${COMMON_VERSION}"
 [ "$(sed -n 's/^KMI_GENERATION=//p' "${COMMON_DIR}/build.config.constants")" = "6" ] || \
     die "GKI common KMI generation 不是 6"
 verify_first_batch_linux_backports
 verify_second_batch_backports
 verify_memcg_rstat_fast_path
 verify_tcp_recv_mstamp_fast_path
-verify_erofs_dir_tail_oob_fix
-verify_ext4_xattr_oob_fix
 verify_ipv6_mld_uaf_fix
 verify_ipv6_mld_delayed_work_uaf_fix
 verify_android17_selected_fixes
@@ -1832,7 +1773,7 @@ bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
 [ "$(sed -n '2p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化"
 
 BUILD_JOBS="$(detect_cpu_count)"
-BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-r21}")"
+BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-kmi6-2026-09}")"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
 STAGE_MODULE_COUNT="${STAGE_MODULE_COUNT:-}"
@@ -1866,7 +1807,7 @@ LUNA_PROJECT_SHORT="${LUNA_PROJECT_COMMIT:0:8}"
 KERNEL_LOCALVERSION="-android16-luna-g${LUNA_PROJECT_SHORT}-4k"
 KERNEL_BUILD_USER="${KERNEL_BUILD_USER:-luna}"
 KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
-KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-08-27 02:47:56 -0700}"
+KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-09-30 21:35:37 +0000}"
 KERNEL_BUILD_VERSION="${KERNEL_BUILD_VERSION:-1}"
 AK3_BOOT_PARTITION_SIZE="${AK3_BOOT_PARTITION_SIZE:-100663296}"
 AK3_UPSTREAM_COMMIT="${AK3_UPSTREAM_COMMIT:-}"
@@ -1887,7 +1828,7 @@ MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf793baef9804ccbe5a52ce34a8b6242725d3c77}"
 [ "${KERNEL_BUILD_USER}" = "luna" ] || die "内核构建用户必须固定为 luna"
 [ "${KERNEL_BUILD_HOST}" = "luna-build" ] || die "内核构建主机标识必须固定为 luna-build"
-[ "${KERNEL_BUILD_TIMESTAMP}" = "2026-08-27 02:47:56 -0700" ] || die "内核构建时间必须固定为 r21 提交时间"
+[ "${KERNEL_BUILD_TIMESTAMP}" = "$(git -C "${COMMON_DIR}" show -s --format=%ci "${COMMON_COMMIT}")" ] || die "内核构建时间必须固定为 common 提交时间"
 [ "${KERNEL_BUILD_VERSION}" = "1" ] || die "内核构建版本必须固定为 1"
 [ "${AK3_BOOT_PARTITION_SIZE}" = "100663296" ] || die "小米 17 boot 分区容量必须固定为 100663296 字节"
 [[ "${AK3_UPSTREAM_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 脚本 commit 格式错误"
@@ -1961,7 +1902,7 @@ verify_project_patch "Tegra MC opaque-pointer KMI compatibility" \
 git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
     die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_final_source_deltas
-EXPECTED_RELEASE="6.12.81${KERNEL_LOCALVERSION}"
+EXPECTED_RELEASE="${COMMON_VERSION}${KERNEL_LOCALVERSION}"
 EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@${KERNEL_BUILD_HOST}) (Android (14043575, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460), LLD 19.0.1) #${KERNEL_BUILD_VERSION} SMP PREEMPT ${KERNEL_BUILD_TIMESTAMP}"
 
 ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
@@ -2003,11 +1944,15 @@ export RUSTC=rustc HOSTRUSTC=rustc BINDGEN=bindgen LIBCLANG_PATH="${CI_TOOLCHAIN
 export ARCH=arm64 SUBARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 export KBUILD_GENDWARFKSYMS_STABLE=1 IN_KERNEL_MODULES=1 DO_NOT_STRIP_MODULES=1 PAGE_SIZE=4096
 export CC=clang HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" LD=ld.lld HOSTLD=/usr/bin/ld HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
+if [ "${ENABLE_CCACHE:-0}" = 1 ] && command -v ccache >/dev/null 2>&1; then
+    CC='ccache clang'
+    log_success "复用 ccache 编译缓存"
+fi
 
 MAKE_ARGS=(
     ARCH=arm64 SUBARCH=arm64 LLVM=1 LLVM_IAS=1 O="${BUILD_DIR}"
     LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump OBJSIZE=llvm-size READELF=llvm-readelf STRIP=llvm-strip
-    CC=clang HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" HOSTCFLAGS="-Wno-error=discarded-qualifiers"
+    CC="${CC}" HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" HOSTCFLAGS="-Wno-error=discarded-qualifiers"
     CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
     RUSTC=rustc HOSTRUSTC=rustc HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
     BINDGEN=bindgen HOSTLD=/usr/bin/ld KCFLAGS="-Wno-error=unknown-warning-option"
@@ -2031,7 +1976,7 @@ AUDIT_DRIFT_COUNT=0
     printf 'status\tmetric\treference\tactual\n'
 } > "${AUDIT_REPORT}"
 
-log_step "生成 Android 16 GKI 6.12.81 配置"
+log_step "生成 Android 16 GKI ${COMMON_VERSION} 配置"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" gki_defconfig
 bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable WERROR \

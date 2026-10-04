@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	icmpv6_address_uaf	direct	stable	linux-6.12.y	1e1f0f89ee4692a64be3f3707ff8ac1ae57b03e7	2026-05-23	bcb539eb9794689785942333eefa47c45461edcd	net/ipv6/icmp.c	-	-	-

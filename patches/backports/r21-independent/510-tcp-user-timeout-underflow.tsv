@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	tcp_user_timeout_underflow	direct	stable	linux-6.12.y	0c699035b7baafa7402d59b071688e14f0c26f90	2026-05-23	2dd50663712aeaea321adb766b34e78b489f3ca3	net/ipv4/tcp_timer.c	-	-	-

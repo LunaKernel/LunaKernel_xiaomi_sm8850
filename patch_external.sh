@@ -273,7 +273,7 @@ verify_susfs_integration() {
         "${COMMON_SUSFS_PATCH_FILE}" || \
         die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_CONTEXT_ADAPTATION}" || \
-        die "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁状态异常"
+        die "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
         die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
     git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
@@ -334,9 +334,6 @@ verify_susfs_integration() {
         if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' net/ipv4/tcp.c net/ipv4/tcp_input.c
         fi
-        if [ "${ENABLE_FUTEX_REQUEUE_PI_LOCKUP_FIX:-0}" = "1" ]; then
-            printf '%s\n' kernel/futex/requeue.c
-        fi
         if [ "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}" = "1" ]; then
             printf '%s\n' fs/f2fs/acl.c
         fi
@@ -361,20 +358,11 @@ verify_susfs_integration() {
         if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}" = "1" ]; then
             printf '%s\n' block/blk-wbt.c
         fi
-        if [ "${ENABLE_EROFS_DIR_TAIL_OOB_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/erofs/dir.c
-        fi
-        if [ "${ENABLE_EXT4_XATTR_OOB_FIX:-0}" = "1" ]; then
-            printf '%s\n' fs/ext4/xattr.c
-        fi
         if [ "${ENABLE_IPV6_MLD_UAF_FIX:-0}" = "1" ]; then
             printf '%s\n' net/ipv6/mcast.c
         fi
         if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
             printf '%s\n' include/net/addrconf.h net/ipv6/mcast.c
-        fi
-        if [ "${ENABLE_KVM_COMPOUND_HEAD_PIN_FIX:-0}" = "1" ]; then
-            printf '%s\n' virt/kvm/kvm_main.c
         fi
         if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
             bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" list-paths
@@ -547,7 +535,7 @@ apply_susfs_integration() {
         --exclude=fs/proc/base.c \
         --exclude=fs/proc/task_mmu.c \
         --exclude=security/selinux/hooks.c
-    apply_patch_once "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
+    apply_patch_once "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁" \
         "${COMMON_DIR}" "${SUSFS_CONTEXT_ADAPTATION}"
 
     for source_file in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
@@ -603,8 +591,8 @@ run_in_orb_if_needed "$@"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28}"
-COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.81_kmi6_r21}")"
+COMMON_COMMIT="${COMMON_COMMIT:-0316e9866fdf55601aae97b14ee08d1b38a3916c}"
+COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
@@ -644,7 +632,7 @@ BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
 COMMON_BASE_TRACKED_DIFF_SHA256="${COMMON_BASE_TRACKED_DIFF_SHA256:-}"
 KSU_TRACKED_DIFF_SHA256="${KSU_TRACKED_DIFF_SHA256:-}"
 
-verify_repo_identity "Android 16 GKI common r21" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}"
+verify_repo_identity "Android 16 GKI common 九月 KMI6" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}"
 verify_project_patch "Tegra MC opaque-pointer KMI compatibility" \
     "${TEGRA_MC_KMI_PATCH_FILE}" "${TEGRA_MC_KMI_PATCH_SHA256}" \
     "${TEGRA_MC_KMI_PATCH_ID}"
@@ -657,7 +645,7 @@ verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSF
     refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
     "${SUSFS_KSU_PATCH_COMMIT}" ] || \
     die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
-verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.69 上下文补丁" \
+verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁" \
     "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_CONTEXT_PATCH_SHA256}" \
     "${SUSFS_CONTEXT_PATCH_ID}"
 verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \

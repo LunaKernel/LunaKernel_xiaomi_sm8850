@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	arm64_aes_mac_arg_width	direct	stable	linux-6.12.y	d0d59a35ac0b4dad00d68aa6814bc722c19273ca	2026-05-07	285c0951ff66740820aecec4470cd32e63f14117	arch/arm64/crypto/aes-modes.S	-	-	-

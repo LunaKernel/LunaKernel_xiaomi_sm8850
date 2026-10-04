@@ -1,0 +1,24 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	blk_mq_cached_request	direct	mainline	snapshot-2026-08-28	44e41381591dc5b4ea67a9f170b4ec85c817586e	2025-01-14	d75bdcc73e946ddea4bb8e042f8e62b13fa59ff7	block/blk-mq.c	-	-	-
+002	blk_mq_cached_request	direct	stable	linux-6.12.y	23d8ea1e303b5f32d883757a4a707e791dbc9808	2026-08-19	6a67555bb8698c1d92ec67aeb211a68b59264797	block/blk-mq.c	-	-	-
+003	blk_mq_cached_request	direct	stable	linux-6.12.y	8e23114b89e28549393351afde3c87e7b43a0c97	2026-08-19	4c7172bc6ab0ed867beed74ca6529197687ddc7b	block/blk-mq.c	-	-	-
+004	thp_huge_zero_race	direct	stable	linux-6.12.y	6024f6d0d9b9ca5138bfc4ac6f6e4bdf616e42b3	2026-08-19	ae89fbe477735ea785b05f5c0205e98c4266b7ad	mm/huge_memory.c	-	-	-
+005	psi_cgroup_timer_uaf	direct	stable	linux-6.12.y	806fcff98c1d7cb3c1dc0015e55ebdbe819e6b08	2026-08-19	d46abc7c80e27caa7aaf9dc633929ba0ea37682f	kernel/sched/psi.c	-	-	-
+006	bpf_sockmap_redirect_uaf	direct	stable	linux-6.12.y	4c9d9aa809c261dc0490a0e19d675f7e8e4c85bf	2026-08-19	a8f00ea673ac9d6d8fd42b9771e82fb378f2b7ab	net/ipv4/tcp_bpf.c	-	-	-
+007	tcp_receive_window	direct	stable	linux-6.12.y	a83264d8dfba400b94b87ecf88a3cff896cfc5cc	2026-08-19	756f016f4cdb44eed207e489183f566308aea0cf	net/ipv4/tcp_input.c	-	-	-
+008	tcp_synrecv_challenge_ack	direct	stable	linux-6.12.y	0fe4636665d14a258de70b4f3e8248e6d42038f1	2026-08-23	c48f4193fbbf0a58fa873369d513c17b755594c2	include/net/tcp.h,net/ipv4/tcp_input.c,net/ipv4/tcp_minisocks.c	-	-	-
+009	tcp_delack_ato_overflow	direct	stable	linux-6.12.y	df50875c208a1ac90d62d83a4de07b583ecddbf1	2026-08-23	05a9e4cb246d667e6e99eae46845290f32048be9	net/ipv4/tcp_input.c,net/ipv4/tcp_timer.c	-	-	-
+010	ipv6_prefix_route_null	direct	stable	linux-6.12.y	192df376a05c2db15564640f9da7e20907c1fa24	2026-06-19	37a73f397f7670a5418f28e0cecaa80de03cb86c	net/ipv6/addrconf.c	-	-	-
+011	ipv6_ra_mtu_teardown_null	direct	stable	linux-6.12.y	80600b5d0f3ecb9324120dc95b5e915130f516c5	2026-07-24	00f501d42e03dc6199aa18402545d72192f3344b	net/ipv6/route.c	-	-	-
+012	ipv6_in6dev_resurrection_uaf	direct	stable	linux-6.12.y	1c206d461c680c3151daa3c89fc26eaf5bf98a7f	2026-08-19	7070b01f411a4db695423e1fff72eb0f468bc0d2	include/net/addrconf.h	-	-	-
+013	ipv4_fnhe_pmtu_uaf	direct	stable	linux-6.12.y	5a28a4b22dde92f9d293b94236314b8d6181dc4a	2026-08-19	26990c62c150429acd261bfc755f180459694162	include/net/route.h,net/ipv4/fib_semantics.c,net/ipv4/route.c	-	-	-
+014	ethernet_mac_header	direct	stable	linux-6.12.y	367abcacc13a8e2e7624408b7f593bd1e60e49d9	2026-06-19	5643553f74a5d304d1a990af0db0b07346a67336	net/ipv6/netfilter/ip6t_eui64.c,net/netfilter/ipset/ip_set_bitmap_ipmac.c,net/netfilter/ipset/ip_set_hash_ipmac.c,net/netfilter/ipset/ip_set_hash_mac.c,net/netfilter/nf_log_syslog.c,net/netfilter/xt_mac.c	-	-	-
+015	ipset_dump_resize_uaf	direct	stable	linux-6.12.y	ff86ea9b7fdf70564e60436fbee68c96bc459943	2026-07-18	d08de79087a623a0990a289169fb0ca5a476a7fb	net/netfilter/ipset/ip_set_core.c	-	-	-
+016	ipset_publication	direct	stable	linux-6.12.y	7e06a41b36638d514638de468428c14ae79db475	2026-07-24	ffe16372f9c5fc1bf7457972a65cbbd92c6b9ad2	net/netfilter/ipset/ip_set_hash_gen.h	-	-	-
+017	ipset_publication	direct	stable	linux-6.12.y	157c0a896127d16466d69729a3e140c29dfbf239	2026-07-24	0418d45989620b7111f40372e39f9f7314c94ac9	net/netfilter/ipset/ip_set_hash_gen.h	-	-	-
+018	ipset_publication	direct	stable	linux-6.12.y	7445fe965b7d8756070a40e80f8b73348ccda1d7	2026-07-24	465bb7ecc3d833e904243fc9d274bf2651730b05	net/netfilter/ipset/ip_set_hash_gen.h	-	-	-
+019	ipset_comment_rcu_order	direct	stable	linux-6.12.y	fcb565966534909377a16be5f7b065db2e25c8b5	2026-07-24	8d3543094c7f7780d4578a13e770bc920f93f5ed	net/netfilter/ipset/ip_set_core.c	-	-	-
+020	ipset_gc_shutdown	direct	stable	linux-6.12.y	c940d1b96248c3081b664ede5418078bdc7c8c07	2026-07-24	906b8447b1ca3f531cdf8f5f3548a03c350f5b75	net/netfilter/ipset/ip_set_hash_gen.h	-	-	-
+021	ipset_packet_comment_uaf	direct	stable	linux-6.12.y	c710e9bf38e4e71a8db85d26a0f70c0674664207	2026-08-09	31257c4f35929e6505fef86d2da00d4fb5292242	net/netfilter/ipset/ip_set_hash_gen.h	-	-	-
+022	ipset_list_swap_refcount	direct	stable	linux-6.12.y	20cb13a523f0a05cb2d0a7d72abae687683712e0	2026-08-23	11546a874d9adc3a3ea9cc1106ebc6c36ecd0929	net/netfilter/ipset/ip_set_core.c	-	-	-
+023	ipset_list_element_drift	direct	stable	linux-6.12.y	a12c0025080e0215b74551a644c8a57f126fd738	2026-08-23	6f7b6a1fad579dc4cb72d2516054348846752cf1	net/netfilter/ipset/ip_set_list_set.c	-	-	-

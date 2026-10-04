@@ -611,7 +611,7 @@ def main() -> None:
     parser.add_argument(
         "--extract-ikconfig",
         type=Path,
-        default=Path("sources/aosp_common_6.12.81_kmi6_r21/scripts/extract-ikconfig"),
+        default=Path("sources/aosp_common_6.12.92_kmi6_2026-09/scripts/extract-ikconfig"),
     )
     parser.add_argument("--module-symvers", type=Path, required=True)
     args = parser.parse_args()

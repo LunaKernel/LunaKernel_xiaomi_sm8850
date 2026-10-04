@@ -90,7 +90,7 @@ if [ "${INDEPENDENT_MANIFEST}" = 1 ]; then
 	MANIFEST="$(resolve_workspace_path "${BACKPORT_MANIFEST_OVERRIDE}")"
 	MANIFEST_SHA256="${BACKPORT_MANIFEST_SHA256_OVERRIDE}"
 else
-	MANIFEST="$(resolve_workspace_path "${SELECTED_BACKPORT_MANIFEST:-patches/backports/r21-selected-backports.tsv}")"
+	MANIFEST="$(resolve_workspace_path "${SELECTED_BACKPORT_MANIFEST:-patches/backports/kmi6-2026-09-selected-backports.tsv}")"
 	MANIFEST_SHA256="${SELECTED_BACKPORT_MANIFEST_SHA256:-}"
 fi
 AOSP_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
@@ -116,19 +116,19 @@ validate_manifest() {
 	[ "${LINUX_STABLE_STANDALONE_COMMITS:-}" = \
 		"03cb8cc2961f5f781d12e903782cb3815ed84b1c" ] || \
 		die "Linux stable-only 来源例外集合异常"
-	[ -f "${MANIFEST}" ] && [ ! -L "${MANIFEST}" ] || die "r21 回移清单缺失或不安全"
-	[ -n "${MANIFEST_SHA256}" ] || die "缺少 r21 回移清单 SHA-256"
+	[ -f "${MANIFEST}" ] && [ ! -L "${MANIFEST}" ] || die "九月回移清单缺失或不安全"
+	[ -n "${MANIFEST_SHA256}" ] || die "缺少九月回移清单 SHA-256"
 	actual_sha256="$(sha256sum "${MANIFEST}" | awk '{ print $1 }')"
-	[ "${actual_sha256}" = "${MANIFEST_SHA256}" ] || die "r21 回移清单 SHA-256 不匹配"
-	! grep -q $'\r' "${MANIFEST}" || die "r21 回移清单含 CR 字符"
+	[ "${actual_sha256}" = "${MANIFEST_SHA256}" ] || die "九月回移清单 SHA-256 不匹配"
+	! grep -q $'\r' "${MANIFEST}" || die "九月回移清单含 CR 字符"
 	expected_header=$'# order\tgroup\taction\tsource\tref\tcommit\tdate\tpatch-id\tpaths\tproject-patch\tproject-sha256\tproject-patch-id'
-	[ "$(sed -n '1p' "${MANIFEST}")" = "${expected_header}" ] || die "r21 回移清单表头异常"
+	[ "$(sed -n '1p' "${MANIFEST}")" = "${expected_header}" ] || die "九月回移清单表头异常"
 
 	awk -F '\t' \
 		-v stable_ref="${LINUX_STABLE_AUDIT_REF:-}" \
 		-v snapshot="${BACKPORT_AUDIT_SNAPSHOT:-}" \
 		-v independent="${INDEPENDENT_MANIFEST}" '
-		function fail(message) { print "[FAIL] r21 回移清单: " message > "/dev/stderr"; exit 1 }
+		function fail(message) { print "[FAIL] 九月回移清单: " message > "/dev/stderr"; exit 1 }
 		/^#/ { next }
 		{
 			rows++
@@ -184,11 +184,8 @@ validate_manifest() {
 			"direct:7e06a41b36638d514638de468428c14ae79db475,direct:157c0a896127d16466d69729a3e140c29dfbf239,direct:7445fe965b7d8756070a40e80f8b73348ccda1d7" ] || \
 			die "IPSet publication 原子链顺序异常"
 		[ "$(manifest_group_sequence ethernet_mac_header)" = \
-			"direct:9eda5478746ef7dc0e4e537b5a5e4b0ca1027091,direct:367abcacc13a8e2e7624408b7f593bd1e60e49d9" ] || \
+			"direct:367abcacc13a8e2e7624408b7f593bd1e60e49d9" ] || \
 			die "Ethernet MAC header 原子链顺序异常"
-		[ "$(manifest_group_sequence f2fs_write_end_io_uaf)" = \
-			"proof:2d9c4a4ed4eef1f82c5b16b037aee8bad819fd53,adapt:7be222de96c0f9eee6e65eeb017ef855ee185cfa" ] || \
-			die "普通 F2FS write_end_io UAF 证明链异常"
 	fi
 
 	mapfile -t MANIFEST_ROWS < <(grep -v '^#' "${MANIFEST}")
@@ -425,7 +422,7 @@ sequence_applies() {
 	return 1
 }
 
-verify_f2fs_adaptation_semantics() {
+verify_native_f2fs_write_end_semantics() {
 	local target_tree="$1" body warm_line dec_line
 	body="$(sed -n '/^static void f2fs_write_end_io(/,/^}/p' "${target_tree}/fs/f2fs/data.c")"
 	[ "$(grep -Fc 'f2fs_in_warm_node_list(sbi, folio)' <<<"${body}")" = 1 ] || \
@@ -442,26 +439,26 @@ verify_applied_set() {
 	scratch="$(mktemp -d "${TMP_ROOT}/verify.XXXXXX")"
 	copy_selected_tree "${target_tree}" "${scratch}"
 	before_digest="$(selected_tree_digest "${scratch}")"
-	apply_sequence "${scratch}" reverse || die "r21 回移集合未完整应用或顺序异常"
-	apply_sequence "${scratch}" forward || die "r21 回移集合无法从撤销状态精确重放"
+	apply_sequence "${scratch}" reverse || die "九月回移集合未完整应用或顺序异常"
+	apply_sequence "${scratch}" forward || die "九月回移集合无法从撤销状态精确重放"
 	after_digest="$(selected_tree_digest "${scratch}")"
-	[ "${after_digest}" = "${before_digest}" ] || die "r21 回移集合撤销/重放后内容漂移"
+	[ "${after_digest}" = "${before_digest}" ] || die "九月回移集合撤销/重放后内容漂移"
 	rm -rf -- "${scratch}"
 	if [ "${INDEPENDENT_MANIFEST}" != 1 ]; then
-		verify_f2fs_adaptation_semantics "${target_tree}"
+		verify_native_f2fs_write_end_semantics "${target_tree}"
 	fi
 }
 
 apply_set() {
 	local target_tree="$1" forward_ok=0 reverse_ok=0 row order group action source ref commit
 	local before_digest after_digest
-	[ -d "${target_tree}" ] || die "r21 回移目标树不存在: ${target_tree}"
+	[ -d "${target_tree}" ] || die "九月回移目标树不存在: ${target_tree}"
 	write_path_list
 	before_digest="$(selected_tree_digest "${target_tree}")"
 	sequence_applies "${target_tree}" forward && forward_ok=1
 	sequence_applies "${target_tree}" reverse && reverse_ok=1
 	if [ "${forward_ok}" = 1 ] && [ "${reverse_ok}" = 0 ]; then
-		log_info "按固定顺序应用 ${GROUP_COUNT} 个 r21 逻辑回移项"
+		log_info "按固定顺序应用 ${GROUP_COUNT} 个九月逻辑回移项"
 		for row in "${MANIFEST_ROWS[@]}"; do
 			IFS=$'\t' read -r order group action source ref commit _ <<<"${row}"
 			row_patch_file "${row}"
@@ -470,9 +467,9 @@ apply_set() {
 			git -C "${target_tree}" apply "${ROW_PATCH_FILE}"
 		done
 	elif [ "${forward_ok}" = 0 ] && [ "${reverse_ok}" = 1 ]; then
-		log_info "${GROUP_COUNT} 个 r21 逻辑回移项已完整存在"
+		log_info "${GROUP_COUNT} 个九月逻辑回移项已完整存在"
 	else
-		die "r21 回移集合既非完整未应用态，也非完整已应用态，拒绝部分状态"
+		die "九月回移集合既非完整未应用态，也非完整已应用态，拒绝部分状态"
 	fi
 	after_digest="$(selected_tree_digest "${target_tree}")"
 	if [ "${forward_ok}" = 0 ]; then
@@ -512,7 +509,7 @@ validate_manifest
 case "${1:-}" in
 	verify-manifest)
 		[ "$#" = 1 ] || usage
-		log_success "r21 回移清单身份、顺序与逻辑组检查通过"
+		log_success "九月回移清单身份、顺序与逻辑组检查通过"
 		;;
 	list)
 		[ "$#" = 2 ] || usage
@@ -531,14 +528,14 @@ case "${1:-}" in
 	verify-sources)
 		[ "$#" = 1 ] || usage
 		verify_sources
-		log_success "r21 回移清单全部官方来源检查通过"
+		log_success "九月回移清单全部官方来源检查通过"
 		;;
 	apply)
 		[ "$#" = 2 ] || usage
 		verify_sources
 		prepare_patch_cache
 		apply_set "$2"
-		log_success "${GROUP_COUNT} 个 r21 逻辑回移项状态正确"
+		log_success "${GROUP_COUNT} 个九月逻辑回移项状态正确"
 		;;
 	verify-applied)
 		[ "$#" = 2 ] || usage
@@ -546,7 +543,7 @@ case "${1:-}" in
 		prepare_patch_cache
 		write_path_list
 		verify_applied_set "$2"
-		log_success "${GROUP_COUNT} 个 r21 逻辑回移项来源、顺序和最终应用状态检查通过"
+		log_success "${GROUP_COUNT} 个九月逻辑回移项来源、顺序和最终应用状态检查通过"
 		;;
 	apply-index|reverse-index)
 		[ "$#" = 3 ] || usage
