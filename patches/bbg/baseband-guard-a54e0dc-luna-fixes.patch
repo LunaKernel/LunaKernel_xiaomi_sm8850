@@ -486,10 +486,10 @@ index a5e49bc0959fe33d11fcf17587e68d1fd68cc4a9..cfe378f0ecd93f4eb378d0e334f25c6e
 +bool is_allowed_block_device(const struct block_device *bdev);
 +bool is_allowed_block_device_dev(dev_t dev);
 diff --git a/tracing/tracing.c b/tracing/tracing.c
-index 95fc2e9572c2c2b7cda17ff4361a10fa0d3d1b81..41cf9378196092d913e8a58a84ec76bbbb08f617 100644
+index 95fc2e9572c2c2b7cda17ff4361a10fa0d3d1b81..20927a904d1d87b2ef208a9f3b68eff30cc4963f 100644
 --- a/tracing/tracing.c
 +++ b/tracing/tracing.c
-@@ -2,10 +2,10 @@
+@@ -2,13 +2,10 @@
  #include <linux/security.h>
  #include <linux/errno.h>
  #include <linux/cred.h>
@@ -498,10 +498,13 @@ index 95fc2e9572c2c2b7cda17ff4361a10fa0d3d1b81..41cf9378196092d913e8a58a84ec76bb
  int bb_cred_prepare(struct cred *new, const struct cred *old, gfp_t gfp);
  void bb_cred_transfer(struct cred *new, const struct cred *old);
 -int bb_bprm_set_creds(struct linux_binprm *bprm);
+-
+-int __maybe_unused bbg_process_setpermissive(void);
+-int __maybe_unused bbg_test_domain_transition(u32 target_secid);
  
- int __maybe_unused bbg_process_setpermissive(void);
- int __maybe_unused bbg_test_domain_transition(u32 target_secid);
-@@ -38,68 +38,10 @@ void bb_cred_transfer(struct cred *new, const struct cred *old)
+ #ifdef BBG_USE_DEFINE_LSM
+ struct lsm_blob_sizes bbg_blob_sizes __ro_after_init = {
+@@ -38,78 +35,10 @@ void bb_cred_transfer(struct cred *new, const struct cred *old)
  	*tsec = *old_tsec;
  }
  
@@ -568,8 +571,18 @@ index 95fc2e9572c2c2b7cda17ff4361a10fa0d3d1b81..41cf9378196092d913e8a58a84ec76bb
 -	}
 -
 -	return 0;
+-}
+-
+-int __maybe_unused bbg_process_setpermissive(void)
+-{
+-	return 0;
+-}
+-
+-int __maybe_unused bbg_test_domain_transition(u32 target_secid)
+-{
+-	return 0;
 +	if (cred)
 +		bbg_cred(cred)->is_untrusted_process = 1;
  }
  
- int __maybe_unused bbg_process_setpermissive(void)
+ #ifndef BBG_USE_DEFINE_LSM
