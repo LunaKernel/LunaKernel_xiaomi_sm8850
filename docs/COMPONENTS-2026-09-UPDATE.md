@@ -2,7 +2,7 @@
 
 ## 固定来源
 
-当前分支为 `chore/kmi6-2026-09`。AOSP Linux 6.12.92 / KMI6、固定 HyperOS 4 OTA、小米 SoC、BBG、IPSet 和工具链不变；直接修复仍是九月去重后的 62 个逻辑项。
+当前分支为 `chore/kmi6-2026-09`。AOSP Linux 6.12.92 / KMI6、固定 HyperOS 4 OTA、小米 SoC、BBG、IPSet 和工具链不变；此次组件更新时直接修复为九月去重后的 62 个逻辑项；随后[全量质量审计](PATCH-QUALITY-2026-09.md) 移除无目标代码收益的 cpumask 回移，当前为 61 项，并清除 BBG 两个遗留空函数。
 
 | 组件 | 固定版本 | 选择依据 |
 | --- | --- | --- |

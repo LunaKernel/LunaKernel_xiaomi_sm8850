@@ -51,3 +51,5 @@ fix: 修复 IPv4 分片 MTU 下限校验（回移 Linux stable）
 4. AnyKernel3 文件白名单、脚本摘要与 Image-only 边界通过。
 5. 公共引用不包含密钥、日志、ROM/分区镜像、构建目录或历史预制 ZIP。
 6. 真机完成与 [`VALIDATION.md`](VALIDATION.md) 一致的验收。
+
+本分支全量补丁的必要性、跨层去重和实际构建路径审计见 [九月补丁质量审计](PATCH-QUALITY-2026-09.md) 与对应结构化清单；吸收证明不能替代保留理由。
