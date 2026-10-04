@@ -2,10 +2,11 @@
 
 ## 分支
 
-- `main`：小米 17 HyperOS 4 / Android 17，AOSP r21 主线。
+- `main`：小米 17 HyperOS 4 / Android 17，历史 AOSP r21 主线。
+- `chore/kmi6-2026-09`：九月发布分支迁移，Linux 6.12.92 / KMI generation 6。
 - `os3-android16-6.12.23`：HyperOS 3 / Android 16 历史维护分支。
 
-不保留已被 r21 完全取代的中间基线分支。旧私有仓库及其历史标签不属于公开仓库。
+迁移审计见 [九月 KMI6 记录](KMI6-2026-09-MIGRATION.md)。旧私有仓库及其历史标签不属于公开仓库。
 
 ## 改动分层
 
@@ -20,9 +21,9 @@
 
 ## 回移记录
 
-[`patches/backports/r21-selected-backports.tsv`](../patches/backports/r21-selected-backports.tsv) 是随基线整体携带的有序官方回移集合。
+[`patches/backports/kmi6-2026-09-selected-backports.tsv`](../patches/backports/kmi6-2026-09-selected-backports.tsv) 是随基线整体携带的有序官方回移集合。
 
-[`patches/backports/r21-independent/`](../patches/backports/r21-independent/) 中每个 TSV 只描述一个可独立回退的逻辑项，可包含不可拆分的官方前置/补修链，不得混入无关提交。
+[`patches/backports/kmi6-2026-09-independent/`](../patches/backports/kmi6-2026-09-independent/) 中每个 TSV 只描述一个可独立回退的逻辑项，可包含不可拆分的官方前置/补修链，不得混入无关提交。
 
 每条记录必须固定：
 

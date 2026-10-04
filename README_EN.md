@@ -12,8 +12,8 @@ Luna evokes a small, quiet, and clean moon. Built on Xiaomi's official public so
 | --- | --- |
 | Device | Xiaomi 17 (`pudding`) |
 | Target OS | HyperOS 4 `OS4.0.0.9.XPCCNXM` / Android 17 |
-| Kernel | Linux 6.12.81, 4 KiB |
-| AOSP baseline | `android16-6.12-2026-06_r21` |
+| Kernel | Linux 6.12.92, 4 KiB |
+| AOSP baseline | `android16-6.12-2026-09` |
 | Installation | AnyKernel3, replacing only the boot `Image` |
 
 Only the device and OS version above are supported. Back up the current boot image and keep a working Fastboot or Recovery path before flashing.
@@ -21,7 +21,7 @@ Only the device and OS version above are supported. Back up the current boot ima
 ## Upstreams
 
 - Xiaomi SM8850 public baseline: [MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource), `popsicle-w-oss` @ `45705be1220b4cfa8100516ad86711656c0b634e`
-- GKI Image source: [AOSP kernel/common](https://android.googlesource.com/kernel/common), `android16-6.12-2026-06_r21` @ `0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28`
+- GKI Image source: [AOSP kernel/common](https://android.googlesource.com/kernel/common), `android16-6.12-2026-09` @ `0316e9866fdf55601aae97b14ee08d1b38a3916c`
 
 `android16` is the GKI/KMI branch name; the target ROM is Android 17.
 
@@ -54,7 +54,7 @@ Image-luna-xiaomi17-g<short-commit>-YYYYMMDD
 
 ## Validation status
 
-The r21 kernel tree passed boot, extended-use, and target OTA module closure checks on a Xiaomi 17 running HyperOS 4 `OS4.0.0.9.XPCCNXM`. Public-history cleanup changed the project commit hash, so the new public tip still requires a clean rebuild and repeat device validation before binary release.
+The historical r21 tree passed device validation on the fixed OTA. The September KMI6 baseline requires its own device retest before release; see the [migration audit](docs/KMI6-2026-09-MIGRATION.md).
 
 ## Documentation
 

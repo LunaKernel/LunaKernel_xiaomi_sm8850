@@ -12,8 +12,8 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 | --- | --- |
 | 设备 | 小米 17（`pudding`） |
 | 目标系统 | HyperOS 4 `OS4.0.0.9.XPCCNXM` / Android 17 |
-| 内核 | Linux 6.12.81、4 KiB |
-| AOSP 基线 | `android16-6.12-2026-06_r21` |
+| 内核 | Linux 6.12.92、4 KiB |
+| AOSP 基线 | `android16-6.12-2026-09` |
 | 安装方式 | AnyKernel3，仅替换 boot 中的 `Image` |
 
 本项目只支持上述设备与系统版本。刷写前请备份当前 boot，并确保能够进入 Fastboot 或 Recovery 恢复。
@@ -21,7 +21,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 ## 上游
 
 - 小米 SM8850 公开基线：[MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource)，`popsicle-w-oss` @ `45705be1220b4cfa8100516ad86711656c0b634e`
-- 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-06_r21` @ `0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28`
+- 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-09` @ `0316e9866fdf55601aae97b14ee08d1b38a3916c`
 
 `android16` 是 GKI/KMI 分支名；目标 ROM 为 Android 17。
 
@@ -54,7 +54,7 @@ Image-luna-xiaomi17-g<短提交>-YYYYMMDD
 
 ## 验证状态
 
-r21 内核树已在小米 17、HyperOS 4 `OS4.0.0.9.XPCCNXM` 上通过启动、持续使用验证和目标 OTA 模块闭包检查。公开历史整理改变了项目提交哈希，新公开提交仍需完整重建并复测，才能发布二进制版本。
+历史 r21 内核树已通过固定 OTA 的真机验证。当前九月 KMI6 基线的构建与迁移记录见 [迁移审计](docs/KMI6-2026-09-MIGRATION.md)，发布前仍须完成同一 OTA 的真机复测。
 
 ## 文档
 

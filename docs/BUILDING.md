@@ -43,11 +43,13 @@ tmp/os4/system_dlkm.img
 3. `patch_external.sh` 接入固定版本的 KernelSU、SUSFS、Baseband Guard 和 IPSet。
 4. `build.sh` 生成配置并编译，验证目标 OTA 模块闭包、关键配置和发布输入，再打包产物与审计报告。
 
+`build.sh` 保留构建目录进行增量编译；`.env` 的 `ENABLE_CCACHE=1` 会在主机提供 ccache 时复用编译缓存，仍使用固定 AOSP clang。
+
 重复执行 `patch.sh` 与 `patch_external.sh` 应保持幂等。若固定源码树有无法由脚本精确解释的差异，流程会停止。
 
 ## 产物
 
-主要产物默认写入 `kernel_out/android17-r21/`：
+主要产物默认写入 `kernel_out/android17-kmi6-2026-09/`：
 
 ```text
 luna-xiaomi17-g<项目提交前8位>-YYYYMMDD.zip

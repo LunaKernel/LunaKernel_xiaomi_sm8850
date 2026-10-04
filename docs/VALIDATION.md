@@ -5,9 +5,9 @@
 - 设备：小米 17（`pudding`）
 - OTA：HyperOS 4 `OS4.0.0.9.XPCCNXM`
 - Android：17
-- AOSP GKI：`android16-6.12-2026-06_r21`
-- common：`0b90ebc7cfc914b9353f3d6898b8b65c35e8bc28`
-- 内核：Linux 6.12.81、arm64、4 KiB
+- AOSP GKI：`android16-6.12-2026-09`
+- common：`0316e9866fdf55601aae97b14ee08d1b38a3916c`
+- 内核：Linux 6.12.92、arm64、4 KiB
 
 ## 构建期兼容性
 
@@ -33,7 +33,7 @@ system_dlkm 的 103 个 stock 模块中，102 个必须完整匹配；唯一固�
 - 使用期日志未发现内核 panic、Oops、watchdog 或持续性严重内核错误。
 - 系统按预期使用 C Binder；未观察到 `rust_binder.ko` 被启动路径选择。
 
-公开历史整理不改变补丁集合和内核源码结果，但会改变项目提交哈希与内核 release 字符串；AnyKernel3 也改为从固定源码组装。公开主分支最终提交仍须完成干净构建、闭包复核和真机复测，才可标记二进制版本。
+上述真机结论只对应 r21 历史提交。九月基线升级改变了内核源码与项目身份，必须独立完成构建、闭包复核和真机复测，才可标记可发布版本。
 
 ## 发布验收
 
