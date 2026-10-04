@@ -1,4 +1,5 @@
 diff --git a/fs/exec.c b/fs/exec.c
+index 965fdc593d65eccbe987e9f89d78a8b4f4ef9cea..b3a1a39af73438d92c4215c5c08025a3b8f14544 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -69,6 +69,9 @@
@@ -11,7 +12,7 @@ diff --git a/fs/exec.c b/fs/exec.c
  #include <linux/dma-buf.h>
  
  #include <linux/uaccess.h>
-@@ -1932,6 +1935,16 @@
+@@ -1932,6 +1935,18 @@ out:
  	return retval;
  }
  
@@ -23,33 +24,55 @@ diff --git a/fs/exec.c b/fs/exec.c
 +			void *envp, int *flags);
 +extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
 +				void *envp, int *flags);
++extern int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
++				void *envp, int *flags, int *retval);
 +#endif
 +
  static int do_execveat_common(int fd, struct filename *filename,
  			      struct user_arg_ptr argv,
  			      struct user_arg_ptr envp,
-@@ -1942,6 +1955,20 @@
+@@ -1939,10 +1954,28 @@ static int do_execveat_common(int fd, struct filename *filename,
+ {
+ 	struct linux_binprm *bprm;
+ 	int retval;
++#ifdef CONFIG_KSU_SUSFS
++	bool is_su_session = false;
++#endif // #ifdef CONFIG_KSU_SUSFS
  
  	if (IS_ERR(filename))
  		return PTR_ERR(filename);
-+
+ 
 +#ifdef CONFIG_KSU_SUSFS
 +	if (likely(susfs_is_current_proc_no_su()))
 +		goto orig_flow;
 +
 +	if (static_branch_likely(&ksu_su_compat_enabled)) {
-+		if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted))
-+			ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
-+		else
-+			ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
++		if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)) {
++			is_su_session = !ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
++		} else {
++			is_su_session = !ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
++		}
 +	}
 +
 +orig_flow:
 +#endif
- 
++
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
+ 	 * set*uid() to execve() because too many poorly written programs
+@@ -2009,6 +2042,10 @@ static int do_execveat_common(int fd, struct filename *filename,
+ 	}
+ 
+ 	retval = bprm_execve(bprm);
++#ifdef CONFIG_KSU_SUSFS
++	if (unlikely(is_su_session))
++		(void)ksu_handle_post_execveat_sucompat(&fd, &filename, &argv, &envp, &flags, &retval);
++#endif // #ifdef CONFIG_KSU_SUSFS
+ out_free:
+ 	free_bprm(bprm);
+ 
 diff --git a/fs/proc/base.c b/fs/proc/base.c
+index 17693919aa88c6d6add7f795aed85d7dceb981f0..eb8e264299fa72ecdb5f4b9e4648abf868b11e1a 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -100,6 +100,10 @@
@@ -63,7 +86,7 @@ diff --git a/fs/proc/base.c b/fs/proc/base.c
  #include <uapi/linux/lsm.h>
  #include <linux/dma-buf.h>
  #include <trace/events/oom.h>
-@@ -2467,6 +2471,10 @@
+@@ -2467,6 +2471,10 @@ proc_map_files_readdir(struct file *file, struct dir_context *ctx)
  	for_each_vma(vmi, vma) {
  		if (!vma->vm_file)
  			continue;
@@ -75,6 +98,7 @@ diff --git a/fs/proc/base.c b/fs/proc/base.c
  			continue;
  
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+index c79267d5f02cf0d06e70475d76a89137a4bd045d..84c8a2e371b7ed06122d2d61c06898c0b231e50f 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -27,6 +27,9 @@
@@ -103,7 +127,7 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  void task_mem(struct seq_file *m, struct mm_struct *mm)
  {
  	unsigned long text, lib, swap, anon, file, shmem;
-@@ -531,6 +543,10 @@
+@@ -531,6 +543,10 @@ static void show_vma_header_prefix(struct seq_file *m,
  	seq_putc(m, ' ');
  }
  
@@ -114,7 +138,7 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  static void
  show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  {
-@@ -544,10 +560,16 @@
+@@ -544,10 +560,16 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  
  	if (vma->vm_file) {
  		const struct inode *inode = file_user_inode(vma->vm_file);
@@ -132,7 +156,7 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  	}
  
  	start = vma->vm_start;
-@@ -1549,6 +1571,11 @@
+@@ -1549,6 +1571,11 @@ static int show_smap(struct seq_file *m, void *v)
  	struct vm_area_struct *vma = v;
  	struct mem_size_stats mss = {};
  
@@ -144,7 +168,7 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  	if (!vma_data_pages(vma))
  		goto show_pad;
  
-@@ -1625,10 +1652,16 @@
+@@ -1625,10 +1652,16 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
  			 * again. Gather stats for the remaining portion by
  			 * starting at last_vma_end.
  			 */
@@ -163,11 +187,10 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  		}
  		last_vma_end = vma->vm_end;
  
-@@ -2089,6 +2122,34 @@
- out:
+@@ -2090,6 +2123,34 @@ out:
  	return err;
  }
-+
+ 
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP
 +static int pagemap_test_walk(unsigned long start, unsigned long end,
 +			     struct mm_walk *walk)
@@ -195,10 +218,11 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
 +	return 0;
 +}
 +#endif
- 
++
  static pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
  		struct vm_area_struct *vma, unsigned long addr, pte_t pte)
-@@ -2314,6 +2375,9 @@
+ {
+@@ -2314,6 +2375,9 @@ static int pagemap_hugetlb_range(pte_t *ptep, unsigned long hmask,
  #endif /* HUGETLB_PAGE */
  
  static const struct mm_walk_ops pagemap_ops = {
@@ -208,7 +232,7 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  	.pmd_entry	= pagemap_pmd_range,
  	.pte_hole	= pagemap_pte_hole,
  	.hugetlb_entry	= pagemap_hugetlb_range,
-@@ -2754,8 +2818,14 @@
+@@ -2754,8 +2818,14 @@ static int pagemap_scan_test_walk(unsigned long start, unsigned long end,
  	struct pagemap_scan_private *p = walk->private;
  	struct vm_area_struct *vma = walk->vma;
  	unsigned long vma_category = 0;
@@ -226,6 +250,7 @@ diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
  	if (!wp_allowed) {
  		/* User requested explicit failure over wp-async capability */
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 2a49b36476e3975f7a0bb6e089aa87b83e26d328..359b39832bc70ab05ee7c8c10c59c88bb6defef6 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
 @@ -110,6 +110,12 @@
@@ -241,7 +266,7 @@ diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
  
  /*
   * ANDROID: selinux_state is part of the KMI, and backporting capabilities into
-@@ -6624,6 +6630,42 @@
+@@ -6624,6 +6630,42 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
  	return -EINVAL;
  }
  
@@ -284,7 +309,7 @@ diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
  static int selinux_ismaclabel(const char *name)
  {
  	return (strcmp(name, XATTR_SELINUX_SUFFIX) == 0);
-@@ -7254,7 +7296,11 @@
+@@ -7254,7 +7296,11 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
  	LSM_HOOK_INIT(getselfattr, selinux_getselfattr),
  	LSM_HOOK_INIT(setselfattr, selinux_setselfattr),
  	LSM_HOOK_INIT(getprocattr, selinux_getprocattr),
