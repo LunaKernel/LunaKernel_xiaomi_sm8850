@@ -180,13 +180,22 @@ run_in_orb_if_needed() {
 
 ensure_repo() {
     local label="$1" target_dir="$2" repo_url="$3" branch="$4" commit="$5" allow_dirty="${6:-0}"
-    local actual_url head
+    local actual_url head history="${7:-shallow}"
     if ! git -C "${target_dir}" rev-parse --git-dir >/dev/null 2>&1; then
         [ ! -e "${target_dir}" ] || die "${label} 路径存在但不是 Git 仓库: ${target_dir}"
         mkdir -p "$(dirname "${target_dir}")"
         log_step "克隆 ${label}: ${repo_url} (${branch})"
-        git_network clone --depth 1 --single-branch \
-            --branch "${branch}" "${repo_url}" "${target_dir}"
+        if [ "${history}" = full ]; then
+            git init -q "${target_dir}"
+            git -C "${target_dir}" remote add origin "${repo_url}"
+            git -C "${target_dir}" config remote.origin.promisor true
+            git -C "${target_dir}" config remote.origin.partialclonefilter blob:none
+            git_network -C "${target_dir}" fetch --filter=blob:none --no-tags origin "${commit}"
+            git_network -C "${target_dir}" checkout --detach "${commit}"
+        else
+            git_network clone --depth 1 --single-branch \
+                --branch "${branch}" "${repo_url}" "${target_dir}"
+        fi
     fi
     reject_git_object_overrides "${label}" "${target_dir}"
     verify_no_hidden_index_flags "${label}" "${target_dir}"
@@ -194,7 +203,11 @@ ensure_repo() {
     [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${repo_url}")" ] || die "${label} remote 不匹配: ${actual_url}"
     if ! git -C "${target_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
         log_step "获取 ${label} 固定 commit: ${commit}"
-        git_network -C "${target_dir}" fetch --depth 1 origin "${commit}"
+        if [ "${history}" = full ]; then
+            git_network -C "${target_dir}" fetch --filter=blob:none --no-tags origin "${commit}"
+        else
+            git_network -C "${target_dir}" fetch --depth 1 origin "${commit}"
+        fi
     fi
     head="$(git -C "${target_dir}" rev-parse HEAD 2>/dev/null || true)"
     if [ "${head}" != "${commit}" ]; then
@@ -614,13 +627,33 @@ setup_toolchain() {
 }
 
 prepare_kernelsu_manager() {
-    local manager_dir manager_path actual_sha256
-    manager_dir="${ENVIRONMENT_DIR}/kernelsu/${KSU_REF}"
+    local manager_dir manager_path archive actual_sha256 metadata expected
+    manager_dir="${ENVIRONMENT_DIR}/kernelsu/${KSU_COMMIT:0:8}"
     manager_path="${manager_dir}/${KSU_MANAGER_APK}"
     mkdir -p "${manager_dir}"
     if [ ! -f "${manager_path}" ]; then
-        log_step "下载官方 KernelSU Manager ${KSU_REF}"
-        curl -fSL --retry 3 -o "${manager_path}" "${KSU_MANAGER_URL}"
+        archive="${manager_dir}/manager-${KSU_MANAGER_ARTIFACT_ID}.zip"
+        if [ ! -f "${archive}" ]; then
+            command -v gh >/dev/null 2>&1 || die "下载官方 CI Manager 需要已认证的 gh；已有固定 APK 可直接复用"
+            metadata="$(gh api "repos/tiann/KernelSU/actions/artifacts/${KSU_MANAGER_ARTIFACT_ID}" \
+                --jq '[.workflow_run.id, .workflow_run.head_sha, .digest, .name] | @tsv')"
+            expected="$(printf '%s\t%s\tsha256:%s\tmanager' \
+                "${KSU_MANAGER_RUN_ID}" "${KSU_COMMIT}" "${KSU_MANAGER_ARCHIVE_SHA256}")"
+            [ "${metadata}" = "${expected}" ] || die "官方 Manager CI 来源与固定提交不匹配"
+            [ "${KSU_MANAGER_URL}" = "https://api.github.com/repos/tiann/KernelSU/actions/artifacts/${KSU_MANAGER_ARTIFACT_ID}/zip" ] || \
+                die "官方 Manager CI 归档地址不匹配"
+            log_step "下载同提交官方 CI Manager（不编译 APK）"
+            gh api "repos/tiann/KernelSU/actions/artifacts/${KSU_MANAGER_ARTIFACT_ID}/zip" > "${archive}.part"
+            [ "$(sha256sum "${archive}.part" | awk '{ print $1 }')" = "${KSU_MANAGER_ARCHIVE_SHA256}" ] || \
+                die "官方 Manager CI 归档 SHA-256 不匹配"
+            mv "${archive}.part" "${archive}"
+        fi
+        [ "$(sha256sum "${archive}" | awk '{ print $1 }')" = "${KSU_MANAGER_ARCHIVE_SHA256}" ] || \
+            die "缓存 Manager CI 归档 SHA-256 不匹配"
+        unzip -p "${archive}" "${KSU_MANAGER_APK}" > "${manager_path}.part"
+        [ "$(sha256sum "${manager_path}.part" | awk '{ print $1 }')" = "${KSU_MANAGER_SHA256}" ] || \
+            die "归档中的 Manager APK SHA-256 不匹配"
+        mv "${manager_path}.part" "${manager_path}"
     fi
     actual_sha256="$(sha256sum "${manager_path}" | awk '{ print $1 }')"
     [ "${actual_sha256}" = "${KSU_MANAGER_SHA256}" ] || die "KernelSU Manager SHA-256 不匹配: ${actual_sha256}"
@@ -810,14 +843,14 @@ ABI_BASELINE_COMMIT="${ABI_BASELINE_COMMIT:-160343479eb972500e11fe76957fdb41b177
 ABI_BASELINE_STG_SHA256="${ABI_BASELINE_STG_SHA256:-f9802b066d9ffd4a0363ee57615e9af34360a84b3427549d9398de3eadb54691}"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
-KSU_REF="${KSU_REF:-v3.3.0}"
-KSU_COMMIT="${KSU_COMMIT:-932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e}"
+KSU_REF="${KSU_REF:-main}"
+KSU_COMMIT="${KSU_COMMIT:-623eba3e092b911a3a7389b7d87622a5835d2f3a}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
-KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2601}"
+KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2651}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
-KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.3.0_32601-release.apk}"
-KSU_MANAGER_URL="${KSU_MANAGER_URL:-https://github.com/tiann/KernelSU/releases/download/v3.3.0/KernelSU_v3.3.0_32601-release.apk}"
-KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-c197060ecb89702e7d54a4c95e29cf5e8d97369bbbb436979ab7fd6bcde7b077}"
+KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.3.0-50-g623eba3e_32651-release.apk}"
+KSU_MANAGER_URL="${KSU_MANAGER_URL:-https://api.github.com/repos/tiann/KernelSU/actions/artifacts/10745463923/zip}"
+KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-1c7cec1aa8a1d6bd023efdf31dd9f5fa5deb5e84acc904ae1b8e3a5097171b45}"
 MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISK_APK_URL="${MAGISK_APK_URL:-https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk}"
@@ -830,9 +863,9 @@ AK3_BUSYBOX_SHA256="${AK3_BUSYBOX_SHA256:-c629fce4b0dd3ba9775f851d0941e74582115f
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-c7db8cb367ef3ed4126ed7e222d77757ccb5c05b}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-b213c54126fb243595ce7876e91d84d6e0861fec}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-c7db8cb367ef3ed4126ed7e222d77757ccb5c05b}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-b213c54126fb243595ce7876e91d84d6e0861fec}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
@@ -980,10 +1013,10 @@ declare -A TC_SHA256=(
 ensure_repo "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_BRANCH}" "${KERNEL_COMMIT}"
 ensure_repo "Android 16 GKI common" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_BRANCH}" "${COMMON_COMMIT}" "${ENABLE_KERNELSU}"
 if [ "${ENABLE_KERNELSU}" = "1" ]; then
-    ensure_repo "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_REF}" "${KSU_COMMIT}" "${ENABLE_SUSFS}"
+    ensure_repo "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_REF}" "${KSU_COMMIT}" "${ENABLE_SUSFS}" full
     if [ -f "$(git -C "${KSU_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
         log_step "在初始化阶段补齐 KernelSU Git 历史以固定 KSU_VERSION"
-        git_network -C "${KSU_DIR}" fetch --unshallow --tags origin
+        git_network -C "${KSU_DIR}" fetch --unshallow --filter=blob:none --no-tags origin "${KSU_COMMIT}"
     fi
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
     git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
