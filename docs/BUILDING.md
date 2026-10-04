@@ -63,3 +63,5 @@ AnyKernel3 ZIP 从固定官方脚本、可审查的 [`ak3_template/luna.patch`](
 ## 提交身份
 
 内核 release 字符串和产物名取自干净项目提交；有未提交更改时，`build.sh` 不会生成可发布闭包。历史整理后的新提交必须完整重建，不能沿用旧提交的产物摘要。
+
+固定 KernelSU 快照的 Manager 使用同提交官方 CI 最终签名 APK，init 按提交复用缓存；首次下载需要已认证的 `gh`。ZIP/工作流来源、APK 摘要与 UAPI 版本均固定在 `.env`，不需要本地 Gradle 构建。配套更新及拒绝项见 [组件审计](COMPONENTS-2026-09-UPDATE.md)。
