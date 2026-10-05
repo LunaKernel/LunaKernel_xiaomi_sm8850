@@ -40,6 +40,50 @@ sha256_file() {
     printf '%s\n' "${output%% *}"
 }
 
+verify_autofdo_profile() {
+    local relative_path="${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH:?缺少官方 AutoFDO 路径 pin}" source_sha
+    [[ "${AOSP_AUTOFDO_PROFILE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || die "官方 AutoFDO SHA-256 pin 无效"
+    case "${relative_path}" in
+        gki/aarch64/afdo/kernel.afdo) ;;
+        *) die "AutoFDO 必须使用固定 common 自带的 arm64 profile" ;;
+    esac
+    AUTOFDO_PROFILE="${COMMON_DIR}/${relative_path}"
+    [ -f "${AUTOFDO_PROFILE}" ] && [ ! -L "${AUTOFDO_PROFILE}" ] || die "官方 AutoFDO profile 缺失或为符号链接"
+    [ "$(sha256_file "${AUTOFDO_PROFILE}")" = "${AOSP_AUTOFDO_PROFILE_SHA256}" ] || die "官方 AutoFDO profile SHA-256 不匹配"
+    source_sha="$(git -C "${COMMON_DIR}" show "${COMMON_COMMIT}:${relative_path}" | sha256sum | awk '{ print $1 }')"
+    [ "${source_sha}" = "${AOSP_AUTOFDO_PROFILE_SHA256}" ] || die "AutoFDO profile 与固定 common 提交不匹配"
+    "${CI_TOOLCHAIN_DIR}/bin/llvm-profdata" show --sample --show-sec-info-only "${AUTOFDO_PROFILE}" \
+        > "${AUDIT_DIR}/autofdo-profile-sections.current" || die "固定 LLVM 无法读取官方 AutoFDO profile"
+    printf 'common_commit\t%s\nprofile\t%s\nsha256\t%s\n' \
+        "${COMMON_COMMIT}" "${relative_path}" "${AOSP_AUTOFDO_PROFILE_SHA256}" \
+        > "${AUDIT_DIR}/autofdo-profile.current.tsv"
+    log_success "固定 AOSP AutoFDO profile 身份与 LLVM 格式检查通过"
+}
+
+verify_autofdo_compile_commands() {
+    python3 - "${BUILD_DIR}" "${AUTOFDO_PROFILE}" "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" <<'PY'
+import pathlib, shlex, sys
+root, profile, report = sys.argv[1:]
+objects = {
+    'kernel/sched/.fair.o.cmd': '-fprofile-sample-use=',
+    'mm/.filemap.o.cmd': '-fprofile-sample-use=',
+    'fs/f2fs/.node.o.cmd': '-fprofile-sample-use=',
+    'rust/.kernel.o.cmd': '-Zprofile-sample-use=',
+}
+rows = ['object\tprofile_argument\tcommand']
+for path, prefix in objects.items():
+    lines = (pathlib.Path(root) / path).read_text().splitlines()
+    command = next(line.split(' := ', 1)[1] for line in lines
+                   if line.startswith(('savedcmd_', 'cmd_')) and ' := ' in line)
+    argument = prefix + profile
+    if argument not in shlex.split(command):
+        raise SystemExit('AutoFDO profile 未进入实际编译命令: ' + path)
+    rows.append(path + '\t' + argument + '\t' + command)
+pathlib.Path(report).write_text('\n'.join(rows) + '\n')
+PY
+    log_success "C/Rust 与两个回移对象的实际 AutoFDO 编译参数检查通过"
+}
+
 reject_git_environment_overrides() {
     local name
     while IFS= read -r name; do
@@ -1966,6 +2010,9 @@ AUDIT_DRIFT_COUNT=0
     printf 'status\tmetric\treference\tactual\n'
 } > "${AUDIT_REPORT}"
 
+verify_autofdo_profile
+MAKE_ARGS+=(CLANG_AUTOFDO_PROFILE="${AUTOFDO_PROFILE}")
+
 log_step "生成 Android 16 GKI ${COMMON_VERSION} 配置"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" gki_defconfig
 bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
@@ -2129,6 +2176,7 @@ log_step "编译 GKI arm64 Image 与模块 (并行度: ${BUILD_JOBS})"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" Image modules -j"${BUILD_JOBS}"
 
 IMAGE_PATH="${BUILD_DIR}/arch/arm64/boot/Image"
+verify_autofdo_compile_commands
 [ -f "${IMAGE_PATH}" ] || die "编译完成但未找到 Image: ${IMAGE_PATH}"
 [ -s "${BUILD_DIR}/Module.symvers" ] || die "编译完成但未找到 Module.symvers"
 [ -s "${BUILD_DIR}/modules.order" ] || die "编译完成但未找到 modules.order"

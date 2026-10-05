@@ -1007,6 +1007,12 @@ declare -A TC_SHA256=(
 
 ensure_repo "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_BRANCH}" "${KERNEL_COMMIT}"
 ensure_repo "Android 16 GKI common" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_BRANCH}" "${COMMON_COMMIT}" "${ENABLE_KERNELSU}"
+[ "${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH:?缺少官方 AutoFDO 路径 pin}" = gki/aarch64/afdo/kernel.afdo ] || die "AutoFDO 必须使用固定 common 自带的 arm64 profile"
+[[ "${AOSP_AUTOFDO_PROFILE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || die "官方 AutoFDO SHA-256 pin 无效"
+AUTOFDO_PROFILE="${COMMON_DIR}/${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH}"
+[ -f "${AUTOFDO_PROFILE}" ] && [ ! -L "${AUTOFDO_PROFILE}" ] || die "官方 AutoFDO profile 缺失或为符号链接"
+[ "$(sha256sum "${AUTOFDO_PROFILE}" | awk '{ print $1 }')" = "${AOSP_AUTOFDO_PROFILE_SHA256}" ] || die "官方 AutoFDO profile SHA-256 不匹配"
+log_success "固定 common 自带的官方 AutoFDO profile 摘要检查通过"
 if [ "${ENABLE_KERNELSU}" = "1" ]; then
     ensure_repo "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_REF}" "${KSU_COMMIT}" "${ENABLE_SUSFS}" full
     if [ -f "$(git -C "${KSU_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
