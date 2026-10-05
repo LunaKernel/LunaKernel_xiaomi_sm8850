@@ -61,27 +61,11 @@ verify_autofdo_profile() {
 }
 
 verify_autofdo_compile_commands() {
-    python3 - "${BUILD_DIR}" "${AUTOFDO_PROFILE}" "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" <<'PY'
-import pathlib, shlex, sys
-root, profile, report = sys.argv[1:]
-objects = {
-    'kernel/sched/.fair.o.cmd': '-fprofile-sample-use=',
-    'mm/.filemap.o.cmd': '-fprofile-sample-use=',
-    'fs/f2fs/.node.o.cmd': '-fprofile-sample-use=',
-    'rust/.kernel.o.cmd': '-Zprofile-sample-use=',
-}
-rows = ['object\tprofile_argument\tcommand']
-for path, prefix in objects.items():
-    lines = (pathlib.Path(root) / path).read_text().splitlines()
-    command = next(line.split(' := ', 1)[1] for line in lines
-                   if line.startswith(('savedcmd_', 'cmd_')) and ' := ' in line)
-    argument = prefix + profile
-    if argument not in shlex.split(command):
-        raise SystemExit('AutoFDO profile 未进入实际编译命令: ' + path)
-    rows.append(path + '\t' + argument + '\t' + command)
-pathlib.Path(report).write_text('\n'.join(rows) + '\n')
-PY
-    log_success "C/Rust 与两个回移对象的实际 AutoFDO 编译参数检查通过"
+    python3 "${HOST_WORKSPACE_DIR}/tools/audit_compile_commands.py" \
+        "${BUILD_DIR}" "${AUTOFDO_PROFILE}" "${SM8850_C_ARCH}" \
+        "${SM8850_TUNE_CPU}" "${SM8850_RUST_FEATURES}" \
+        "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" "${CI_TOOLCHAIN_DIR}"
+    log_success "全部 C、Rust、helper 与 bitcode 后端的实际 SM8850/AutoFDO 编译参数检查通过"
 }
 
 reject_git_environment_overrides() {
@@ -249,24 +233,7 @@ reject_git_object_overrides() {
 }
 
 tree_sha256() {
-    local root="$1" special path digest
-    [ -d "${root}" ] || die "完整性校验目录不存在: ${root}"
-    special="$(find "${root}" -mindepth 1 ! -type d ! -type f ! -type l -print -quit)"
-    [ -z "${special}" ] || die "完整性校验目录含特殊文件: ${special}"
-    (
-        cd "${root}"
-        find . -mindepth 1 \( -type f -o -type l \) -print0 | LC_ALL=C sort -z |
-            while IFS= read -r -d '' path; do
-                if [ -L "${path}" ]; then
-                    printf 'l\0%s\0%s\0' "${path#./}" "$(readlink "${path}")"
-                else
-                    digest="$(sha256sum "${path}")"
-                    digest="${digest%% *}"
-                    printf 'f\0%s\0%s\0%s\0' \
-                        "${path#./}" "$(stat -c %a "${path}")" "${digest}"
-                fi
-            done
-    ) | sha256sum | awk '{ print $1 }'
+    python3 "${HOST_WORKSPACE_DIR}/tools/tree_sha256.py" "$1"
 }
 
 normalize_archive_timestamps() {
@@ -1154,7 +1121,7 @@ verify_kmi_config() {
         ARM64_4K_PAGES PAGE_SIZE_4KB SMP PREEMPT NET \
         MODULES MODULE_UNLOAD MODVERSIONS BASIC_MODVERSIONS EXTENDED_MODVERSIONS GENDWARFKSYMS \
         ANDROID_VENDOR_HOOKS GKI_HACKS_TO_FIX \
-        IKCONFIG IKCONFIG_PROC CFI_CLANG RUST \
+        IKCONFIG IKCONFIG_PROC CFI_CLANG RUST RUSTC_CLANG_LLVM_COMPATIBLE RUST_INLINE_HELPERS \
         BPF BPF_JIT BPF_JIT_ALWAYS_ON BPF_UNPRIV_DEFAULT_OFF \
         HAVE_ARCH_SECCOMP HAVE_ARCH_SECCOMP_FILTER SECCOMP SECCOMP_FILTER \
         ANDROID_BINDER_IPC ANDROID_BINDERFS \
@@ -1777,7 +1744,7 @@ IPSET_DIR="$(resolve_workspace_path "${IPSET_SOURCE_DIR:-sources/ipset-7.24}")"
 LIBMNL_VERSION="${LIBMNL_VERSION:-1.0.5}"
 LIBMNL_TREE_SHA256="${LIBMNL_TREE_SHA256:-8d6597fd107489c8d90106d99302ff5efb061fe38bb3952f8a1062626b80a7c2}"
 LIBMNL_DIR="$(resolve_workspace_path "${LIBMNL_SOURCE_DIR:-sources/libmnl-1.0.5}")"
-ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:-r29}"
+ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:?缺少 NDK 版本 pin}"
 ANDROID_NDK_TREE_SHA256="${ANDROID_NDK_TREE_SHA256:-401eb9a77478012fdc0c31e986379bf04db9fd72455b060dd13fcce07b84b98e}"
 ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
@@ -1807,7 +1774,7 @@ bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
 [ "$(sed -n '2p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化"
 
 BUILD_JOBS="$(detect_cpu_count)"
-BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-kmi6-2026-09}")"
+BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-sm8850-oryon1-kmi6-2026-09}")"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
 STAGE_MODULE_COUNT="${STAGE_MODULE_COUNT:-}"
@@ -1937,21 +1904,21 @@ git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
     die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_final_source_deltas
 EXPECTED_RELEASE="${COMMON_VERSION}${KERNEL_LOCALVERSION}"
-EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@${KERNEL_BUILD_HOST}) (Android (14043575, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460), LLD 19.0.1) #${KERNEL_BUILD_VERSION} SMP PREEMPT ${KERNEL_BUILD_TIMESTAMP}"
+EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@${KERNEL_BUILD_HOST}) (${CI_CLANG_VERSION_LINE:?缺少 Clang 版本 pin}, ${CI_LLD_VERSION_TEXT:?缺少 LLD 版本 pin}) #${KERNEL_BUILD_VERSION} SMP PREEMPT ${KERNEL_BUILD_TIMESTAMP}"
 
 ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
-CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225"
+CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME:?缺少工具链目录 pin}"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 MAGISKBOOT_ARM64_PATH="${ENVIRONMENT_DIR}/magisk/v${MAGISK_VERSION}/magiskboot-arm64"
 AK3_TEMPLATE_DIR="${HOST_WORKSPACE_DIR}/ak3_template"
 AK3_BUSYBOX_PATH="${ENVIRONMENT_DIR}/anykernel3/${AK3_ARM64_TOOLS_COMMIT}/busybox-arm64"
 AVBTOOL_PATH="${CI_TOOLCHAIN_DIR}/build-tools/bin/avbtool"
 FSCK_EROFS_PATH="${CI_TOOLCHAIN_DIR}/build-tools/bin/fsck.erofs"
-CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-65644bd77ed4ecde7239e3ce5a4aa53451a28c0a52b12394b88c5bd095517cc0}"
+CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:?缺少工具链安装树 pin}"
 
 [ -x "${CI_TOOLCHAIN_DIR}/bin/clang" ] || die "工具链未初始化，请先运行 ./init.sh"
-[ -x "${CI_TOOLCHAIN_DIR}/bin/rustc" ] || die "Rust 工具链未初始化，请先运行 ./init.sh"
-[ -x "${CI_TOOLCHAIN_DIR}/bindgen-cli-x86_64-unknown-linux-gnu/bindgen" ] || die "bindgen 未初始化，请先运行 ./init.sh"
+[ -x "${CI_TOOLCHAIN_DIR}/rust/bin/rustc" ] || die "Rust 工具链未初始化，请先运行 ./init.sh"
+[ -x "${CI_TOOLCHAIN_DIR}/bin/bindgen" ] || die "bindgen 未初始化，请先运行 ./init.sh"
 [ -d "${CI_TOOLCHAIN_DIR}/build-tools/bin" ] || die "build-tools 未初始化，请先运行 ./init.sh"
 [ -x "${AVBTOOL_PATH}" ] || die "固定 build-tools 缺少 avbtool"
 [ -x "${FSCK_EROFS_PATH}" ] || die "固定 build-tools 缺少 fsck.erofs"
@@ -1972,9 +1939,9 @@ if [ "${ENABLE_IPSET}" = "1" ]; then
 fi
 log_success "构建工具链安装树完整性校验通过"
 
-export PATH="${CI_TOOLCHAIN_DIR}/host-bin:${CI_TOOLCHAIN_DIR}/bindgen-cli-x86_64-unknown-linux-gnu:${CI_TOOLCHAIN_DIR}/build-tools/bin:${CI_TOOLCHAIN_DIR}/bin:${PATH}"
+export PATH="${CI_TOOLCHAIN_DIR}/host-bin:${CI_TOOLCHAIN_DIR}/rust/bin:${CI_TOOLCHAIN_DIR}/build-tools/bin:${CI_TOOLCHAIN_DIR}/bin:${PATH}"
 export RUSTC=rustc HOSTRUSTC=rustc BINDGEN=bindgen LIBCLANG_PATH="${CI_TOOLCHAIN_DIR}/lib"
-[ -d "${CI_TOOLCHAIN_DIR}/lib/rustlib/src/rust/library" ] && export RUST_LIB_SRC="${CI_TOOLCHAIN_DIR}/lib/rustlib/src/rust/library"
+[ -d "${CI_TOOLCHAIN_DIR}/rust/lib/rustlib/src/rust/library" ] && export RUST_LIB_SRC="${CI_TOOLCHAIN_DIR}/rust/lib/rustlib/src/rust/library"
 export ARCH=arm64 SUBARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 export KBUILD_GENDWARFKSYMS_STABLE=1 IN_KERNEL_MODULES=1 DO_NOT_STRIP_MODULES=1 PAGE_SIZE=4096
 export CC=clang HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" LD=ld.lld HOSTLD=/usr/bin/ld HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
@@ -1989,7 +1956,9 @@ MAKE_ARGS=(
     CC="${CC}" HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" HOSTCFLAGS="-Wno-error=discarded-qualifiers"
     CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
     RUSTC=rustc HOSTRUSTC=rustc HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
-    BINDGEN=bindgen HOSTLD=/usr/bin/ld KCFLAGS="-Wno-error=unknown-warning-option"
+    BINDGEN=bindgen HOSTLD=/usr/bin/ld
+    KCFLAGS="-Wno-error=unknown-warning-option -march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin}"
+    KRUSTFLAGS="-Ctarget-cpu=generic -Ztune-cpu=${SM8850_TUNE_CPU} -Ctarget-feature=${SM8850_RUST_FEATURES:?缺少 SM8850 Rust ISA pin}"
     LOCALVERSION="${KERNEL_LOCALVERSION}"
     KBUILD_BUILD_USER="${KERNEL_BUILD_USER}"
     KBUILD_BUILD_HOST="${KERNEL_BUILD_HOST}"
@@ -2171,6 +2140,15 @@ make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" olddefconfig -j"${BUILD_JOBS}"
 verify_kmi_config
 cp -f "${BUILD_DIR}/.config" "${AUDIT_DIR}/config.current"
 [ "${ENABLE_BBG}" != "1" ] || verify_lsm_slot_capacity
+
+log_step "先验证新编译器的实际 C、Rust core 与 inline helper 编译路径"
+make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" rust/core.o rust/kernel.o \
+    kernel/sched/fair.o mm/filemap.o fs/f2fs/node.o -j"${BUILD_JOBS}"
+verify_autofdo_compile_commands
+cp -f "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" \
+    "${AUDIT_DIR}/autofdo-compile-commands.preflight.tsv"
+cp -f "${AUDIT_DIR}/llvm-target-attributes.current.tsv" \
+    "${AUDIT_DIR}/llvm-target-attributes.preflight.tsv"
 
 log_step "编译 GKI arm64 Image 与模块 (并行度: ${BUILD_JOBS})"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" Image modules -j"${BUILD_JOBS}"
