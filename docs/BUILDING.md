@@ -45,11 +45,13 @@ tmp/os4/system_dlkm.img
 
 `build.sh` 保留构建目录进行增量编译；`.env` 的 `ENABLE_CCACHE=1` 会在主机提供 ccache 时复用编译缓存，仍使用固定 AOSP clang。
 
+当前使用 Clang r596125 / 22.0.2、AOSP Rust 1.97.0-dev、bindgen 0.72.1 和 NDK r30。Clang 与 Rust 的 LLVM 主版本均为 22，保留 Rust inline helpers。SM8850 的 C / Rust 调度使用 `oryon-1`；完整参数、来源和验证边界见 [编译链审计](SM8850-COMPILE-2026-10-06.md)。
+
 重复执行 `patch.sh` 与 `patch_external.sh` 应保持幂等。若固定源码树有无法由脚本精确解释的差异，流程会停止。
 
 ## 产物
 
-主要产物默认写入 `kernel_out/android17-kmi6-2026-09/`：
+主要产物默认写入 `kernel_out/sm8850-oryon1-kmi6-2026-09/`：
 
 ```text
 luna-xiaomi17-g<项目提交前8位>-YYYYMMDD.zip

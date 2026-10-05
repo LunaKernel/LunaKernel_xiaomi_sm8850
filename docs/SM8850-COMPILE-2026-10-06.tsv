@@ -1,0 +1,12 @@
+metric	reference	actual	review	evidence
+config.lines	8246	8249	版本与三个能力探测变化；关键配置及 inline helpers 保留	config-drift.json；生成/内嵌配置一致
+config.sha256	fdb48e2cb118f9f821630cdd9d062209306725a91b302098218014320c248672	9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c	版本与三个能力探测变化；关键配置及 inline helpers 保留	config-drift.json；生成/内嵌配置一致
+module-symvers.full.count	19794	18592	Rust 绑定导出 1192→0、core 435→445、kernel 123→103；唯一 C CRC 漂移为未消费的 packed RAS DWARF alignment(1)	export-drift.json；ras-old/new.symtypes；完整 OTA tuple 与 vendor KMI 一致
+module-symvers.full.sha256	f7f81f027595c407e8c6c76067881708bbc13b722e9f966b407ce46159f0d2cc	77072c945db98904a23fe749f0de3be89878663198645927321df5e2976a3803	Rust 绑定导出 1192→0、core 435→445、kernel 123→103；唯一 C CRC 漂移为未消费的 packed RAS DWARF alignment(1)	export-drift.json；ras-old/new.symtypes；完整 OTA tuple 与 vendor KMI 一致
+vmlinux.exports.full.count	19196	17994	Rust 绑定导出 1192→0、core 435→445、kernel 123→103；唯一 C CRC 漂移为未消费的 packed RAS DWARF alignment(1)	export-drift.json；ras-old/new.symtypes；完整 OTA tuple 与 vendor KMI 一致
+vmlinux.exports.full.sha256	ca9e9cbdda869820760a28ebc519c9aaae92c3f94685b57a667e115937977cea	1adc52108181aa31c695c0f58185668572804a5e14900216be70be3078483de8	Rust 绑定导出 1192→0、core 435→445、kernel 123→103；唯一 C CRC 漂移为未消费的 packed RAS DWARF alignment(1)	export-drift.json；ras-old/new.symtypes；完整 OTA tuple 与 vendor KMI 一致
+stg.full.count	19196	17994	Rust 自动导出集合变化、gen 字段转义、旧枚举表示修正；目标消费者类型图一致	stg-image-drift.diff；stg-tool-control.diff；ota-consumers-old/new.stg=7aa3ecad888492399365f1b1446a48cc40accbc0b2c950ddc11c7aadc8479344
+stg.full.sha256	3190e8781beec838c5be40c9a7970b7e47cc27f342085e8f88b847391fc63c35	1ea786c2de01d8950d0952097b7a7d2356453798517c3ff47d1a0d476cb7d80c	Rust 自动导出集合变化、gen 字段转义、旧枚举表示修正；目标消费者类型图一致	stg-image-drift.diff；stg-tool-control.diff；ota-consumers-old/new.stg=7aa3ecad888492399365f1b1446a48cc40accbc0b2c950ddc11c7aadc8479344
+image.config.lines	8246	8249	版本与三个能力探测变化；关键配置及 inline helpers 保留	config-drift.json；生成/内嵌配置一致
+image.config.sha256	fdb48e2cb118f9f821630cdd9d062209306725a91b302098218014320c248672	9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c	版本与三个能力探测变化；关键配置及 inline helpers 保留	config-drift.json；生成/内嵌配置一致
+target.kcfi.functions	3654	3654	0 项 hash 变化；唯一全局共同函数变化 release_pages 未被目标闭包消费，Clang 22 按透明联合首成员规范化	ota-kcfi-comparison.json；kcfi-transparent-union-probe.json
