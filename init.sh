@@ -107,24 +107,7 @@ verify_no_hidden_index_flags() {
 }
 
 tree_sha256() {
-    local root="$1" special path digest
-    [ -d "${root}" ] || die "完整性校验目录不存在: ${root}"
-    special="$(find "${root}" -mindepth 1 ! -type d ! -type f ! -type l -print -quit)"
-    [ -z "${special}" ] || die "完整性校验目录含特殊文件: ${special}"
-    (
-        cd "${root}"
-        find . -mindepth 1 \( -type f -o -type l \) -print0 | LC_ALL=C sort -z |
-            while IFS= read -r -d '' path; do
-                if [ -L "${path}" ]; then
-                    printf 'l\0%s\0%s\0' "${path#./}" "$(readlink "${path}")"
-                else
-                    digest="$(sha256sum "${path}")"
-                    digest="${digest%% *}"
-                    printf 'f\0%s\0%s\0%s\0' \
-                        "${path#./}" "$(stat -c %a "${path}")" "${digest}"
-                fi
-            done
-    ) | sha256sum | awk '{ print $1 }'
+    python3 "${HOST_WORKSPACE_DIR}/tools/tree_sha256.py" "$1"
 }
 
 append_orbenv_var() {
@@ -371,12 +354,18 @@ verify_source_baseline() {
 
 verify_toolchain_identity() {
     local rustc_verbose
-    rustc_verbose="$("${CI_TOOLCHAIN_DIR}/bin/rustc" --version --verbose)"
+    [ "$("${CI_TOOLCHAIN_DIR}/bin/clang" --version | sed -n '1p')" = "${CI_CLANG_VERSION_LINE}" ] || \
+        die "Clang 编译器版本不匹配"
+    rustc_verbose="$("${CI_TOOLCHAIN_DIR}/rust/bin/rustc" --version --verbose)"
     printf '%s\n' "${rustc_verbose}" | grep -Fqx "commit-hash: ${CI_RUSTC_COMMIT_HASH}" || \
         die "Rust 编译器 commit-hash 不匹配"
-    grep -aFq "Android Rust Toolchain version ${CI_RUST_TOOLCHAIN_VERSION}" \
-        "${CI_TOOLCHAIN_DIR}/bin/rustc" || \
-        die "Rust 工具链版本标识不匹配"
+    printf '%s\n' "${rustc_verbose}" | grep -Fqx "release: ${CI_RUSTC_RELEASE:?缺少 Rust 编译器 release pin}" || \
+        die "Rust 编译器 release 不匹配"
+    printf '%s\n' "${rustc_verbose}" | sed -n '1p' | \
+        grep -Fq "(Android Rust Toolchain version ${CI_RUST_TOOLCHAIN_VERSION})" || \
+        die "Rust 工具链构建标识不匹配"
+    [ "$("${CI_TOOLCHAIN_DIR}/bin/bindgen" --version)" = "bindgen ${CI_BINDGEN_VERSION}" ] || \
+        die "bindgen 版本不匹配"
 }
 
 prepare_fixed_git_subtree() {
@@ -409,7 +398,7 @@ prepare_fixed_git_subtree() {
     if ! git -C "${cache_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
         log_step "获取固定 ${label} 提交与对象树"
         git_network -c fetch.fsckObjects=true \
-            -C "${cache_dir}" fetch --no-tags --filter=blob:none origin "${commit}" || \
+            -C "${cache_dir}" fetch --depth=1 --no-tags --filter=blob:none origin "${commit}" || \
             die "获取固定 ${label} 提交失败"
     else
         log_success "复用固定 ${label} 本地提交"
@@ -427,24 +416,37 @@ prepare_fixed_git_subtree() {
     fi
 
     git_network -C "${cache_dir}" sparse-checkout init --cone
-    git_network -C "${cache_dir}" sparse-checkout set "${sparse_paths[0]}"
+    git_network -C "${cache_dir}" sparse-checkout set "${sparse_paths[@]}"
     git_network -C "${cache_dir}" checkout -q --detach "${commit}" || \
         die "检出固定 ${label} 提交失败"
-    for path in "${sparse_paths[@]:1}"; do
-        log_step "水合 ${label} 子树: ${path#${subtree}/}"
-        git_network -C "${cache_dir}" sparse-checkout add "${path}" || \
-            die "水合 ${label} 子树失败: ${path}"
-    done
-    git_network -C "${cache_dir}" sparse-checkout set "${subtree}"
     [ "$(git -C "${cache_dir}" rev-parse HEAD)" = "${commit}" ] || \
         die "${label} checkout commit 发生变化"
     [ -z "$(git -C "${cache_dir}" status --porcelain --untracked-files=all)" ] || \
         die "${label} checkout 存在本地修改"
     actual_leaf="$(tree_sha256 "${payload_dir}")"
     [ "${actual_leaf}" = "${expected_leaf}" ] || \
-        die "${label} 完整叶树 SHA-256 不匹配: ${actual_leaf}"
+        die "${label} 已检出文件树 SHA-256 不匹配: ${actual_leaf}"
     PREPARED_GIT_PAYLOAD_DIR="${payload_dir}"
     log_success "固定 ${label} 对象树完整性校验通过"
+}
+
+prepare_clang_source_tree() {
+    local cache_dir="${ENVIRONMENT_DIR}/toolchain/aosp-clang-git-${AOSP_CLANG_COMMIT}"
+    local subtree="clang-${CI_CLANG_REVISION}"
+    local paths=(
+        "${subtree}/bin"
+        "${subtree}/include"
+        "${subtree}/lib/clang/22/include"
+        "${subtree}/lib/clang/22/share"
+        "${subtree}/lib/x86_64-unknown-linux-gnu"
+        "${subtree}/libexec"
+        "${subtree}/prebuilt_include"
+        "${subtree}/share"
+    )
+    prepare_fixed_git_subtree "AOSP Clang 工具链" "${cache_dir}" \
+        "${AOSP_CLANG_REPO}" "${AOSP_CLANG_COMMIT}" "${subtree}" \
+        "${CI_CLANG_GIT_TREE}" "${CI_CLANG_LEAF_TREE_SHA256}" "${paths[@]}"
+    CI_CLANG_PAYLOAD_DIR="${PREPARED_GIT_PAYLOAD_DIR}"
 }
 
 prepare_rust_source_tree() {
@@ -454,27 +456,10 @@ prepare_rust_source_tree() {
         "${CI_RUST_SUBTREE}/etc"
         "${CI_RUST_SUBTREE}/lib64"
         "${CI_RUST_SUBTREE}/libexec"
-        "${CI_RUST_SUBTREE}/share"
-        "${CI_RUST_SUBTREE}/src"
-        "${CI_RUST_SUBTREE}/lib/rustlib/aarch64-linux-android"
-        "${CI_RUST_SUBTREE}/lib/rustlib/aarch64-unknown-none"
-        "${CI_RUST_SUBTREE}/lib/rustlib/aarch64-unknown-uefi"
-        "${CI_RUST_SUBTREE}/lib/rustlib/armv7-linux-androideabi"
-        "${CI_RUST_SUBTREE}/lib/rustlib/armv7a-none-eabi"
+        "${CI_RUST_SUBTREE}/share/doc/rustc/licenses"
         "${CI_RUST_SUBTREE}/lib/rustlib/etc"
-        "${CI_RUST_SUBTREE}/lib/rustlib/i686-linux-android"
-        "${CI_RUST_SUBTREE}/lib/rustlib/i686-unknown-linux-gnu"
-        "${CI_RUST_SUBTREE}/lib/rustlib/i686-unknown-linux-musl"
-        "${CI_RUST_SUBTREE}/lib/rustlib/i686-unknown-uefi"
-        "${CI_RUST_SUBTREE}/lib/rustlib/riscv32i-unknown-none-elf"
-        "${CI_RUST_SUBTREE}/lib/rustlib/riscv32imc-unknown-none-elf"
-        "${CI_RUST_SUBTREE}/lib/rustlib/riscv64-linux-android"
         "${CI_RUST_SUBTREE}/lib/rustlib/src"
-        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-linux-android"
-        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-pc-windows-gnu"
         "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-linux-gnu"
-        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-linux-musl"
-        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-uefi"
     )
     prepare_fixed_git_subtree "AOSP Rust 工具链" "${cache_dir}" \
         "${AOSP_RUST_REPO}" "${AOSP_RUST_COMMIT}" "${CI_RUST_SUBTREE}" \
@@ -498,28 +483,40 @@ prepare_build_tools_source_tree() {
 }
 
 setup_toolchain() {
-    local files=(
-        aosp-clang-r536225.tar.gz
-        bindgen.tar.xz
-        busybox-1.35.0-x86_64-linux-musl
-    )
-    local file expected actual marker marker_value staging backup rust_bin compiler
+    local files=(bindgen gavinhoward-bc)
+    local file expected actual marker marker_value staging backup rust_bin compiler blob
     mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
+    prepare_clang_source_tree
     prepare_rust_source_tree
     prepare_build_tools_source_tree
     for file in "${files[@]}"; do
         expected="${TC_SHA256[$file]:-}"
-        [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || die "工具链归档缺少固定 SHA-256: ${file}"
+        blob="${TC_GIT_BLOB[$file]:-}"
+        [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || die "工具链资产缺少固定 SHA-256: ${file}"
         if [ ! -f "${DL_DIR}/${file}" ]; then
             log_step "下载固定工具链资产: ${file}"
-            curl --proto '=https' --tlsv1.2 -fSL --retry 3 \
+            curl --proto '=https' --tlsv1.2 -fSL --connect-timeout 30 \
+                --speed-time 180 --speed-limit 1024 --retry 3 \
                 -o "${DL_DIR}/${file}.part" "${TC_PKGS[$file]}" || die "下载失败: ${file}"
+            if [ -n "${blob}" ]; then
+                base64 --decode "${DL_DIR}/${file}.part" > "${DL_DIR}/${file}.decoded" || \
+                    die "Gitiles 文件解码失败: ${file}"
+                mv "${DL_DIR}/${file}.decoded" "${DL_DIR}/${file}.part"
+            fi
             actual="$(sha256sum "${DL_DIR}/${file}.part" | awk '{ print $1 }')"
             [ "${actual}" = "${expected}" ] || die "工具链下载文件 SHA-256 不匹配: ${file} ${actual}"
+            if [ -n "${blob}" ]; then
+                [ "$(git hash-object --no-filters "${DL_DIR}/${file}.part")" = "${blob}" ] || \
+                    die "工具链下载文件 Git blob 不匹配: ${file}"
+            fi
             mv "${DL_DIR}/${file}.part" "${DL_DIR}/${file}"
         fi
         actual="$(sha256sum "${DL_DIR}/${file}" | awk '{ print $1 }')"
         [ "${actual}" = "${expected}" ] || die "工具链缓存 SHA-256 不匹配: ${file} ${actual}"
+        if [ -n "${blob}" ]; then
+            [ "$(git hash-object --no-filters "${DL_DIR}/${file}")" = "${blob}" ] || \
+                die "工具链缓存 Git blob 不匹配: ${file}"
+        fi
     done
 
     marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256"
@@ -539,66 +536,23 @@ setup_toolchain() {
 
     staging="$(mktemp -d "$(dirname "${CI_TOOLCHAIN_DIR}")/.ci-toolchain-install.XXXXXX")"
     if ! {
-        tar --no-same-owner -xzf "${DL_DIR}/aosp-clang-r536225.tar.gz" -C "${staging}" &&
-        rm -rf -- \
-            "${staging}/BUILD.bazel" \
-            "${staging}/manifest_14043575.xml" \
-            "${staging}/android_libc++" \
-            "${staging}/musl" \
-            "${staging}/runtimes_ndk_cxx" \
-            "${staging}/lib/clang/19/lib/aarch64-unknown-linux-musl" \
-            "${staging}/lib/clang/19/lib/i386-unknown-linux-gnu" \
-            "${staging}/lib/clang/19/lib/i686-unknown-linux-musl" \
-            "${staging}/lib/clang/19/lib/x86_64-unknown-linux-musl" \
-            "${staging}/lib/clang/19/lib/linux/aarch64-unknown-linux-musl" \
-            "${staging}/lib/clang/19/lib/linux/i386" \
-            "${staging}/lib/clang/19/lib/linux/i686-unknown-linux-musl" \
-            "${staging}/lib/clang/19/lib/linux/riscv64" \
-            "${staging}/lib/clang/19/lib/linux/x86_64-unknown-linux-musl" \
-            "${staging}/lib/i386-unknown-linux-gnu" \
-            "${staging}/lib/i686-unknown-linux-musl" \
-            "${staging}/lib/i686-w64-windows-gnu" &&
-        find "${staging}/lib/clang/19/lib/linux" -maxdepth 1 \
-            \( -type f -o -type l \) \
-            \( -name '*-i386.*' -o -name '*-i686-android*' -o -name '*-riscv64-android*' \) \
-            -delete &&
-        cp -a "${CI_RUST_PAYLOAD_DIR}/." "${staging}/" &&
-        rm -f -- \
-            "${staging}/BUILD.bazel" \
-            "${staging}/lib/rustlib/install.log" &&
-        find "${staging}/lib/rustlib" -mindepth 1 -maxdepth 1 -type d \
-            ! -name aarch64-linux-android \
-            ! -name x86_64-unknown-linux-gnu \
-            ! -name src \
-            ! -name etc \
-            -exec rm -rf -- {} + &&
-        find "${staging}/lib/rustlib" -maxdepth 1 -type f \
-            -name 'manifest-rust-std-*' \
-            ! -name manifest-rust-std-aarch64-linux-android \
-            ! -name manifest-rust-std-x86_64-unknown-linux-gnu \
-            -delete &&
-        mkdir -p "${staging}/build-tools" &&
+        cp -a "${CI_CLANG_PAYLOAD_DIR}/." "${staging}/" &&
+        mkdir -p "${staging}/rust" "${staging}/build-tools" "${staging}/host-bin" &&
+        cp -a "${CI_RUST_PAYLOAD_DIR}/." "${staging}/rust/" &&
         cp -a "${CI_BUILD_TOOLS_PAYLOAD_DIR}/." "${staging}/build-tools/" &&
         find "${staging}" -type d -exec chmod 0775 {} + &&
         find "${staging}" -type f -perm /111 -exec chmod 0775 {} + &&
         find "${staging}" -type f ! -perm /111 -exec chmod 0664 {} + &&
-        tar --no-same-owner -xJf "${DL_DIR}/bindgen.tar.xz" -C "${staging}" &&
-        cp -f "${staging}/bindgen-cli-x86_64-unknown-linux-gnu/bindgen" \
-            "${staging}/bin/bindgen" &&
-        chmod 0755 "${staging}/bin/bindgen";
+        cp -f "${DL_DIR}/bindgen" "${staging}/bin/bindgen" &&
+        cp -f "${DL_DIR}/gavinhoward-bc" "${staging}/host-bin/bc" &&
+        chmod 0755 "${staging}/bin/bindgen" "${staging}/host-bin/bc";
     }; then
         rm -rf -- "${staging}"
-        die "固定工具链解压失败"
+        die "固定工具链安装失败"
     fi
-    ln -sfn clang-19 "${staging}/bin/clang"
-    ln -sfn clang++.real "${staging}/bin/clang++"
-    mkdir -p "${staging}/host-bin"
-    cp -f "${DL_DIR}/busybox-1.35.0-x86_64-linux-musl" "${staging}/host-bin/busybox"
-    chmod 0755 "${staging}/host-bin/busybox"
-    ln -sfn busybox "${staging}/host-bin/bc"
     { printf '#!/usr/bin/env sh\n'; printf 'for arg do\n'; printf '  case "$arg" in\n'; printf '    -m64) exec /usr/bin/x86_64-linux-gnu-gcc "$@" ;;\n'; printf '  esac\n'; printf 'done\n'; printf 'exec /usr/bin/cc "$@"\n'; } > "${staging}/host-bin/cc"
     chmod 0755 "${staging}/host-bin/cc"
-    rust_bin="${staging}/lib/rustlib/x86_64-unknown-linux-gnu/bin"
+    rust_bin="${staging}/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin"
     mkdir -p "${rust_bin}"
     for compiler in cc gcc; do
         { printf '#!/usr/bin/env sh\n'; printf 'exec /usr/bin/x86_64-linux-gnu-gcc "$@"\n'; } > "${rust_bin}/${compiler}"
@@ -607,10 +561,10 @@ setup_toolchain() {
     actual="$(tree_sha256 "${staging}")"
     if [ "${actual}" != "${CI_TOOLCHAIN_TREE_SHA256}" ]; then
         rm -rf -- "${staging}"
-        die "固定工具链解压树指纹不匹配: ${actual}"
+        die "固定工具链安装树指纹不匹配: ${actual}"
     fi
     case "${CI_TOOLCHAIN_DIR}" in
-        "${ENVIRONMENT_DIR}"/toolchain/ci-sm8850-r536225) ;;
+        "${ENVIRONMENT_DIR}"/toolchain/"${CI_TOOLCHAIN_NAME}") ;;
         *) rm -rf -- "${staging}"; die "拒绝替换异常工具链目录: ${CI_TOOLCHAIN_DIR}" ;;
     esac
     backup="${CI_TOOLCHAIN_DIR}.replace.$$"
@@ -929,39 +883,48 @@ LIBMNL_URL="${LIBMNL_URL:-https://www.netfilter.org/projects/libmnl/files/libmnl
 LIBMNL_SHA256="${LIBMNL_SHA256:-274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525}"
 LIBMNL_TREE_SHA256="${LIBMNL_TREE_SHA256:-8d6597fd107489c8d90106d99302ff5efb061fe38bb3952f8a1062626b80a7c2}"
 LIBMNL_DIR="$(resolve_workspace_path "${LIBMNL_SOURCE_DIR:-sources/libmnl-1.0.5}")"
-ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:-r29}"
-ANDROID_NDK_URL="${ANDROID_NDK_URL:-https://dl.google.com/android/repository/android-ndk-r29-linux.zip}"
-ANDROID_NDK_SHA1="${ANDROID_NDK_SHA1:-87e2bb7e9be5d6a1c6cdf5ec40dd4e0c6d07c30b}"
-ANDROID_NDK_SHA256="${ANDROID_NDK_SHA256:-4abbbcdc842f3d4879206e9695d52709603e52dd68d3c1fff04b3b5e7a308ecf}"
-ANDROID_NDK_TREE_SHA256="${ANDROID_NDK_TREE_SHA256:-401eb9a77478012fdc0c31e986379bf04db9fd72455b060dd13fcce07b84b98e}"
+ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:?缺少 NDK 版本 pin}"
+ANDROID_NDK_URL="${ANDROID_NDK_URL:?缺少 NDK URL pin}"
+ANDROID_NDK_SHA1="${ANDROID_NDK_SHA1:?缺少 NDK SHA-1 pin}"
+ANDROID_NDK_SHA256="${ANDROID_NDK_SHA256:?缺少 NDK SHA-256 pin}"
+ANDROID_NDK_TREE_SHA256="${ANDROID_NDK_TREE_SHA256:?缺少 NDK 安装树 pin}"
 ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
-CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225"
-DL_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-r536225-downloads"
+CI_TOOLCHAIN_NAME="${CI_TOOLCHAIN_NAME:?缺少工具链目录 pin}"
+CI_CLANG_REVISION="${CI_CLANG_REVISION:?缺少 Clang revision pin}"
+[[ "${CI_TOOLCHAIN_NAME}" =~ ^ci-sm8850-[A-Za-z0-9._-]+$ ]] || die "工具链目录名异常"
+[[ "${CI_CLANG_REVISION}" =~ ^r[0-9]+[a-z]?$ ]] || die "Clang revision 格式错误"
+CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}"
+DL_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-${CI_CLANG_REVISION}-downloads"
 SOURCE_DOWNLOAD_DIR="${ENVIRONMENT_DIR}/source-downloads"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
-CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:-65644bd77ed4ecde7239e3ce5a4aa53451a28c0a52b12394b88c5bd095517cc0}"
-AOSP_CLANG_COMMIT="${AOSP_CLANG_COMMIT:-77c95e8253c2c82ffd4fee92c0ad9f5ac1e8ca04}"
-CI_CLANG_URL="${CI_CLANG_URL:-https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/${AOSP_CLANG_COMMIT}/clang-r536225.tar.gz}"
-CI_CLANG_SHA256="${CI_CLANG_SHA256:-4a1e231a9bfff63f7708d956d661e1a5cbf61a6dbaa8bc20246a7e5684a8c79c}"
-AOSP_RUST_COMMIT="${AOSP_RUST_COMMIT:-5c78b1e636b2bf68d46a6980437590fddca64147}"
-AOSP_RUST_REPO="${AOSP_RUST_REPO:-https://android.googlesource.com/platform/prebuilts/rust}"
-CI_RUST_SUBTREE="${CI_RUST_SUBTREE:-linux-x86/1.82.0.p2}"
-CI_RUST_GIT_TREE="${CI_RUST_GIT_TREE:-94ac5b5f1377b32edbde5359d17a7994a80363b1}"
-CI_RUST_LEAF_TREE_SHA256="${CI_RUST_LEAF_TREE_SHA256:-87288c429cfbc10e1b0083043246adbf3eed26f976e702e0a7ef97348c337627}"
-CI_RUSTC_COMMIT_HASH="${CI_RUSTC_COMMIT_HASH:-f6e511eec7342f59a25f7c0534f1dbea00d01b14}"
-CI_RUST_TOOLCHAIN_VERSION="${CI_RUST_TOOLCHAIN_VERSION:-linux-glibc-15545352}"
-AOSP_BUILD_TOOLS_COMMIT="${AOSP_BUILD_TOOLS_COMMIT:-811c6e2938d53b3c318d7635b03931601a68c765}"
-AOSP_BUILD_TOOLS_REPO="${AOSP_BUILD_TOOLS_REPO:-https://android.googlesource.com/kernel/prebuilts/build-tools}"
-CI_BUILD_TOOLS_SUBTREE="${CI_BUILD_TOOLS_SUBTREE:-linux-x86}"
-CI_BUILD_TOOLS_GIT_TREE="${CI_BUILD_TOOLS_GIT_TREE:-c7f55719e28bb1a324140f7dae7018e8c41a1b7c}"
-CI_BUILD_TOOLS_LEAF_TREE_SHA256="${CI_BUILD_TOOLS_LEAF_TREE_SHA256:-82f36c2f3efbaea6f5b278aae01c9b1c0318a0de00603b66a5cb5e815a249c2d}"
-CI_BINDGEN_URL="${CI_BINDGEN_URL:-https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.5/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz}"
-CI_BINDGEN_SHA256="${CI_BINDGEN_SHA256:-b7e2321ee8c617f14ccc5b9f39b3a804db173ee217e924ad93ed16af6bc62b1d}"
-CI_BUSYBOX_URL="${CI_BUSYBOX_URL:-https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox}"
-CI_BUSYBOX_SHA256="${CI_BUSYBOX_SHA256:-6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348}"
+CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:?缺少工具链安装树 pin}"
+AOSP_CLANG_COMMIT="${AOSP_CLANG_COMMIT:?缺少 AOSP Clang commit pin}"
+AOSP_CLANG_REPO="${AOSP_CLANG_REPO:?缺少 AOSP Clang repo pin}"
+CI_CLANG_GIT_TREE="${CI_CLANG_GIT_TREE:?缺少 Clang Git tree pin}"
+CI_CLANG_LEAF_TREE_SHA256="${CI_CLANG_LEAF_TREE_SHA256:?缺少 Clang 文件树 pin}"
+AOSP_RUST_COMMIT="${AOSP_RUST_COMMIT:?缺少 AOSP Rust commit pin}"
+AOSP_RUST_REPO="${AOSP_RUST_REPO:?缺少 AOSP Rust repo pin}"
+CI_RUST_SUBTREE="${CI_RUST_SUBTREE:?缺少 Rust 子树 pin}"
+CI_RUST_GIT_TREE="${CI_RUST_GIT_TREE:?缺少 Rust Git tree pin}"
+CI_RUST_LEAF_TREE_SHA256="${CI_RUST_LEAF_TREE_SHA256:?缺少 Rust 已检出文件树 pin}"
+CI_RUSTC_COMMIT_HASH="${CI_RUSTC_COMMIT_HASH:?缺少 Rust 编译器 commit pin}"
+CI_RUST_VERSION="${CI_RUST_VERSION:?缺少 Rust release pin}"
+AOSP_BUILD_TOOLS_COMMIT="${AOSP_BUILD_TOOLS_COMMIT:?缺少 AOSP build-tools commit pin}"
+AOSP_BUILD_TOOLS_REPO="${AOSP_BUILD_TOOLS_REPO:?缺少 AOSP build-tools repo pin}"
+CI_BUILD_TOOLS_SUBTREE="${CI_BUILD_TOOLS_SUBTREE:?缺少 build-tools 子树 pin}"
+CI_BUILD_TOOLS_GIT_TREE="${CI_BUILD_TOOLS_GIT_TREE:?缺少 build-tools Git tree pin}"
+CI_BUILD_TOOLS_LEAF_TREE_SHA256="${CI_BUILD_TOOLS_LEAF_TREE_SHA256:?缺少 build-tools 文件树 pin}"
+CI_BINDGEN_URL="${CI_BINDGEN_URL:?缺少 bindgen URL pin}"
+CI_BINDGEN_SHA256="${CI_BINDGEN_SHA256:?缺少 bindgen SHA-256 pin}"
+CI_BINDGEN_GIT_BLOB="${CI_BINDGEN_GIT_BLOB:?缺少 bindgen Git blob pin}"
+AOSP_BINDGEN_COMMIT="${AOSP_BINDGEN_COMMIT:?缺少 bindgen commit pin}"
+CI_HOST_BC_URL="${CI_HOST_BC_URL:?缺少 bc URL pin}"
+CI_HOST_BC_SHA256="${CI_HOST_BC_SHA256:?缺少 bc SHA-256 pin}"
+CI_HOST_BC_GIT_BLOB="${CI_HOST_BC_GIT_BLOB:?缺少 bc Git blob pin}"
+AOSP_HOST_BC_COMMIT="${AOSP_HOST_BC_COMMIT:?缺少 bc commit pin}"
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
 [[ "${COMMON_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "GKI common commit 格式错误"
 [[ "${COMMON_ABI_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "GKI common abi.stg SHA-256 格式错误"
@@ -980,29 +943,41 @@ CI_BUSYBOX_SHA256="${CI_BUSYBOX_SHA256:-6e123e7f3202a8c1e9b1f94d8941580a25135382
 [[ "${CI_RUST_GIT_TREE}" =~ ^[0-9a-f]{40}$ ]] || die "Rust Git tree 格式错误"
 [[ "${CI_RUST_LEAF_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Rust 叶子树 SHA-256 格式错误"
 [[ "${CI_RUSTC_COMMIT_HASH}" =~ ^[0-9a-f]{40}$ ]] || die "Rust 编译器 commit-hash 格式错误"
-[[ "${CI_RUST_TOOLCHAIN_VERSION}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Rust 工具链版本标识格式错误"
+[[ "${CI_RUST_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Rust release 格式错误"
 [[ "${AOSP_BUILD_TOOLS_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP build-tools commit 格式错误"
 [[ "${CI_BUILD_TOOLS_GIT_TREE}" =~ ^[0-9a-f]{40}$ ]] || die "build-tools Git tree 格式错误"
 [[ "${CI_BUILD_TOOLS_LEAF_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "build-tools 叶子树 SHA-256 格式错误"
-[ "${AOSP_RUST_REPO}" = "https://android.googlesource.com/platform/prebuilts/rust" ] || \
+[ "${AOSP_RUST_REPO}" = "https://android.googlesource.com/platform/prebuilts/rust-toolchain/linux-x86" ] || \
     die "Rust 必须来自 AOSP 官方仓库"
-[ "${CI_RUST_SUBTREE}" = "linux-x86/1.82.0.p2" ] || die "Rust 工具链子树异常"
-[ "${CI_CLANG_URL}" = "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/${AOSP_CLANG_COMMIT}/clang-r536225.tar.gz" ] || \
-    die "clang 必须来自固定 AOSP Gitiles 提交"
+[ "${CI_RUST_SUBTREE}" = "${CI_RUST_VERSION}" ] || die "Rust 工具链子树异常"
+[[ "${CI_CLANG_GIT_TREE}" =~ ^[0-9a-f]{40}$ ]] || die "Clang Git tree 格式错误"
+[[ "${CI_CLANG_LEAF_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Clang 文件树 SHA-256 格式错误"
+[ "${AOSP_CLANG_REPO}" = "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86" ] || \
+    die "Clang 必须来自 AOSP 官方仓库"
 [ "${AOSP_BUILD_TOOLS_REPO}" = "https://android.googlesource.com/kernel/prebuilts/build-tools" ] || \
     die "build-tools 必须来自 AOSP 官方仓库"
-[ "${CI_BUILD_TOOLS_SUBTREE}" = "linux-x86" ] || die "build-tools 子树异常"
+[ "${CI_BUILD_TOOLS_SUBTREE}" = "linux_musl-x86" ] || die "build-tools 子树异常"
 [[ "${ANDROID_NDK_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK SHA-256 格式错误"
 [[ "${ANDROID_NDK_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK 安装树 SHA-256 格式错误"
+[[ "${AOSP_BINDGEN_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "bindgen commit 格式错误"
+[[ "${AOSP_HOST_BC_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "bc commit 格式错误"
+[[ "${CI_BINDGEN_GIT_BLOB}" =~ ^[0-9a-f]{40}$ ]] || die "bindgen Git blob 格式错误"
+[[ "${CI_HOST_BC_GIT_BLOB}" =~ ^[0-9a-f]{40}$ ]] || die "bc Git blob 格式错误"
+[ "${CI_BINDGEN_URL}" = "https://android.googlesource.com/platform/prebuilts/clang-tools/+/${AOSP_BINDGEN_COMMIT}/linux-x86/bin/bindgen?format=TEXT" ] || \
+    die "bindgen 必须来自固定 AOSP Gitiles 提交"
+[ "${CI_HOST_BC_URL}" = "https://android.googlesource.com/platform/prebuilts/build-tools/+/${AOSP_HOST_BC_COMMIT}/linux-x86/bin/gavinhoward-bc?format=TEXT" ] || \
+    die "bc 必须来自固定 AOSP Gitiles 提交"
 declare -A TC_PKGS=(
-    [aosp-clang-r536225.tar.gz]="${CI_CLANG_URL}"
-    [bindgen.tar.xz]="${CI_BINDGEN_URL}"
-    [busybox-1.35.0-x86_64-linux-musl]="${CI_BUSYBOX_URL}"
+    [bindgen]="${CI_BINDGEN_URL}"
+    [gavinhoward-bc]="${CI_HOST_BC_URL}"
 )
 declare -A TC_SHA256=(
-    [aosp-clang-r536225.tar.gz]="${CI_CLANG_SHA256}"
-    [bindgen.tar.xz]="${CI_BINDGEN_SHA256}"
-    [busybox-1.35.0-x86_64-linux-musl]="${CI_BUSYBOX_SHA256}"
+    [bindgen]="${CI_BINDGEN_SHA256}"
+    [gavinhoward-bc]="${CI_HOST_BC_SHA256}"
+)
+declare -A TC_GIT_BLOB=(
+    [bindgen]="${CI_BINDGEN_GIT_BLOB}"
+    [gavinhoward-bc]="${CI_HOST_BC_GIT_BLOB}"
 )
 
 ensure_repo "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_BRANCH}" "${KERNEL_COMMIT}"
