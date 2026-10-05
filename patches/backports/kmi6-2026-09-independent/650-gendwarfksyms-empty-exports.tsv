@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	gendwarf_empty_exports	direct	mainline	snapshot-2026-08-28	fdf302e6bea1822a9144a0cc2e8e17527e746162	2025-11-11	c3a9baa7eb38626f6cd5770ecd1ce81126561c73	scripts/gendwarfksyms/gendwarfksyms.c,scripts/gendwarfksyms/gendwarfksyms.h,scripts/gendwarfksyms/symbols.c	-	-	-
