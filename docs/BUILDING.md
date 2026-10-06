@@ -31,6 +31,8 @@ AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/
 
 内核与 NDK 共用 `work/cache/ccache/`，保持压缩和 `.env` 固定的 5 GiB 上限；NDK 缓存身份包含完整工具树摘要。不运行 clean/mrproper，不放宽缓存依赖校验。源码、官方审计仓库及当前下载缓存可复用，`init.sh` 不应为已有完整对象重复下载。迁移绝对路径可能使部分编译记录失效，由下次必要构建正常处理，不改写旧命令伪造缓存命中。
 
+宿主构建回移固定于官方 Kbuild `kbuild-next-speedups` 快照，仅包含 kallsyms token 索引及现有 C/链接器参数探测缓存链。保持 6.12 的 `string` / `default` Kconfig 语法和原参数顺序，工具身份变化由原生 Kconfig 依赖机制重新探测。新增 20 个探测定义，其中固定 Clang 组合序列化 12 项；旧配置值和 W=0/W=1 的 C、汇编、Rust、链接及 PI/EFI 参数已核实等价。kallsyms 加速仅影响符号生成，不能当作完整构建提速比例。
+
 ## 交付与身份
 
 内核产物写入 `kernel_out/luna-xiaomi17-g<8位提交>-YYYYMMDD-HHMM/`，时间为上海时区。同名目录拒绝覆盖，文件仍为：

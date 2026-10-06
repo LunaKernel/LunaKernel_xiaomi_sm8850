@@ -12,13 +12,17 @@
 
 ## 待验改动
 
-`a5b887dd` 的 `module_blacklist=rust_binder` 策略待下次完整编译和实机验收。保留 C Binder、Rust Binder 模块配置和既有精确闭包审计，在符号解析前屏蔽 Rust Binder 加载；不把黑名单作为启动门禁。
+以下改动尚未实机验收；完整本地构建与 OTA 闭包结果以新提交对应的 `work/audit/` 发布清单为准。
 
-Rust 取消普通内存 strict-align 已通过 kernel/helpers 合并 bitcode 的实际 LLVM 属性检查，softfloat 与 SIMD 禁用约束保持；仍待完整内核构建及实机验收。IPSet/libmnl 的 SM8850 参数、Android ELF/模块包、增量复用、配置失败与编译中断恢复已通过本地验证，尚未替换已验收的配套组件。
+`a5b887dd` 的 `module_blacklist=rust_binder` 策略保留 C Binder、Rust Binder 模块配置和既有精确闭包审计，在符号解析前屏蔽 Rust Binder 加载；不把黑名单作为启动门禁。
 
-MGLRU 不可回收 folio 处理回移固定于官方 `f7e698e326b239a91ea15844817551921209e826`，仅适配 r21 上下文并保留 Android vendor hook。已通过 `mm/vmscan.o` 对象编译及 35 项独立清单的单项应用、撤销与完整重放校验；完整内核、OTA 模块闭包和实机验证仍待完成。
+Rust 取消普通内存 strict-align 已通过 kernel/helpers 合并 bitcode 的实际 LLVM 属性检查，softfloat 与 SIMD 禁用约束保持。IPSet/libmnl 的 SM8850 参数、Android ELF/模块包、增量复用、配置失败与编译中断恢复已通过本地验证，尚未实机验收。
 
-已验收 Image 的配置为 8249 行、SHA-256 `9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c`。当前 `.env` 的参考配置包含新增黑名单，尚未出现在该 Image 中。目录整理后的新提交同样没有新 Image，不能继承旧提交的实机身份。
+MGLRU 不可回收 folio 处理回移固定于官方 `f7e698e326b239a91ea15844817551921209e826`，仅适配 r21 上下文并保留 Android vendor hook；已通过 `mm/vmscan.o` 对象编译。当前 37 项独立清单均已通过单项应用、撤销及完整重放，固定基础差异保持不变。
+
+Kbuild 宿主优化只含固定的 kallsyms token 索引和参数探测缓存链。真实符号表输出及原生构建参数等价、宏支持/拒绝/回退语义、工具身份刷新、no-op 时间戳保持和来源/路径拒绝测试通过；不改变既有启动或 ABI 门禁。
+
+已验收 Image 的配置为 8249 行、SHA-256 `9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c`。当前 `.env` 的 8261 行参考配置包含新增黑名单及 12 个探测缓存项；原有 6576 项配置值与黑名单参考保持一致。新提交不能继承旧 Image 的实机身份。
 
 iorap2 已确认非本项目内核问题，不列为待修复项；功耗暂不追踪，用户态问题不扩展为本项目修复责任。
 

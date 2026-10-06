@@ -89,7 +89,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 - `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
-- 参考配置为 8249 行，modules.order 为 104 个活动模块，摘要以 `.env` 为准。配置参考包含在已验收配置上追加的 Rust Binder 黑名单，仍待下次完整构建及实机验证；按第 3 节报告、保留并审查快照。
+- 参考配置为 8261 行，modules.order 为 104 个活动模块，摘要以 `.env` 为准。配置参考包含 Rust Binder 黑名单和 12 个序列化工具探测缓存项；已证明原有配置值保持，缓存项 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
 - Rust Binder 加载屏蔽属于项目配置策略，MUST NOT 纳入启动门禁。默认使用 C Binder，Rust Binder 保持模块配置及原有精确兼容性审计；配置生成使用 `CMDLINE_EXTEND=y`，保留固定 common 原始参数并追加 `module_blacklist=rust_binder`，在符号解析前拒绝加载该模块。不得据此删除验证对象或放宽任何模块闭包门禁。
@@ -116,7 +116,7 @@ AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaom
 
 ## 6. 真机验证
 
-当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；Rust Binder 加载屏蔽、Rust 对齐策略和 MGLRU 回移仍待完整编译与实机验收，新 IPSet 组件尚未实机验证。
+当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；Rust Binder 加载屏蔽、Rust 对齐策略、MGLRU 与 Kbuild 回移及新 IPSet 组件仍待实机验证。完整本地构建与闭包证据以新提交对应的发布审计为准。
 
 公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
 
