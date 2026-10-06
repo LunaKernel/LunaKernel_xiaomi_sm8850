@@ -41,6 +41,19 @@ def last(args, prefix):
     return next((arg for arg in reversed(args) if arg.startswith(prefix)), '')
 
 
+def llvm_arguments(args, tool):
+    result = []
+    iterator = iter(args)
+    for token in iterator:
+        if tool == 'rustc' and token.startswith('-Cllvm-args='):
+            result.extend(shlex.split(token.removeprefix('-Cllvm-args=')))
+        elif tool == 'clang' and token == '-mllvm':
+            result.append(next(iterator))
+        elif tool == 'clang' and token.startswith('-mllvm='):
+            result.append(token.removeprefix('-mllvm='))
+    return result
+
+
 def audit_bitcode(root, toolchain, tune, report):
     rows = []
     for relative in ('rust/helpers/helpers.bc', 'rust/kernel.bc', 'rust/kernel.m.bc'):
@@ -75,11 +88,13 @@ def audit_bitcode(root, toolchain, tune, report):
 
 
 def main():
-    root, profile, c_arch, tune, rust_features, report, toolchain = sys.argv[1:8]
-    scope = sys.argv[8:]
+    (root, profile, c_arch, tune, rust_features, report,
+     toolchain, layout_flags, core_threads) = sys.argv[1:10]
+    scope = sys.argv[10:]
     if scope not in ([], ['--preflight']):
         raise SystemExit('unexpected compiler audit scope')
     root = pathlib.Path(root)
+    expected_layout = shlex.split(layout_flags)
     rows, issues = [], []
     counts = collections.Counter()
     required = {
@@ -126,6 +141,10 @@ def main():
                 isa = last(args, '-Ctarget-feature=' if tool == 'rustc' else '-march=')
                 model = last(args, '-Ztune-cpu=' if tool == 'rustc' else '-mtune=')
                 sample = last(args, '-Zprofile-sample-use=' if tool == 'rustc' else '-fprofile-sample-use=')
+                llvm = llvm_arguments(args, tool)
+                layout = [last(llvm, prefix) for prefix in
+                          ('-enable-ext-tsp-block-placement=', '-ext-tsp-apply-without-profile=')]
+                threads = last(args, '-Zthreads=') if tool == 'rustc' else ''
                 if arm64 and kind != 'clang-asm':
                     expected = [('-Ctarget-cpu=', 'generic'), ('-Ztune-cpu=', tune),
                                 ('-Ctarget-feature=', rust_features)] if tool == 'rustc' else [
@@ -139,6 +158,20 @@ def main():
                         issues.append(relative + ': missing softfloat ABI')
                     if tool == 'clang' and last(args, '-mcpu='):
                         issues.append(relative + ': unexpected -mcpu')
+                    if layout != expected_layout:
+                        issues.append(relative + ': missing or overridden profile-only ExtTSP flags')
+                    if tool == 'rustc':
+                        expected_threads = ('-Zthreads=' + core_threads
+                                            if relative == 'rust/.core.o.cmd' else '')
+                        if threads != expected_threads:
+                            issues.append(relative + ': incorrect core-only frontend parallelism')
+                        if last(args, '-Ccodegen-units=') != '-Ccodegen-units=1':
+                            issues.append(relative + ': codegen-units must remain 1')
+                    if relative.startswith('arch/arm64/kernel/pi/'):
+                        alignment = next((arg for arg in reversed(args) if arg in
+                                          ('-mstrict-align', '-mno-strict-align')), '')
+                        if alignment != '-mstrict-align':
+                            issues.append(relative + ': early boot strict alignment lost')
                     skip_profile = (kind == 'clang-bitcode' or relative in no_profile_files
                                     or relative.startswith(no_profile_dirs))
                     prefix = '-Zprofile-sample-use=' if tool == 'rustc' else '-fprofile-sample-use='
@@ -152,16 +185,18 @@ def main():
                                            ('rust/.kernel.o.cmd', 'clang-bitcode')}:
                         if '-mgeneral-regs-only' not in args or '-mno-general-regs-only' in args:
                             issues.append(relative + ': missing GPR restriction')
-                elif model or isa in ('-march=' + c_arch, '-Ctarget-feature=' + rust_features):
+                elif (model or isa in ('-march=' + c_arch, '-Ctarget-feature=' + rust_features)
+                      or any(layout) or threads):
                     issues.append(relative + ': SM8850 flags leaked into ' + target + '/' + kind)
                 rows.append([relative, kind, target, source, isa, model, sample,
-                             str('-mgeneral-regs-only' in args), shlex.join(tokens)])
+                             str('-mgeneral-regs-only' in args), *layout, threads, shlex.join(tokens)])
     issues += ['missing required compiler stage: ' + path + '/' + kind
                for path, kind in sorted(required)]
     with pathlib.Path(report).open('w') as stream:
         writer = csv.writer(stream, delimiter='\t', lineterminator='\n')
         writer.writerow(['object', 'stage', 'target', 'source', 'effective_isa',
-                         'effective_tune', 'profile', 'gpr_only', 'command'])
+                         'effective_tune', 'profile', 'gpr_only', 'exttsp',
+                         'exttsp_without_profile', 'frontend_threads', 'command'])
         writer.writerows(rows)
     for (kind, target), count in sorted(counts.items()):
         print(kind, target, count)
