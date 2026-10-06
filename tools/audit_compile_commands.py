@@ -75,7 +75,10 @@ def audit_bitcode(root, toolchain, tune, report):
 
 
 def main():
-    root, profile, c_arch, tune, rust_features, report, toolchain = sys.argv[1:]
+    root, profile, c_arch, tune, rust_features, report, toolchain = sys.argv[1:8]
+    scope = sys.argv[8:]
+    if scope not in ([], ['--preflight']):
+        raise SystemExit('unexpected compiler audit scope')
     root = pathlib.Path(root)
     rows, issues = [], []
     counts = collections.Counter()
@@ -94,7 +97,13 @@ def main():
                        'arch/arm64/kvm/hyp/', 'drivers/firmware/efi/libstub/')
     no_profile_files = {'..vmlinux.export.o.cmd', 'init/.version-timestamp.o.cmd',
                         'scripts/mod/.empty.o.cmd'}
-    for path in sorted(root.rglob('.*.cmd')):
+    # Preflight has rebuilt only these producers. Other saved commands still
+    # describe the previous build and are audited after Image/modules finish.
+    if scope:
+        paths = {root / path for path, _ in required}
+    else:
+        paths = root.rglob('.*.cmd')
+    for path in sorted(paths):
         relative = path.relative_to(root).as_posix()
         for line in path.read_text(errors='replace').splitlines():
             if not line.startswith(('savedcmd_', 'cmd_')) or ' := ' not in line:

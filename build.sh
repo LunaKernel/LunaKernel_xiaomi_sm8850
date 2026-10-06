@@ -64,8 +64,12 @@ verify_autofdo_compile_commands() {
     python3 "${HOST_WORKSPACE_DIR}/tools/audit_compile_commands.py" \
         "${BUILD_DIR}" "${AUTOFDO_PROFILE}" "${SM8850_C_ARCH}" \
         "${SM8850_TUNE_CPU}" "${SM8850_RUST_FEATURES}" \
-        "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" "${CI_TOOLCHAIN_DIR}"
-    log_success "全部 C、Rust、helper 与 bitcode 后端的实际 SM8850/AutoFDO 编译参数检查通过"
+        "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" "${CI_TOOLCHAIN_DIR}" "$@"
+    if [ "${1:-}" = --preflight ]; then
+        log_success "本次预编译的 C、Rust core、helper 与 bitcode 实际参数检查通过"
+    else
+        log_success "全部 C、Rust、helper 与 bitcode 后端的实际 SM8850/AutoFDO 编译参数检查通过"
+    fi
 }
 
 reject_git_environment_overrides() {
@@ -2235,7 +2239,7 @@ cp -f "${BUILD_DIR}/.config" "${AUDIT_DIR}/config.current"
 log_step "先验证新编译器的实际 C、Rust core 与 inline helper 编译路径"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" rust/core.o rust/kernel.o \
     kernel/sched/fair.o mm/filemap.o fs/f2fs/node.o -j"${BUILD_JOBS}"
-verify_autofdo_compile_commands
+verify_autofdo_compile_commands --preflight
 cp -f "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" \
     "${AUDIT_DIR}/autofdo-compile-commands.preflight.tsv"
 cp -f "${AUDIT_DIR}/llvm-target-attributes.current.tsv" \
