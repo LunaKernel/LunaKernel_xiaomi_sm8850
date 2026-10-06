@@ -38,8 +38,8 @@ luna-xiaomi17-g<8位提交>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<8位提交>-YYYYMMDD
 ```
 
-完整审计归档、工作日志和 `.build-artifacts` 清单位于 `work/audit/<同名目录>/`；Manager、IPSet 与 SUSFS 配套产物位于 `work/components/<同名目录>/`。清单绑定全部交付文件的 SHA-256 和项目相对路径，OrbStack 保持这些目录关系。
+完整审计归档、工作日志和 `.build-artifacts` 清单位于 `work/audit/<同名目录>/`；IPSet 命令与 KernelSU 模块 ZIP 位于 `work/components/<同名目录>/`。默认交付集合包含 Image、内核 ZIP、审计 ZIP、IPSet 命令与 IPSet 模块 ZIP 共五个文件。清单绑定全部交付文件的 SHA-256 和项目相对路径，OrbStack 保持这些目录关系；历史发布清单按原有文件集合校验。
 
-AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。KernelSU 保持 built-in，Manager 使用同提交官方 CI 签名 APK；首次获取需要已认证的 gh，不需要本地 Gradle 构建。
+AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。KernelSU/SUSFS 保持内核集成；Manager 由用户独立获取匹配内核接口的官方版本。标准流程不下载 Manager，不打包 SUSFS KernelSU 模块或独立 helper。
 
 构建只接受干净项目提交；成功后状态为 `awaiting-device`，不等同于实机验收。内核产物保留最新三套，第四套经用户确认验收后再清理最旧一套；构建不会提前删除旧内核产物。构建审计（含日志、失败快照）、回移审计及配套组件按类别各保留 `.env` 的 `WORK_HISTORY_KEEP=3` 份，生成流程退出或宿主导入完成后自动清理超额记录。构建记录按目录时间排序，回移审计按快照日期排序，同快照复用目录。审计被轮换掉的旧内核不再构成可重新发布的完整集合。外部 `evidence/` 由用户手动管理。

@@ -27,7 +27,7 @@ Only the device and OS version above are supported. Back up the current boot ima
 
 ## Features and improvements
 
-- Built-in KernelSU `v3.3.0-50-g623eba3e` with UAPI 4 and its matching official Manager.
+- Built-in KernelSU `v3.3.0-50-g623eba3e` with UAPI 4; obtain a compatible official Manager separately.
 - SUSFS v2.3.0; `OPEN_REDIRECT` is not built and debug logging defaults to off.
 - Baseband Guard protection for baseband and critical block-device write paths.
 - IPSet 7.24 kernel support plus a separate KernelSU userspace module.

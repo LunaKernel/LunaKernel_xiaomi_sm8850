@@ -244,7 +244,7 @@ verify_susfs_integration() {
     local allowed_common allowed_ksu
     local actual_sha256 source_file target_file
     grep -Fxq "static const __u32 KERNEL_SU_UAPI_VERSION = ${KSU_UAPI_VERSION};" \
-        "${KSU_DIR}/uapi/supercall.h" || die "KernelSU 与固定 Manager 的 UAPI 版本不匹配"
+        "${KSU_DIR}/uapi/supercall.h" || die "KernelSU UAPI 版本与固定内核接口不匹配"
     verify_rejected_susfs_fdinfo_hunk \
         "${COMMON_SUSFS_PATCH_FILE}" "${COMMON_DIR}" \
         "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_COMMON_FIX_PATCH_FILE}"

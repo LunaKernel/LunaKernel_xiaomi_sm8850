@@ -595,40 +595,6 @@ setup_toolchain() {
     log_success "固定工具链准备完成: $("${CI_TOOLCHAIN_DIR}/bin/clang" --version | sed -n '1p')"
 }
 
-prepare_kernelsu_manager() {
-    local manager_dir manager_path archive actual_sha256 metadata expected
-    manager_dir="${ENVIRONMENT_DIR}/kernelsu/${KSU_COMMIT:0:8}"
-    manager_path="${manager_dir}/${KSU_MANAGER_APK}"
-    mkdir -p "${manager_dir}"
-    if [ ! -f "${manager_path}" ]; then
-        archive="${manager_dir}/manager-${KSU_MANAGER_ARTIFACT_ID}.zip"
-        if [ ! -f "${archive}" ]; then
-            command -v gh >/dev/null 2>&1 || die "下载官方 CI Manager 需要已认证的 gh；已有固定 APK 可直接复用"
-            metadata="$(gh api "repos/tiann/KernelSU/actions/artifacts/${KSU_MANAGER_ARTIFACT_ID}" \
-                --jq '[.workflow_run.id, .workflow_run.head_sha, .digest, .name] | @tsv')"
-            expected="$(printf '%s\t%s\tsha256:%s\tmanager' \
-                "${KSU_MANAGER_RUN_ID}" "${KSU_COMMIT}" "${KSU_MANAGER_ARCHIVE_SHA256}")"
-            [ "${metadata}" = "${expected}" ] || die "官方 Manager CI 来源与固定提交不匹配"
-            [ "${KSU_MANAGER_URL}" = "https://api.github.com/repos/tiann/KernelSU/actions/artifacts/${KSU_MANAGER_ARTIFACT_ID}/zip" ] || \
-                die "官方 Manager CI 归档地址不匹配"
-            log_step "下载同提交官方 CI Manager（不编译 APK）"
-            gh api "repos/tiann/KernelSU/actions/artifacts/${KSU_MANAGER_ARTIFACT_ID}/zip" > "${archive}.part"
-            [ "$(sha256sum "${archive}.part" | awk '{ print $1 }')" = "${KSU_MANAGER_ARCHIVE_SHA256}" ] || \
-                die "官方 Manager CI 归档 SHA-256 不匹配"
-            mv "${archive}.part" "${archive}"
-        fi
-        [ "$(sha256sum "${archive}" | awk '{ print $1 }')" = "${KSU_MANAGER_ARCHIVE_SHA256}" ] || \
-            die "缓存 Manager CI 归档 SHA-256 不匹配"
-        unzip -p "${archive}" "${KSU_MANAGER_APK}" > "${manager_path}.part"
-        [ "$(sha256sum "${manager_path}.part" | awk '{ print $1 }')" = "${KSU_MANAGER_SHA256}" ] || \
-            die "归档中的 Manager APK SHA-256 不匹配"
-        mv "${manager_path}.part" "${manager_path}"
-    fi
-    actual_sha256="$(sha256sum "${manager_path}" | awk '{ print $1 }')"
-    [ "${actual_sha256}" = "${KSU_MANAGER_SHA256}" ] || die "KernelSU Manager SHA-256 不匹配: ${actual_sha256}"
-    log_success "官方 KernelSU Manager 校验通过: ${KSU_MANAGER_APK}"
-}
-
 prepare_magiskboot() {
     local magisk_dir apk_path binary_path part_path actual_sha256
 
@@ -817,9 +783,6 @@ KSU_COMMIT="${KSU_COMMIT:-623eba3e092b911a3a7389b7d87622a5835d2f3a}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2651}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
-KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.3.0-50-g623eba3e_32651-release.apk}"
-KSU_MANAGER_URL="${KSU_MANAGER_URL:-https://api.github.com/repos/tiann/KernelSU/actions/artifacts/10745463923/zip}"
-KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-1c7cec1aa8a1d6bd023efdf31dd9f5fa5deb5e84acc904ae1b8e3a5097171b45}"
 MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
 MAGISK_APK_URL="${MAGISK_APK_URL:-https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk}"
@@ -1231,7 +1194,6 @@ verify_source_baseline
 setup_toolchain
 prepare_magiskboot
 prepare_anykernel_tools
-[ "${ENABLE_KERNELSU}" != "1" ] || prepare_kernelsu_manager
 
 log_success "源码与编译环境初始化完成"
 log_info "soc-repo: ${SOC_DIR}"

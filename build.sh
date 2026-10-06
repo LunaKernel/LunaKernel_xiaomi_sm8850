@@ -415,7 +415,7 @@ verify_kernelsu_source_state() {
     verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}" "0"
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
     grep -Fxq "static const __u32 KERNEL_SU_UAPI_VERSION = ${KSU_UAPI_VERSION};" \
-        "${KSU_DIR}/uapi/supercall.h" || die "KernelSU 与固定 Manager 的 UAPI 版本不匹配"
+        "${KSU_DIR}/uapi/supercall.h" || die "KernelSU UAPI 版本与固定内核接口不匹配"
     [ "$(grep -Fxc "${kconfig_line}" "${COMMON_DIR}/drivers/Kconfig")" = "1" ] || die "KernelSU Kconfig 接入状态异常"
     [ "$(tail -n 2 "${COMMON_DIR}/drivers/Kconfig")" = "${kconfig_line}"$'\nendmenu' ] || die "KernelSU Kconfig 接入位置异常"
     [ "$(grep -Fxc "${makefile_line}" "${COMMON_DIR}/drivers/Makefile")" = "1" ] || die "KernelSU Kbuild 接入状态异常"
@@ -1687,15 +1687,12 @@ KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2651}"
 KSU_VERSION_CODE="${KSU_VERSION_CODE:-32651}"
 KSU_SELINUX_HIDE_FIX_COMMIT="${KSU_SELINUX_HIDE_FIX_COMMIT:-3f388ef137c78e1ca0c92c0ada3b8717cdcc4302}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
-KSU_MANAGER_APK="${KSU_MANAGER_APK:-KernelSU_v3.3.0-50-g623eba3e_32651-release.apk}"
-KSU_MANAGER_SHA256="${KSU_MANAGER_SHA256:-1c7cec1aa8a1d6bd023efdf31dd9f5fa5deb5e84acc904ae1b8e3a5097171b45}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
 SUSFS_COMMIT="${SUSFS_COMMIT:-b213c54126fb243595ce7876e91d84d6e0861fec}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
 SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-b213c54126fb243595ce7876e91d84d6e0861fec}"
-SUSFS_HELPER_SHA256="${SUSFS_HELPER_SHA256:-4b4c392851723a08af49c5a104462897ec9e2fac89f3a2b3faa291290341c749}"
 SUSFS_CONTEXT_ADAPTATION="${HOST_WORKSPACE_DIR}/${SUSFS_CONTEXT_PATCH}"
 SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
 SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
@@ -2283,39 +2280,6 @@ TARGET_IMAGE="${PRODUCT_DIR}/Image-luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEAS
 cp -f "${IMAGE_PATH}" "${TARGET_IMAGE}"
 RELEASE_ARTIFACTS+=("${PRODUCT_RELATIVE_DIR}/$(basename "${TARGET_IMAGE}")")
 log_success "内核 Image 编译成功: ${TARGET_IMAGE}"
-
-if [ "${ENABLE_KERNELSU}" = "1" ]; then
-    KSU_MANAGER_PATH="${ENVIRONMENT_DIR}/kernelsu/${KSU_COMMIT:0:8}/${KSU_MANAGER_APK}"
-    [ -f "${KSU_MANAGER_PATH}" ] || die "官方 KernelSU Manager 缺失，请先运行 ./init.sh"
-    [ "$(sha256sum "${KSU_MANAGER_PATH}" | awk '{ print $1 }')" = "${KSU_MANAGER_SHA256}" ] || die "官方 KernelSU Manager SHA-256 校验失败"
-    cp -f "${KSU_MANAGER_PATH}" "${COMPONENT_DIR}/${KSU_MANAGER_APK}"
-    RELEASE_ARTIFACTS+=("${COMPONENT_RELATIVE_DIR}/${KSU_MANAGER_APK}")
-    log_success "官方 KernelSU Manager 已复制到组件目录"
-fi
-
-if [ "${ENABLE_SUSFS}" = "1" ]; then
-    SUSFS_HELPER="${SUSFS_DIR}/ksu_module_susfs/tools/ksu_susfs_arm64"
-    SUSFS_MODULE_NAME="susfs4ksu-v2.3.0-${SUSFS_COMMIT:0:12}.zip"
-    [ -x "${SUSFS_HELPER}" ] || die "官方 ksu_susfs arm64 helper 缺失"
-    [ "$(sha256sum "${SUSFS_HELPER}" | awk '{ print $1 }')" = "${SUSFS_HELPER_SHA256}" ] || \
-        die "官方 ksu_susfs arm64 helper SHA-256 校验失败"
-    grep -Fx 'version=v2.3.0' "${SUSFS_DIR}/ksu_module_susfs/module.prop" >/dev/null || \
-        die "SUSFS module.prop 版本不是 v2.3.0"
-    SUSFS_MODULE_STAGE="$(mktemp -d "${BUILD_TEMP_DIR}/susfs-module.XXXXXX")"
-    cp -a "${SUSFS_DIR}/ksu_module_susfs/." "${SUSFS_MODULE_STAGE}/"
-    normalize_archive_timestamps "${SUSFS_MODULE_STAGE}"
-    (cd "${SUSFS_MODULE_STAGE}" && \
-        TZ=UTC 7z a -tzip -mtc=off -mta=off "${COMPONENT_DIR}/${SUSFS_MODULE_NAME}" . >/dev/null)
-    unzip -p "${COMPONENT_DIR}/${SUSFS_MODULE_NAME}" tools/ksu_susfs_arm64 | sha256sum | \
-        grep -Fx "${SUSFS_HELPER_SHA256}  -" >/dev/null || die "SUSFS 模块内 helper 校验失败"
-    case "${SUSFS_MODULE_STAGE}" in
-        "${BUILD_TEMP_DIR}"/susfs-module.*) rm -rf -- "${SUSFS_MODULE_STAGE}" ;;
-        *) die "拒绝清理异常 SUSFS 模块暂存目录" ;;
-    esac
-    cp -f "${SUSFS_HELPER}" "${COMPONENT_DIR}/ksu_susfs_arm64"
-    RELEASE_ARTIFACTS+=("${COMPONENT_RELATIVE_DIR}/${SUSFS_MODULE_NAME}" "${COMPONENT_RELATIVE_DIR}/ksu_susfs_arm64")
-    log_success "官方 SUSFS helper 与模块已输出: ${SUSFS_MODULE_NAME}"
-fi
 
 AK3_UPSTREAM_DIR="${AK3_TEMPLATE_DIR}/upstream"
 AK3_LUNA_PATCH="${AK3_TEMPLATE_DIR}/luna.patch"

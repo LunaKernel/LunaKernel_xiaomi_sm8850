@@ -27,8 +27,8 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 当前固定组件：
 
-- KernelSU `v3.3.0-50-g623eba3e`：`623eba3e092b911a3a7389b7d87622a5835d2f3a`，SUSFS 官方明确配套的 main 快照，built-in，version code `32651`、UAPI `4`。Manager MUST 来自该提交官方 CI 的最终签名 artifact 并校验固定归档与 APK 摘要。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 object 被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。
-- SUSFS v2.3.0：`b213c54126fb243595ce7876e91d84d6e0861fec`；common、KernelSU 官方兼容补丁和 helper 取自同一提交。已吸收的三个重复补修 MUST 删除；剩余差异与上下文见 `patches/susfs/b213c54-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
+- KernelSU `v3.3.0-50-g623eba3e`：`623eba3e092b911a3a7389b7d87622a5835d2f3a`，SUSFS 官方明确配套的 main 快照，built-in，version code `32651`、UAPI `4`。Manager 由用户独立获取匹配内核接口的官方版本，不属于项目下载、构建或交付目标。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 object 被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。
+- SUSFS v2.3.0：`b213c54126fb243595ce7876e91d84d6e0861fec`；common 与 KernelSU 官方兼容补丁取自同一提交。SUSFS KernelSU 模块 ZIP 与独立 helper 不属于项目交付目标；内核能力保持启用。已吸收的三个重复补修 MUST 删除；剩余差异与上下文见 `patches/susfs/b213c54-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
 - Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
 
