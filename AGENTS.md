@@ -29,7 +29,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 - KernelSU `v3.3.0-50-g623eba3e`：`623eba3e092b911a3a7389b7d87622a5835d2f3a`，SUSFS 官方明确配套的 main 快照，built-in，version code `32651`、UAPI `4`。Manager 由用户独立获取匹配内核接口的官方版本，不属于项目下载、构建或交付目标。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 object 被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。
 - SUSFS v2.3.0：`b213c54126fb243595ce7876e91d84d6e0861fec`；common 与 KernelSU 官方兼容补丁取自同一提交。SUSFS KernelSU 模块 ZIP 与独立 helper 不属于项目交付目标；内核能力保持启用。已吸收的三个重复补修 MUST 删除；剩余差异与上下文见 `patches/susfs/b213c54-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
-- Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；boot/recovery 分区保护关闭，其余能力启用。
+- Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；file_permission、mmap_file 与 file_mprotect 在凭据检查前排除无关操作和非块设备，保护策略不变。boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
 
 内核直接修复仅授权 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节硬门禁及完整差异审计；拒绝收益极小、路径无关、来源不清或逻辑证据不足的改动。缺少实机性能数据本身不构成否决，不得将机制不明的猜测视为优化。r21 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得重复回移。
@@ -99,6 +99,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 - LSM 展开后的 `MAX_LSM_COUNT` 必须与实际启用的 LSM 数量精确一致；当前参考值为 6，BBG 占 1 槽，KernelSU 不得额外注册 LSM。
 - Clang r596125（22.0.2）、Rust 1.97.0-dev 与 build-tools 必须来自固定 AOSP Git subtree，同时校验完整上游 Git tree 与明确检出内容的 SHA-256；bindgen 0.72.1 和宿主 bc 必须校验固定 AOSP Git blob 与 SHA-256。Clang 与 Rust 的 LLVM 主版本必须相同，`RUST_INLINE_HELPERS` 必须启用。Rust 必须独立安装，禁止覆盖 Clang 的 LLVM 共享库；完整工具链安装树摘要必须保持 `d962642b792c48a2fc35457d0f72058cad6e7778b682e3a5f52c0d081113bc64`，并与 `.env` 固定值一致。
 - AutoFDO MUST 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，路径和 SHA-256 由 `.env` 固定；构建前校验 Git blob 身份及固定 LLVM 的读取能力，实际 C/Rust 命令 MUST 包含对应 sample-use 参数。缺失或不匹配必须失败，不得静默退回普通编译；保持 `LTO_NONE`。当前编译策略见 `docs/BUILDING.md`，回移来源与审查见 `patches/backports/`。
+- ExtTSP MUST 显式禁止作用于无 profile 的函数，C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。
 - stock 清单覆盖 HyperOS 4 `OS4.0.0.9.XPCCNXM` 同一 OTA 的 boot/vendor_boot/vendor_dlkm/system_dlkm，可证明 4083 项实际 vmlinux 依赖，v5 清单摘要为 `866afc7ea549ff8aa13a53f28d242396f1a8fa356ead345709cc1b7f7a16136a`；对应五列硬门禁 tuple 摘要为 `d3add92d15233b79b94c354ad6bd74a254c8be94eba2b2c199369dc80f6a6555`。固定 system_dlkm 输入含 103 个 stock 模块，其中 102 个必须严格闭包；固定 `rust_binder.ko` 的 234 项需求必须精确保持 167 项 vmlinux/CRC 匹配、67 项 Rust 构建上下文符号缺失、0 项 CRC 或 provider 异常。该模块仅在固定启动输入未选择 Rust Binder、无导出、无模块依赖且无反向依赖的前提下作为精确例外。例外不得扩大到其他模块或更多缺失项。项目自身新增模块不计入这 103 个 stock 模块，但必须通过第 3 节所述加载与依赖门禁。
 - 同 OTA `evidence/os4/system_dlkm.img` 固定为 17281024 字节、SHA-256 `7918f34b6ae9210b8470abbe1ee52f2fc72da04bfa241627ab0c66f340ab9816`。`build.sh` 必须校验整镜像身份、AVB hashtree 自洽、EROFS 完整性以及与 stock 清单绑定关系；镜像缺失或不匹配时 MUST 在打包前失败。重建 stock 清单还需固定的 Xiaomi 四个分区镜像以及脚本校验过的 `unpack_bootimg`、`bsdtar`、kmod 和 EROFS 工具。
@@ -116,7 +117,7 @@ AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaom
 
 ## 6. 真机验证
 
-当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；Rust Binder 加载屏蔽、Rust 对齐策略、MGLRU 与 Kbuild 回移及新 IPSet 组件仍待实机验证。完整本地构建与闭包证据以新提交对应的发布审计为准。
+当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；Rust Binder 加载屏蔽、Rust 对齐策略、BBG 提前返回、ExtTSP、MGLRU 与 Kbuild 回移及新 IPSet 组件仍待实机验证。完整本地构建与闭包证据以新提交对应的发布审计为准。
 
 公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
 

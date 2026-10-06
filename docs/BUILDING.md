@@ -27,6 +27,8 @@ C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`�
 
 AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/Rust 命令必须带 sample-use 参数。构建前验证摘要、Git blob 和 LLVM 可读性；缺失或不匹配失败。该 profile 来自 Pixel 工作负载，不能据此宣称小米实测性能收益。
 
+C/Rust 后端启用 ExtTSP 基本块布局，并显式设置 `ext-tsp-apply-without-profile=false`，仅作用于有 profile 的函数。实际命令审计校验两个 LLVM 参数的最终值，防止被后续选项覆盖。Rust 仅 core 通过原生 `RUSTFLAGS_core.o` 使用四线程前端，继续遵循 GNU Make jobserver，所有内核 crate 保持 `codegen-units=1`；宿主工具保持 O2。
+
 增量构建树位于 `work/cache/kernel/`；IPSet/libmnl 位于 `.env` 固定的 `work/cache/userspace/ipset-sm8850/`，复用同一 SoC ISA 与 Oryon-1 调度参数，使用正常用户态 SIMD。其配置身份包含源码、NDK、API、路径及实际构建参数；输入匹配时增量构建，变化时仅重建该用户态缓存。配置成功后记录身份，编译中断可继续；每次交付仍校验 ELF、Android linker、依赖、版本及模块 ZIP 内容。
 
 内核与 NDK 共用 `work/cache/ccache/`，保持压缩和 `.env` 固定的 5 GiB 上限；NDK 缓存身份包含完整工具树摘要。不运行 clean/mrproper，不放宽缓存依赖校验。源码、官方审计仓库及当前下载缓存可复用，`init.sh` 不应为已有完整对象重复下载。迁移绝对路径可能使部分编译记录失效，由下次必要构建正常处理，不改写旧命令伪造缓存命中。
