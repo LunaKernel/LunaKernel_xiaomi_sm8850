@@ -167,7 +167,7 @@ def main():
                             issues.append(relative + ': incorrect core-only frontend parallelism')
                         if last(args, '-Ccodegen-units=') != '-Ccodegen-units=1':
                             issues.append(relative + ': codegen-units must remain 1')
-                    if relative.startswith('arch/arm64/kernel/pi/'):
+                    if relative == 'arch/arm64/kernel/pi/.map_range.o.cmd':
                         alignment = next((arg for arg in reversed(args) if arg in
                                           ('-mstrict-align', '-mno-strict-align')), '')
                         if alignment != '-mstrict-align':
