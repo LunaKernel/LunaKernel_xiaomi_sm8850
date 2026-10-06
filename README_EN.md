@@ -54,7 +54,7 @@ Image-luna-xiaomi17-g<short-commit>-YYYYMMDD
 
 ## Validation status
 
-The accepted baseline is `6.12.92-android16-luna-g8eb963eb-4k`, tested on OTA `.32`; the build compatibility manifest remains pinned to OTA `.9`. The Rust Binder blacklist awaits the next build and device validation. New commits do not inherit the old Image's validation identity. See [validation records](docs/VALIDATION.md).
+The accepted baseline is `6.12.92-android16-luna-g8eb963eb-4k`, tested on OTA `.32`; the build compatibility manifest remains pinned to OTA `.9`. The Rust Binder blacklist, Rust alignment policy, MGLRU backport and new IPSet component await a full build and device validation. New commits do not inherit the old Image's validation identity. See [validation records](docs/VALIDATION.md).
 
 ## Documentation
 

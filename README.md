@@ -54,7 +54,7 @@ Image-luna-xiaomi17-g<短提交>-YYYYMMDD
 
 ## 验证状态
 
-当前已验收基准为 `6.12.92-android16-luna-g8eb963eb-4k`，实机为 `.32` OTA，构建兼容性清单仍固定于 `.9` OTA。Rust Binder 加载屏蔽待下次编译和实机验收；目录整理后的新提交不继承旧 Image 的验收身份。详见 [验证记录](docs/VALIDATION.md)。
+当前已验收基准为 `6.12.92-android16-luna-g8eb963eb-4k`，实机为 `.32` OTA，构建兼容性清单仍固定于 `.9` OTA。Rust Binder 加载屏蔽、Rust 对齐策略、MGLRU 回移及新 IPSet 组件待下次完整构建和实机验收；新提交不继承旧 Image 的验收身份。详见 [验证记录](docs/VALIDATION.md)。
 
 ## 文档
 

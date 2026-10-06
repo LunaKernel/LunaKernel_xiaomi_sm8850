@@ -16,6 +16,8 @@
 
 Rust 取消普通内存 strict-align 已通过 kernel/helpers 合并 bitcode 的实际 LLVM 属性检查，softfloat 与 SIMD 禁用约束保持；仍待完整内核构建及实机验收。IPSet/libmnl 的 SM8850 参数、Android ELF/模块包、增量复用、配置失败与编译中断恢复已通过本地验证，尚未替换已验收的配套组件。
 
+MGLRU 不可回收 folio 处理回移固定于官方 `f7e698e326b239a91ea15844817551921209e826`，仅适配 r21 上下文并保留 Android vendor hook。已通过 `mm/vmscan.o` 对象编译及 35 项独立清单的单项应用、撤销与完整重放校验；完整内核、OTA 模块闭包和实机验证仍待完成。
+
 已验收 Image 的配置为 8249 行、SHA-256 `9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c`。当前 `.env` 的参考配置包含新增黑名单，尚未出现在该 Image 中。目录整理后的新提交同样没有新 Image，不能继承旧提交的实机身份。
 
 iorap2 已确认非本项目内核问题，不列为待修复项；功耗暂不追踪，用户态问题不扩展为本项目修复责任。

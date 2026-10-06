@@ -34,7 +34,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 内核直接修复仅授权 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节硬门禁及完整差异审计；拒绝收益极小、路径无关、来源不清或逻辑证据不足的改动。缺少实机性能数据本身不构成否决，不得将机制不明的猜测视为优化。r21 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得重复回移。
 
-九月 selected 回移集合有序且不可拆分：19 项逻辑修复、23 个应用提交。已吸收的层及旧 F2FS 上下文适配 MUST 删除。直接回移为 64 个逻辑项（含宿主 gendwarfksyms 兼容修复），独立项为 34 个；已删除无目标代码收益的 EAS cpumask 回移及 BBG 遗留空函数，不得把未编译路径计作有效功能。吸收、保留理由及质量证据见 `patches/backports/` 中固定 TSV。
+九月 selected 回移集合有序且不可拆分：19 项逻辑修复、23 个应用提交。已吸收的层及旧 F2FS 上下文适配 MUST 删除。直接回移为 65 个逻辑项（含宿主 gendwarfksyms 兼容修复），独立项为 35 个；已删除无目标代码收益的 EAS cpumask 回移及 BBG 遗留空函数，不得把未编译路径计作有效功能。吸收、保留理由及质量证据见 `patches/backports/` 中固定 TSV。
 
 新增高置信回移 MUST 置于 `patches/backports/kmi6-2026-09-independent/`，每份清单仅含一个逻辑项，不可拆的官方前置/补修链同清单，独立 pin SHA-256。必须以临时 Git index 证明从固定基础差异单项应用、撤销及固定顺序完整重放；授权不含清单外提交。配置、UAPI、syscall、ABI 或 KMI 影响逐项说明，不得破坏固定 OTA 模块闭包、关键启动配置或用户态语义。
 
@@ -114,7 +114,7 @@ AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaom
 
 ## 6. 真机验证
 
-当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；`a5b887dd` 的 Rust Binder 加载屏蔽及配置参考仍待下次编译与实机验收。
+当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；Rust Binder 加载屏蔽、Rust 对齐策略和 MGLRU 回移仍待完整编译与实机验收，新 IPSet 组件尚未实机验证。
 
 公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
 
