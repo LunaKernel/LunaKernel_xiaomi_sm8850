@@ -61,6 +61,10 @@ def audit_bitcode(root, toolchain, tune, report):
             effective = {flag[1:]: flag[0] for flag in features[1].split(',')}
             if any(effective.get(feature) != '-' for feature in ('neon', 'fp-armv8', 'sve')):
                 raise SystemExit(relative + ': FP/NEON/SVE enabled in ordinary kernel bitcode')
+            if effective.get('strict-align') == '+':
+                raise SystemExit(relative + ': strict-align retained in ordinary kernel bitcode')
+            if relative == 'rust/kernel.bc' and effective.get('strict-align') != '-':
+                raise SystemExit(relative + ': missing effective Rust -strict-align')
             # Clang and Rust handle SME dependencies differently. Record its
             # effective state; do not rewrite the compiler's attributes.
             rows.append([relative, index, models[0], effective.get('sme', 'unset'), features[1]])
@@ -122,6 +126,8 @@ def main():
                             issues.append(relative + ': missing or overridden ' + prefix + value)
                     if tool == 'rustc' and rust_features.split(',')[-1] != '-neon':
                         issues.append(relative + ': missing final -neon')
+                    if tool == 'rustc' and target != 'aarch64-unknown-none-softfloat':
+                        issues.append(relative + ': missing softfloat ABI')
                     if tool == 'clang' and last(args, '-mcpu='):
                         issues.append(relative + ': unexpected -mcpu')
                     skip_profile = (kind == 'clang-bitcode' or relative in no_profile_files

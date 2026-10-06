@@ -23,11 +23,13 @@
 
 固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库，并验证官方 Git 对象、明确检出树与安装树摘要。
 
-C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`、`tune-cpu=oryon-1` 与固定 ISA 列表。全部参数在 `.env`；Kbuild 保持内核 SIMD 和分支保护约束，Rust 特性列表以 `-neon` 结束。保留 O2、CFI、Rust inline helpers 与 `LTO_NONE`。
+C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`、`tune-cpu=oryon-1` 与固定 ISA 列表。全部参数在 `.env`；Kbuild 保持内核 SIMD 和分支保护约束，Rust 使用 softfloat，特性列表以 `-strict-align,-neon` 结束，允许普通内存非对齐访问；当前 Rust 对 strict-align 的不稳定特性警告保留。早期启动 C 的严格对齐保持原生规则。保留 O2、CFI、Rust inline helpers 与 `LTO_NONE`，以及上游已有的局部优化等级、汇编和链接布局。
 
 AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/Rust 命令必须带 sample-use 参数。构建前验证摘要、Git blob 和 LLVM 可读性；缺失或不匹配失败。该 profile 来自 Pixel 工作负载，不能据此宣称小米实测性能收益。
 
-增量构建树位于 `work/cache/kernel/`，项目 ccache 位于 `work/cache/ccache/`；不因目录整理运行 clean/mrproper。源码、官方审计仓库及当前下载缓存可复用，`init.sh` 不应为已有完整对象重复下载。迁移绝对路径可能使部分编译记录失效，由下次必要构建正常处理，不改写旧命令伪造缓存命中。
+增量构建树位于 `work/cache/kernel/`；IPSet/libmnl 位于 `.env` 固定的 `work/cache/userspace/ipset-sm8850/`，复用同一 SoC ISA 与 Oryon-1 调度参数，使用正常用户态 SIMD。其配置身份包含源码、NDK、API、路径及实际构建参数；输入匹配时增量构建，变化时仅重建该用户态缓存。配置成功后记录身份，编译中断可继续；每次交付仍校验 ELF、Android linker、依赖、版本及模块 ZIP 内容。
+
+内核与 NDK 共用 `work/cache/ccache/`，保持压缩和 `.env` 固定的 5 GiB 上限；NDK 缓存身份包含完整工具树摘要。不运行 clean/mrproper，不放宽缓存依赖校验。源码、官方审计仓库及当前下载缓存可复用，`init.sh` 不应为已有完整对象重复下载。迁移绝对路径可能使部分编译记录失效，由下次必要构建正常处理，不改写旧命令伪造缓存命中。
 
 ## 交付与身份
 

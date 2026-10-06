@@ -1573,42 +1573,91 @@ verify_stage_abi() {
     log_success "固定 OTA 模块闭包通过；全量 ABI/KMI/STG 差异审计保存在 ${AUDIT_DIR}"
 }
 
+enable_project_ccache() {
+    [ "${ENABLE_CCACHE:-0}" = 1 ] && command -v ccache >/dev/null 2>&1 || return 1
+    prepare_workspace_directory work/cache/ccache
+    export CCACHE_DIR="${PREPARED_DIRECTORY}"
+    export CCACHE_COMPRESS=1 CCACHE_HASHDIR=1 CCACHE_SLOPPINESS=''
+    export CCACHE_MAXSIZE="${CCACHE_MAX_SIZE:?缺少 ccache 容量上限}"
+}
+
 build_ipset_userspace() {
     local ndk_bin cc userspace_root prefix libmnl_build ipset_build binary module_dir module_zip needed unexpected_needed
+    local common_cflags libmnl_cflags ipset_cflags cppflags ldflags input_key cached_key reconfigure directory
+    local -a libmnl_configure ipset_configure
     [ "${ENABLE_IPSET}" = "1" ] || return
     ndk_bin="${ANDROID_NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    cc="${ndk_bin}/aarch64-linux-android${ANDROID_NDK_API}-clang"
-    [ -x "${cc}" ] || die "Android NDK arm64 clang 缺失，请先运行 ./init.sh"
+    [ -x "${ndk_bin}/clang" ] || die "Android NDK clang 缺失，请先运行 ./init.sh"
+    cc="${ndk_bin}/clang --target=aarch64-linux-android${ANDROID_NDK_API}"
+    if enable_project_ccache; then
+        cc="ccache ${cc}"
+    fi
     [ "$(tree_sha256 "${IPSET_DIR}")" = "${IPSET_TREE_SHA256}" ] || die "ipset 源码树完整性校验失败，请重新运行 ./init.sh"
     [ "$(tree_sha256 "${LIBMNL_DIR}")" = "${LIBMNL_TREE_SHA256}" ] || die "libmnl 源码树完整性校验失败，请重新运行 ./init.sh"
 
-    case "${BUILD_DIR%/}" in
-        /*/*) ;;
-        *) die "拒绝清理异常用户态构建根目录: ${BUILD_DIR}" ;;
+    case "${IPSET_BUILD_DIR:?缺少 IPSet 构建缓存目录}" in
+        work/cache/userspace/ipset-sm8850) ;;
+        *) die "IPSet 缓存必须位于 work/cache/userspace/ipset-sm8850" ;;
     esac
-    userspace_root="${BUILD_DIR%/}/userspace"
-    rm -rf -- "${userspace_root}"
+    prepare_workspace_directory "${IPSET_BUILD_DIR}"
+    userspace_root="${PREPARED_DIRECTORY}"
     prefix="${userspace_root}/ipset-prefix"
     libmnl_build="${userspace_root}/libmnl-build"
     ipset_build="${userspace_root}/ipset-build"
-    mkdir -p "${prefix}" "${libmnl_build}" "${ipset_build}"
+    common_cflags="-O2 -march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin} -ffunction-sections -fdata-sections"
+    libmnl_cflags="${common_cflags} -fPIC"
+    ipset_cflags="${common_cflags} -fPIE"
+    cppflags="-I${prefix}/include"
+    ldflags="-L${prefix}/lib -Wl,--gc-sections"
+    libmnl_configure=(--host=aarch64-linux-android --prefix="${prefix}" --disable-shared --enable-static)
+    ipset_configure=("${libmnl_configure[@]}" --disable-settype-modules --with-kmod=no)
+    input_key="$(printf '%s\0' ipset-cache-v1 \
+        "${IPSET_DIR}" "${IPSET_TREE_SHA256}" "${LIBMNL_DIR}" "${LIBMNL_TREE_SHA256}" \
+        "${ANDROID_NDK_DIR}" "${ANDROID_NDK_TREE_SHA256}" "${ANDROID_NDK_API}" "${cc}" \
+        "${userspace_root}" "${libmnl_cflags}" "${ipset_cflags}" "${cppflags}" "${ldflags}" \
+        "${libmnl_configure[@]}" "${ipset_configure[@]}" | sha256sum | awk '{ print $1 }')"
+    cached_key=""
+    [ ! -L "${userspace_root}/.configured-key" ] || die "IPSet 缓存身份不得为符号链接"
+    [ ! -f "${userspace_root}/.configured-key" ] || cached_key="$(cat "${userspace_root}/.configured-key")"
+    reconfigure=0
+    if [ "${input_key}" != "${cached_key}" ] || \
+        [ ! -s "${libmnl_build}/config.status" ] || [ ! -s "${ipset_build}/config.status" ] || \
+        [ ! -s "${libmnl_build}/Makefile" ] || [ ! -s "${ipset_build}/Makefile" ]; then
+        reconfigure=1
+        rm -rf -- "${userspace_root}"
+    fi
+    for directory in ipset-prefix libmnl-build ipset-build; do
+        prepare_workspace_directory "${IPSET_BUILD_DIR}/${directory}"
+    done
 
-    log_step "使用 Android NDK 构建静态 arm64 libmnl ${LIBMNL_VERSION}"
-    (cd "${libmnl_build}" && env \
-        CC="${cc}" AR="${ndk_bin}/llvm-ar" RANLIB="${ndk_bin}/llvm-ranlib" STRIP="${ndk_bin}/llvm-strip" \
-        CFLAGS='-O2 -fPIC -ffunction-sections -fdata-sections' LDFLAGS='-Wl,--gc-sections' \
-        "${LIBMNL_DIR}/configure" --host=aarch64-linux-android --prefix="${prefix}" --disable-shared --enable-static)
-    make -C "${libmnl_build}" -j"${BUILD_JOBS}" install >/dev/null
-
-    log_step "使用 Android NDK 构建内置 libipset/libmnl 的 arm64 ipset ${IPSET_VERSION}"
-    (cd "${ipset_build}" && env \
-        CC="${cc}" AR="${ndk_bin}/llvm-ar" RANLIB="${ndk_bin}/llvm-ranlib" STRIP="${ndk_bin}/llvm-strip" \
-        PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
-        CPPFLAGS="-I${prefix}/include" LDFLAGS="-L${prefix}/lib -Wl,--gc-sections" \
-        CFLAGS='-O2 -fPIE -ffunction-sections -fdata-sections' \
-        "${IPSET_DIR}/configure" --host=aarch64-linux-android --prefix="${prefix}" \
-            --disable-shared --enable-static --disable-settype-modules --with-kmod=no)
-    make -C "${ipset_build}" -j"${BUILD_JOBS}" >/dev/null
+    log_step "构建 SM8850 arm64 IPSet/libmnl: ${common_cflags} (配置缓存: ${input_key})"
+    (
+        # The complete NDK install tree was verified before any compiler runs.
+        export CCACHE_NAMESPACE="ndk-${ANDROID_NDK_TREE_SHA256}"
+        export CC="${cc}" AR="${ndk_bin}/llvm-ar" RANLIB="${ndk_bin}/llvm-ranlib" STRIP="${ndk_bin}/llvm-strip"
+        if [ "${reconfigure}" = 1 ]; then
+            (cd "${libmnl_build}" && env CFLAGS="${libmnl_cflags}" LDFLAGS='-Wl,--gc-sections' \
+                "${LIBMNL_DIR}/configure" "${libmnl_configure[@]}" >/dev/null)
+        fi
+        make -C "${libmnl_build}" -j"${BUILD_JOBS}" >/dev/null
+        # Reinstalling unchanged headers/archive would force an IPSet relink.
+        if ! cmp -s "${libmnl_build}/src/.libs/libmnl.a" "${prefix}/lib/libmnl.a" || \
+            ! cmp -s "${LIBMNL_DIR}/include/libmnl/libmnl.h" "${prefix}/include/libmnl/libmnl.h" || \
+            ! cmp -s "${libmnl_build}/libmnl.pc" "${prefix}/lib/pkgconfig/libmnl.pc"; then
+            make -C "${libmnl_build}" -j"${BUILD_JOBS}" install >/dev/null
+        fi
+        if [ "${reconfigure}" = 1 ]; then
+            (cd "${ipset_build}" && env \
+                PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
+                CPPFLAGS="${cppflags}" LDFLAGS="${ldflags}" CFLAGS="${ipset_cflags}" \
+                "${IPSET_DIR}/configure" "${ipset_configure[@]}" >/dev/null)
+            printf '%s\n' "${input_key}" > "${userspace_root}/.configured-key.tmp"
+            mv -f -- "${userspace_root}/.configured-key.tmp" "${userspace_root}/.configured-key"
+        else
+            log_success "复用 IPSet/libmnl 配置，执行增量构建"
+        fi
+        make -C "${ipset_build}" -j"${BUILD_JOBS}" >/dev/null
+    )
     binary="${ipset_build}/src/ipset"
     [ -s "${binary}" ] || die "Android arm64 ipset 命令未生成"
     file "${binary}" | grep -Eq 'ELF 64-bit.*ARM aarch64' || die "ipset 不是 arm64 ELF"
@@ -1977,9 +2026,7 @@ export RUSTC=rustc HOSTRUSTC=rustc BINDGEN=bindgen LIBCLANG_PATH="${CI_TOOLCHAIN
 export ARCH=arm64 SUBARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 export KBUILD_GENDWARFKSYMS_STABLE=1 IN_KERNEL_MODULES=1 DO_NOT_STRIP_MODULES=1 PAGE_SIZE=4096
 export CC=clang HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" LD=ld.lld HOSTLD=/usr/bin/ld HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
-if [ "${ENABLE_CCACHE:-0}" = 1 ] && command -v ccache >/dev/null 2>&1; then
-    prepare_workspace_directory work/cache/ccache
-    export CCACHE_DIR="${PREPARED_DIRECTORY}"
+if enable_project_ccache; then
     CC='ccache clang'
     log_success "复用项目 ccache 编译缓存: ${CCACHE_DIR}"
 fi
