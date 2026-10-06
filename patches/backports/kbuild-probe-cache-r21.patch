@@ -1,0 +1,264 @@
+Subject: [PATCH] cache existing 6.12 probes; preserve placement, flags and compiler gates
+
+Upstream-commit: 454e00cf8ee5aff555ad5865b8c3dbf3731afcc9
+Source: https://kernel.googlesource.com/pub/scm/linux/kernel/git/kbuild/linux/+/454e00cf8ee5aff555ad5865b8c3dbf3731afcc9
+
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -853,8 +853,8 @@
+ ifdef CONFIG_CC_IS_GCC
+ # gcc-10 renamed --param=allow-store-data-races=0 to
+ # -fno-allow-store-data-races.
+-KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
+-KBUILD_CFLAGS	+= $(call cc-option,-fno-allow-store-data-races)
++KBUILD_CFLAGS	+= $(CONFIG_CC_OPT_ALLOW_STORE_DATA_RACES_PARAM)
++KBUILD_CFLAGS	+= $(CONFIG_CC_OPT_NO_ALLOW_STORE_DATA_RACES)
+ endif
+ 
+ ifdef CONFIG_READABLE_ASM
+@@ -919,7 +919,7 @@
+ ifdef CONFIG_FTRACE_MCOUNT_USE_CC
+   CC_FLAGS_FTRACE	+= -mrecord-mcount
+   ifdef CONFIG_HAVE_NOP_MCOUNT
+-    ifeq ($(call cc-option-yn, -mnop-mcount),y)
++    ifdef CONFIG_CC_HAS_MNOP_MCOUNT
+       CC_FLAGS_FTRACE	+= -mnop-mcount
+       CC_FLAGS_USING	+= -DCC_USING_NOP_MCOUNT
+     endif
+@@ -938,7 +938,7 @@
+ endif
+ ifdef CONFIG_HAVE_FENTRY
+   # s390-linux-gnu-gcc did not support -mfentry until gcc-9.
+-  ifeq ($(call cc-option-yn, -mfentry),y)
++  ifdef CONFIG_CC_HAS_MFENTRY
+     CC_FLAGS_FTRACE	+= -mfentry
+     CC_FLAGS_USING	+= -DCC_USING_FENTRY
+   endif
+@@ -1032,7 +1032,7 @@
+ # the kernel uses only C99 flexible arrays for dynamically sized trailing
+ # arrays. Enforce this for everything that may examine structure sizes and
+ # perform bounds checking.
+-KBUILD_CFLAGS += $(call cc-option, -fstrict-flex-arrays=3)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_STRICT_FLEX_ARRAYS)
+ 
+ # disable invalid "can't wrap" optimizations for signed / pointers
+ KBUILD_CFLAGS	+= -fno-strict-overflow
+@@ -1084,7 +1084,7 @@
+ 
+ KBUILD_LDFLAGS	+= -z noexecstack
+ ifeq ($(CONFIG_LD_IS_BFD),y)
+-KBUILD_LDFLAGS	+= $(call ld-option,--no-warn-rwx-segments)
++KBUILD_LDFLAGS	+= $(CONFIG_LD_OPT_NO_WARN_RWX_SEGMENTS)
+ endif
+ 
+ ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
+diff --git a/arch/arm64/kernel/pi/Makefile b/arch/arm64/kernel/pi/Makefile
+--- a/arch/arm64/kernel/pi/Makefile
++++ b/arch/arm64/kernel/pi/Makefile
+@@ -9,7 +9,7 @@
+ 		   -include $(srctree)/include/linux/hidden.h \
+ 		   -D__DISABLE_EXPORTS -ffreestanding -D__NO_FORTIFY \
+ 		   -fno-asynchronous-unwind-tables -fno-unwind-tables \
+-		   $(call cc-option,-fno-addrsig)
++		   $(CONFIG_CC_OPT_NO_ADDRSIG)
+ 
+ # this code may run with the MMU off so disable unaligned accesses
+ CFLAGS_map_range.o += -mstrict-align
+diff --git a/drivers/firmware/efi/libstub/Makefile b/drivers/firmware/efi/libstub/Makefile
+--- a/drivers/firmware/efi/libstub/Makefile
++++ b/drivers/firmware/efi/libstub/Makefile
+@@ -15,7 +15,7 @@
+ 				   -fPIC -fno-strict-aliasing -mno-red-zone \
+ 				   -mno-mmx -mno-sse -fshort-wchar \
+ 				   -Wno-pointer-sign \
+-				   $(call cc-disable-warning, address-of-packed-member) \
++				   $(CONFIG_CC_OPT_WNO_ADDRESS_OF_PACKED_MEMBER) \
+ 				   $(call cc-disable-warning, gnu) \
+ 				   -fno-asynchronous-unwind-tables \
+ 				   $(CLANG_FLAGS)
+@@ -41,7 +41,7 @@
+ 				   -D__NO_FORTIFY \
+ 				   -ffreestanding \
+ 				   -fno-stack-protector \
+-				   $(call cc-option,-fno-addrsig) \
++				   $(CONFIG_CC_OPT_NO_ADDRSIG) \
+ 				   -D__DISABLE_EXPORTS
+ 
+ #
+diff --git a/init/Kconfig b/init/Kconfig
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -137,6 +137,83 @@
+ 
+ config CC_HAS_NO_PROFILE_FN_ATTR
+ 	def_bool $(success,echo '__attribute__((no_profile_instrument_function)) int x();' | $(CC) -x c - -c -o /dev/null -Werror)
++
++config CC_OPT_ZERO_INIT_PADDING_BITS
++	string
++	default "$(cc-option-str,-fzero-init-padding-bits=all)"
++
++config CC_OPT_NO_ADDRSIG
++	string
++	default "$(cc-option-str,-fno-addrsig)"
++
++config CC_OPT_STRICT_FLEX_ARRAYS
++	string
++	default "$(cc-option-str,-fstrict-flex-arrays=3)"
++
++config CC_OPT_ALLOW_STORE_DATA_RACES_PARAM
++	string
++	default "$(cc-option-str,--param=allow-store-data-races=0)" if CC_IS_GCC
++
++config CC_OPT_NO_ALLOW_STORE_DATA_RACES
++	string
++	default "$(cc-option-str,-fno-allow-store-data-races)" if CC_IS_GCC
++
++config CC_HAS_MNOP_MCOUNT
++	def_bool $(cc-option,-mnop-mcount)
++
++config CC_HAS_MFENTRY
++	def_bool $(cc-option,-mfentry)
++
++config LD_OPT_NO_WARN_RWX_SEGMENTS
++	string
++	default "$(ld-option-str,--no-warn-rwx-segments)"
++
++config CC_OPT_WNO_ADDRESS_OF_PACKED_MEMBER
++	string
++	default "-Wno-address-of-packed-member" if $(cc-option,-Waddress-of-packed-member)
++
++config CC_OPT_WNO_FORMAT_OVERFLOW_NON_KPRINTF
++	string
++	default "-Wno-format-overflow-non-kprintf" if CC_IS_CLANG && $(cc-option,-Wformat-overflow-non-kprintf)
++
++config CC_OPT_WNO_FORMAT_TRUNCATION_NON_KPRINTF
++	string
++	default "-Wno-format-truncation-non-kprintf" if CC_IS_CLANG && $(cc-option,-Wformat-truncation-non-kprintf)
++
++config CC_OPT_WNO_DEFAULT_CONST_INIT_UNSAFE
++	string
++	default "-Wno-default-const-init-unsafe" if CC_IS_CLANG && $(cc-option,-Wdefault-const-init-unsafe)
++
++config CC_OPT_WNO_DANGLING_POINTER
++	string
++	default "-Wno-dangling-pointer" if $(cc-option,-Wdangling-pointer)
++
++config CC_HAS_WSTRINGOP_OVERFLOW
++	def_bool $(cc-option,-Wstringop-overflow)
++
++config CC_OPT_WNO_UNTERMINATED_STRING_INITIALIZATION
++	string
++	default "-Wno-unterminated-string-initialization" if $(cc-option,-Wunterminated-string-initialization)
++
++config CC_OPT_WERROR_DESIGNATED_INIT
++	string
++	default "$(cc-option-str,-Werror=designated-init)"
++
++config CC_OPT_WENUM_CONVERSION
++	string
++	default "$(cc-option-str,-Wenum-conversion)"
++
++config CC_OPT_WNO_PACKED_NOT_ALIGNED
++	string
++	default "-Wno-packed-not-aligned" if $(cc-option,-Wpacked-not-aligned)
++
++config CC_OPT_WNO_FORMAT_OVERFLOW
++	string
++	default "-Wno-format-overflow" if $(cc-option,-Wformat-overflow)
++
++config CC_OPT_WNO_STRINGOP_TRUNCATION
++	string
++	default "-Wno-stringop-truncation" if $(cc-option,-Wstringop-truncation)
+ 
+ config CC_HAS_COUNTED_BY
+ 	# TODO: when gcc 15 is released remove the build test and add
+diff --git a/scripts/Makefile.extrawarn b/scripts/Makefile.extrawarn
+--- a/scripts/Makefile.extrawarn
++++ b/scripts/Makefile.extrawarn
+@@ -17,7 +17,7 @@
+ KBUILD_CFLAGS += -Wno-format-security
+ KBUILD_CFLAGS += -Wno-trigraphs
+ KBUILD_CFLAGS += $(call cc-disable-warning, frame-address)
+-KBUILD_CFLAGS += $(call cc-disable-warning, address-of-packed-member)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_ADDRESS_OF_PACKED_MEMBER)
+ 
+ ifneq ($(CONFIG_FRAME_WARN),0)
+ KBUILD_CFLAGS += -Wframe-larger-than=$(CONFIG_FRAME_WARN)
+@@ -33,8 +33,8 @@
+ 
+ # Clang checks for overflow/truncation with '%p', while GCC does not:
+ # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111219
+-KBUILD_CFLAGS += $(call cc-disable-warning, format-overflow-non-kprintf)
+-KBUILD_CFLAGS += $(call cc-disable-warning, format-truncation-non-kprintf)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_FORMAT_OVERFLOW_NON_KPRINTF)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_FORMAT_TRUNCATION_NON_KPRINTF)
+ 
+ # Clang may emit a warning when a const variable, such as the dummy variables
+ # in typecheck(), or const member of an aggregate type are not initialized,
+@@ -46,7 +46,7 @@
+ # disabled with this same switch, there should not be too much coverage lost
+ # because -Wuninitialized will still flag when an uninitialized const variable
+ # is used.
+-KBUILD_CFLAGS += $(call cc-disable-warning, default-const-init-unsafe)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_DEFAULT_CONST_INIT_UNSAFE)
+ else
+ 
+ # gcc inanely warns about local variables called 'main'
+@@ -54,7 +54,7 @@
+ endif
+ 
+ # These result in bogus false positives
+-KBUILD_CFLAGS += $(call cc-disable-warning, dangling-pointer)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_DANGLING_POINTER)
+ 
+ # Variable Length Arrays (VLAs) should not be used anywhere in the kernel
+ KBUILD_CFLAGS += -Wvla
+@@ -68,11 +68,11 @@
+ KBUILD_CFLAGS += $(call cc-option, -Wcast-function-type)
+ 
+ # Currently, disable -Wstringop-overflow for GCC 11, globally.
+-KBUILD_CFLAGS-$(CONFIG_CC_NO_STRINGOP_OVERFLOW) += $(call cc-disable-warning, stringop-overflow)
+-KBUILD_CFLAGS-$(CONFIG_CC_STRINGOP_OVERFLOW) += $(call cc-option, -Wstringop-overflow)
++KBUILD_CFLAGS-$(CONFIG_CC_NO_STRINGOP_OVERFLOW) += $(if $(CONFIG_CC_HAS_WSTRINGOP_OVERFLOW),-Wno-stringop-overflow)
++KBUILD_CFLAGS-$(CONFIG_CC_STRINGOP_OVERFLOW) += $(if $(CONFIG_CC_HAS_WSTRINGOP_OVERFLOW),-Wstringop-overflow)
+ 
+ # Currently, disable -Wunterminated-string-initialization as broken
+-KBUILD_CFLAGS += $(call cc-disable-warning, unterminated-string-initialization)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_UNTERMINATED_STRING_INITIALIZATION)
+ 
+ # The allocators already balk at large sizes, so silence the compiler
+ # warnings for bounds checks involving those possible values. While
+@@ -95,13 +95,13 @@
+ KBUILD_CFLAGS += $(call cc-option,-Werror=incompatible-pointer-types)
+ 
+ # Require designated initializers for all marked structures
+-KBUILD_CFLAGS += $(call cc-option,-Werror=designated-init)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WERROR_DESIGNATED_INIT)
+ 
+ # Warn if there is an enum types mismatch
+-KBUILD_CFLAGS += $(call cc-option,-Wenum-conversion)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WENUM_CONVERSION)
+ 
+ # Explicitly clear padding bits during variable initialization
+-KBUILD_CFLAGS += $(call cc-option,-fzero-init-padding-bits=all)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_ZERO_INIT_PADDING_BITS)
+ 
+ KBUILD_CFLAGS += -Wunused
+ 
+@@ -125,12 +125,12 @@
+ # Suppress them by using -Wno... except for W=1.
+ KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
+ KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
+-KBUILD_CFLAGS += $(call cc-disable-warning, packed-not-aligned)
+-KBUILD_CFLAGS += $(call cc-disable-warning, format-overflow)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_PACKED_NOT_ALIGNED)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_FORMAT_OVERFLOW)
+ ifdef CONFIG_CC_IS_GCC
+ KBUILD_CFLAGS += $(call cc-disable-warning, format-truncation)
+ endif
+-KBUILD_CFLAGS += $(call cc-disable-warning, stringop-truncation)
++KBUILD_CFLAGS += $(CONFIG_CC_OPT_WNO_STRINGOP_TRUNCATION)
+ 
+ KBUILD_CFLAGS += -Wno-override-init # alias for -Wno-initializer-overrides in clang
+ 

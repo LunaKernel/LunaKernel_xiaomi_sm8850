@@ -1,0 +1,39 @@
+Subject: [PATCH] cc-option-str; trim newer trailing context only
+
+Upstream-commit: 889a621272f9b7e19f35efa3d836347b4e209290
+Source: https://kernel.googlesource.com/pub/scm/linux/kernel/git/kbuild/linux/+/889a621272f9b7e19f35efa3d836347b4e209290
+
+diff --git a/scripts/Kconfig.include b/scripts/Kconfig.include
+--- a/scripts/Kconfig.include
++++ b/scripts/Kconfig.include
+@@ -23,9 +23,19 @@
+ # Return n if <command> exits with 0, y otherwise
+ failure = $(if-success,$(1),n,y)
+ 
++# $(cc-probe,<flag>)
++# The command $(cc-option) and $(cc-option-str) test <flag> with. Not meant
++# to be called directly; use one of those two instead.
++cc-probe = trap "rm -rf .tmp_$$" EXIT; mkdir .tmp_$$; $(CC) -Werror $(CLANG_FLAGS) $(1) -c -x c /dev/null -o .tmp_$$/tmp.o
++
+ # $(cc-option,<flag>)
+ # Return y if the compiler supports <flag>, n otherwise
+-cc-option = $(success,trap "rm -rf .tmp_$$" EXIT; mkdir .tmp_$$; $(CC) -Werror $(CLANG_FLAGS) $(1) -c -x c /dev/null -o .tmp_$$/tmp.o)
++cc-option = $(success,$(cc-probe,$(1)))
++
++# $(cc-option-str,<flag>[,<fallback>])
++# Return <flag> if the compiler supports it, <fallback> otherwise.
++# <fallback> defaults to an empty string and is returned untested.
++cc-option-str = $(if-success,$(cc-probe,$(1)),$(1),$(2))
+ 
+ # $(ld-option,<flag>)
+ # Return y if the linker supports <flag>, n otherwise
+@@ -61,7 +71,6 @@
+ # machine bit flags
+ #  $(m32-flag): -m32 if the compiler supports it, or an empty string otherwise.
+ #  $(m64-flag): -m64 if the compiler supports it, or an empty string otherwise.
+-cc-option-bit = $(if-success,$(CC) -Werror $(1) -E -x c /dev/null -o /dev/null,$(1))
+-m32-flag := $(cc-option-bit,-m32)
+-m64-flag := $(cc-option-bit,-m64)
++m32-flag := $(cc-option-str,-m32)
++m64-flag := $(cc-option-str,-m64)
+ 
