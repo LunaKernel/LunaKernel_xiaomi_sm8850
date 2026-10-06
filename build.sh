@@ -1615,6 +1615,7 @@ build_ipset_userspace() {
         "${IPSET_DIR}" "${IPSET_TREE_SHA256}" "${LIBMNL_DIR}" "${LIBMNL_TREE_SHA256}" \
         "${ANDROID_NDK_DIR}" "${ANDROID_NDK_TREE_SHA256}" "${ANDROID_NDK_API}" "${cc}" \
         "${userspace_root}" "${libmnl_cflags}" "${ipset_cflags}" "${cppflags}" "${ldflags}" \
+        'libmnl-CPPFLAGS=' 'LIBS=' \
         "${libmnl_configure[@]}" "${ipset_configure[@]}" | sha256sum | awk '{ print $1 }')"
     cached_key=""
     [ ! -L "${userspace_root}/.configured-key" ] || die "IPSet 缓存身份不得为符号链接"
@@ -1635,8 +1636,9 @@ build_ipset_userspace() {
         # The complete NDK install tree was verified before any compiler runs.
         export CCACHE_NAMESPACE="ndk-${ANDROID_NDK_TREE_SHA256}"
         export CC="${cc}" AR="${ndk_bin}/llvm-ar" RANLIB="${ndk_bin}/llvm-ranlib" STRIP="${ndk_bin}/llvm-strip"
+        export LIBS=''
         if [ "${reconfigure}" = 1 ]; then
-            (cd "${libmnl_build}" && env CFLAGS="${libmnl_cflags}" LDFLAGS='-Wl,--gc-sections' \
+            (cd "${libmnl_build}" && env CPPFLAGS='' CFLAGS="${libmnl_cflags}" LDFLAGS='-Wl,--gc-sections' \
                 "${LIBMNL_DIR}/configure" "${libmnl_configure[@]}" >/dev/null)
         fi
         make -C "${libmnl_build}" -j"${BUILD_JOBS}" >/dev/null
