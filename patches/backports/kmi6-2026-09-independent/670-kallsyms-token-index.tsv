@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	kallsyms_token_index	adapt	kbuild	kbuild-next-speedups	6f014bf46faf1645b6336f47390167de5c88e9d1	2026-09-26	b8f94c95759663f8bf6fcd65fff03995b25c9b75	scripts/kallsyms.c	patches/backports/kallsyms-token-index-r21.patch	d82b71a06443c54a2bb33f521e61c0cdcbe10ea6212663fa61cf105ad27d44ed	a24d2c14ae7fd9692ffdcd323c9258c16f237b2d
