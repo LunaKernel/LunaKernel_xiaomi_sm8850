@@ -42,4 +42,4 @@ Image-luna-xiaomi17-g<8位提交>-YYYYMMDD
 
 AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。KernelSU 保持 built-in，Manager 使用同提交官方 CI 签名 APK；首次获取需要已认证的 gh，不需要本地 Gradle 构建。
 
-构建只接受干净项目提交；成功后状态为 `awaiting-device`，不等同于实机验收。默认保留最新三套完整产物，第四套经用户确认验收后再清理最旧一套及对应审计、组件交付目录；构建不会提前删除旧产物。外部 `evidence/` 由用户手动管理。
+构建只接受干净项目提交；成功后状态为 `awaiting-device`，不等同于实机验收。内核产物保留最新三套，第四套经用户确认验收后再清理最旧一套；构建不会提前删除旧内核产物。构建审计（含日志、失败快照）、回移审计及配套组件按类别各保留 `.env` 的 `WORK_HISTORY_KEEP=3` 份，生成流程退出或宿主导入完成后自动清理超额记录。构建记录按目录时间排序，回移审计按快照日期排序，同快照复用目录。审计被轮换掉的旧内核不再构成可重新发布的完整集合。外部 `evidence/` 由用户手动管理。

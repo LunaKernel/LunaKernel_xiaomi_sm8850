@@ -12,6 +12,16 @@ die() { printf '[FAIL] %s\n' "$1" >&2; exit 1; }
 log_info() { printf '[INFO] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
 
+finish_work_history() {
+    local status="$1"
+    trap - EXIT
+    if ! python3 "${WORKSPACE_DIR}/tools/release_artifacts.py" prune-work \
+        "${WORKSPACE_DIR}" --keep "${WORK_HISTORY_KEEP:?缺少工作记录保留份数}"; then
+        [ "${status}" -ne 0 ] || status=1
+    fi
+    exit "${status}"
+}
+
 reject_git_environment_overrides() {
     local name
     while IFS= read -r name; do
@@ -232,7 +242,15 @@ OUTPUT_DIR="${WORKSPACE_DIR}/${BUILD_WORK_DIR:-work}/audit/backport-${BACKPORT_A
 CANDIDATES_FILE="${OUTPUT_DIR}/candidates.tsv"
 REFS_FILE="${OUTPUT_DIR}/refs.tsv"
 SUMMARY_FILE="${OUTPUT_DIR}/summary.tsv"
+[ "${BUILD_WORK_DIR:-work}" = "work" ] || die "工作记录必须置于 work"
+[[ "${BACKPORT_AUDIT_SNAPSHOT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "回移审计快照日期格式无效"
+python3 -c 'import datetime, sys; datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d")' \
+    "${BACKPORT_AUDIT_SNAPSHOT}" || die "回移审计快照日期无效"
+for directory in "${WORKSPACE_DIR}/work" "${WORKSPACE_DIR}/work/audit" "${OUTPUT_DIR}"; do
+    [ ! -L "${directory}" ] || die "审计目录不得经过符号链接: ${directory}"
+done
 mkdir -p "${OUTPUT_DIR}"
+trap 'finish_work_history "$?"' EXIT
 
 verify_bare_repo "AOSP common 审计源" "${AOSP_DIR}" "${COMMON_REPO}"
 verify_bare_repo "Linux stable 审计源" "${STABLE_DIR}" "${LINUX_STABLE_AUDIT_REPO}"

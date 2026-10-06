@@ -139,7 +139,7 @@ resolve_build_id() {
 
 prepare_release_directories() {
     local relative path
-    # Keep prior builds, including unaccepted candidates. Pruning requires acceptance.
+    # Kernel packages remain until acceptance; work records rotate separately.
     for relative in "${PRODUCT_RELATIVE_DIR}" "${COMPONENT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}"; do
         path="${HOST_WORKSPACE_DIR}/${relative}"
         [ ! -e "${path}" ] && [ ! -L "${path}" ] || die "拒绝覆盖已有构建目录: ${relative}"
@@ -147,6 +147,20 @@ prepare_release_directories() {
     for relative in "${PRODUCT_RELATIVE_DIR}" "${COMPONENT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}" work/tmp; do
         prepare_workspace_directory "${relative}"
     done
+}
+
+prune_work_history() {
+    python3 "${HOST_WORKSPACE_DIR}/tools/release_artifacts.py" prune-work \
+        "${HOST_WORKSPACE_DIR}" --keep "${WORK_HISTORY_KEEP:?缺少工作记录保留份数}"
+}
+
+finish_work_history() {
+    local status="$1"
+    trap - EXIT
+    if ! prune_work_history; then
+        [ "${status}" -ne 0 ] || status=1
+    fi
+    exit "${status}"
 }
 
 append_orbenv_var() {
@@ -335,6 +349,7 @@ SH
         die "Orb 结果身份、路径或摘要校验失败"
     fi
     rm -rf -- "${temp_dir}"
+    prune_work_history
     log_success "macOS 当前构建产物已按目录同步: ${PRODUCT_DIR}"
 }
 
@@ -1651,6 +1666,7 @@ resolve_project_identity
 resolve_build_id
 run_in_orb_if_needed "$@"
 prepare_release_directories
+trap 'finish_work_history "$?"' EXIT
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git}"
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"

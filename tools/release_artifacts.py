@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and transfer one Luna release without flattening its directories."""
+"""Verify, transfer and rotate Luna build records."""
 
 import argparse
 import datetime
@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 BUILD_ID = re.compile(r"luna-xiaomi17-g([0-9a-f]{8})-([0-9]{8})-([0-9]{4})")
+BACKPORT_ID = re.compile(r"backport-([0-9]{4}-[0-9]{2}-[0-9]{2})")
 RECORD = re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9._/-]+)")
 
 
@@ -50,6 +51,44 @@ def sha256(path):
         for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def prune_work_history(root, keep):
+    if keep < 1:
+        raise ValueError("工作记录保留份数必须大于零")
+    groups = {}
+    for relative in ("work/audit", "work/components"):
+        parent = checked_path(root, relative)
+        if not parent.exists():
+            continue
+        if not parent.is_dir():
+            raise ValueError("工作记录路径不是目录: " + relative)
+        for entry in parent.iterdir():
+            build = BUILD_ID.fullmatch(entry.name)
+            backport = BACKPORT_ID.fullmatch(entry.name) if relative == "work/audit" else None
+            if build:
+                family = relative + "/build"
+                timestamp = datetime.datetime.strptime(build[2] + build[3], "%Y%m%d%H%M")
+            elif backport:
+                family = relative + "/backport"
+                timestamp = datetime.datetime.strptime(backport[1], "%Y-%m-%d")
+            else:
+                # Only rotate known project output names, never arbitrary directories.
+                continue
+            path = checked_path(root, relative + "/" + entry.name)
+            if not path.is_dir():
+                raise ValueError("工作记录不是普通目录: " + str(path))
+            groups.setdefault(family, []).append((timestamp, entry.name, path))
+    # Validate every family before deleting anything; commit hashes and archive
+    # mtimes are not chronological build identities.
+    removals = []
+    for entries in groups.values():
+        removals.extend(path for _, _, path in sorted(entries, reverse=True)[keep:])
+    for path in removals:
+        checked_path(root, path.relative_to(root).as_posix())
+        shutil.rmtree(path)
+        print("[CLEAN] " + path.relative_to(root).as_posix())
+    return len(removals)
 
 
 def verify(root, build_id):
@@ -174,10 +213,17 @@ def main():
     child.add_argument("archive", type=Path)
     child.add_argument("build_id")
     child.add_argument("workspace", type=Path)
+    child = commands.add_parser("prune-work")
+    child.add_argument("workspace", type=Path)
+    child.add_argument("--keep", type=int, required=True)
     args = parser.parse_args()
     try:
         workspace = args.workspace.resolve(strict=True)
-        if args.command == "check":
+        if args.command == "prune-work":
+            removed = prune_work_history(workspace, args.keep)
+            print(f"[OK] 工作审计与组件按类别保留最新 {args.keep} 份，清理 {removed} 个旧目录")
+            return
+        elif args.command == "check":
             verify(workspace, args.build_id)
         elif args.command == "export":
             copy_release(workspace, args.destination.resolve(strict=True), args.build_id)
