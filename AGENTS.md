@@ -40,6 +40,8 @@ r21 对 `struct tegra_mc` 的私有类型重构使固定 OTA 实际消费的 `de
 
 ## 3. 小米 17 可启动兼容性硬门禁
 
+启动门禁 MUST 只包含有明确机制或目标 OTA 证据、确实影响基本启动与内核核心功能的最小必要检查。新增启动门禁 MUST 说明其对应的启动链路、核心功能或目标模块加载失败机制；性能优化开关、可选组件、日志策略、普通命令行参数和完整配置快照不得因配置偏好被加入启动门禁。项目功能、编译身份、来源完整性及全量快照审计 MUST 独立检查、独立报告，不得冒充启动必需条件；既有模块闭包、安全能力与发布审计要求仍按各自职责执行。
+
 ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的接口及相关类型兼容性。待放行版本 MUST 同时满足：
 
 - 覆盖固定 OTA 的 `boot`、`vendor_boot`、`vendor_dlkm`、`system_dlkm` 中全部实际使用及可能按硬件、服务或运行时路径加载的内核模块，不限于单次启动已加载子集。
@@ -82,9 +84,10 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 - `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
-- 参考配置：8249 行、摘要 `9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c`；参考 `modules.order`：104 个活动模块、摘要 `03c98eead97e20de6f0fb74c8103e1bcde6ffddd254016b49dfd0aa5097d389d`。按第 3 节报告、保留并审查快照。
+- 参考配置：8249 行、摘要 `c8457f57ab4f859b0cf27691501e7f18c903b42fb0ee1959c9012fda2bacc658`，由已验证配置仅追加 Rust Binder 黑名单参数得到；该追加待下次完整构建与真机验证。参考 `modules.order`：104 个活动模块、摘要 `03c98eead97e20de6f0fb74c8103e1bcde6ffddd254016b49dfd0aa5097d389d`。按第 3 节报告、保留并审查快照。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
+- Rust Binder 加载屏蔽属于项目配置策略，MUST NOT 纳入启动门禁。默认使用 C Binder，Rust Binder 保持模块配置及原有精确兼容性审计；配置生成使用 `CMDLINE_EXTEND=y`，保留固定 common 原始参数并追加 `module_blacklist=rust_binder`，在符号解析前拒绝加载该模块。不得据此删除验证对象或放宽任何模块闭包门禁。
 - `BPF_UNPRIV_DEFAULT_OFF=y`；DMA-BUF system/CMA heaps、GUNYAH_QCOM_PLATFORM、ARM_SMMU、ARM_SMMU_V3、ARM_SMMU_V3_PKVM 与 QCOM_IOMMU 必须保持关闭。ARM_PKVM_GUEST、VFIO_PKVM_IOMMU 与 PKVM_PVIOMMU 必须启用。
 - seccomp 内核能力必须启用。KernelSU Manager 或获准 root 进程因官方 `disable_seccomp()` 显示 `Seccomp: 0` 属于预期；普通 Android 应用应为 `2`。
 - 保留 AOSP r21 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。

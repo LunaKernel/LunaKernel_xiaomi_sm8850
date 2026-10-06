@@ -1092,50 +1092,63 @@ verify_stage5_selected_build() {
 
 require_config_enabled() {
     local symbol="$1"
-    grep -qx "CONFIG_${symbol}=y" "${BUILD_DIR}/.config" || die "KMI 配置缺失: CONFIG_${symbol}=y"
+    grep -qx "CONFIG_${symbol}=y" "${BUILD_DIR}/.config" || die "配置缺失: CONFIG_${symbol}=y"
 }
 
 require_config_module() {
     local symbol="$1"
-    grep -qx "CONFIG_${symbol}=m" "${BUILD_DIR}/.config" || die "KMI 配置必须为模块: CONFIG_${symbol}=m"
+    grep -qx "CONFIG_${symbol}=m" "${BUILD_DIR}/.config" || die "配置必须为模块: CONFIG_${symbol}=m"
 }
 
 require_config_disabled() {
     local symbol="$1"
-    grep -qx "# CONFIG_${symbol} is not set" "${BUILD_DIR}/.config" || die "KMI 配置必须关闭: CONFIG_${symbol}"
+    grep -qx "# CONFIG_${symbol} is not set" "${BUILD_DIR}/.config" || die "配置必须关闭: CONFIG_${symbol}"
 }
 
 require_config_not_enabled() {
     local symbol="$1"
     ! grep -Eq "^CONFIG_${symbol}=[ym]$" "${BUILD_DIR}/.config" || \
-        die "KMI 配置必须不启用: CONFIG_${symbol}"
+        die "配置必须不启用: CONFIG_${symbol}"
 }
 
-verify_kmi_config() {
-    local config_lines config_sha256
-    config_lines="$(wc -l < "${BUILD_DIR}/.config" | tr -d ' ')"
-    config_sha256="$(sha256sum "${BUILD_DIR}/.config" | awk '{ print $1 }')"
-
+verify_boot_kmi_config() {
     local symbol
+    # SMP, PREEMPT and MODULE_UNLOAD must match the stock module vermagic.
     for symbol in \
         ARM64_4K_PAGES PAGE_SIZE_4KB SMP PREEMPT NET \
-        MODULES MODULE_UNLOAD MODVERSIONS BASIC_MODVERSIONS EXTENDED_MODVERSIONS GENDWARFKSYMS \
-        ANDROID_VENDOR_HOOKS GKI_HACKS_TO_FIX \
-        IKCONFIG IKCONFIG_PROC CFI_CLANG RUST RUSTC_CLANG_LLVM_COMPATIBLE RUST_INLINE_HELPERS \
-        BPF BPF_JIT BPF_JIT_ALWAYS_ON BPF_UNPRIV_DEFAULT_OFF \
+        MODULES MODULE_UNLOAD MODVERSIONS \
+        ANDROID_VENDOR_HOOKS CFI_CLANG \
         HAVE_ARCH_SECCOMP HAVE_ARCH_SECCOMP_FILTER SECCOMP SECCOMP_FILTER \
-        ANDROID_BINDER_IPC ANDROID_BINDERFS \
+        ANDROID_BINDER_IPC ANDROID_BINDERFS TMPFS TMPFS_XATTR; do
+        require_config_enabled "${symbol}"
+    done
+    for symbol in ARM64_16K_PAGES ARM64_64K_PAGES MODULE_SIG_FORCE; do
+        require_config_disabled "${symbol}"
+    done
+    # These providers belong to stock system_dlkm, not vmlinux.
+    for symbol in NETFS_SUPPORT RFKILL CRYPTO_LIB_ARC4; do
+        require_config_module "${symbol}"
+    done
+    log_success "基本启动与 stock 模块加载所需的最小配置检查通过"
+}
+
+verify_project_config() {
+    local symbol
+    for symbol in \
+        GKI_HACKS_TO_FIX IKCONFIG IKCONFIG_PROC \
+        BASIC_MODVERSIONS EXTENDED_MODVERSIONS GENDWARFKSYMS \
+        RUST RUSTC_CLANG_LLVM_COMPATIBLE RUST_INLINE_HELPERS \
+        BPF BPF_JIT BPF_JIT_ALWAYS_ON BPF_UNPRIV_DEFAULT_OFF \
         DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES \
         FUSE_BPF LTO_NONE BLK_WBT_MQ MODULE_ALLOW_BTF_MISMATCH \
         ARM_PKVM_GUEST VFIO_PKVM_IOMMU PKVM_PVIOMMU \
-        TMPFS TMPFS_XATTR TMPFS_POSIX_ACL \
+        TMPFS_POSIX_ACL \
         EROFS_FS_ZIP EROFS_FS_ZIP_LZMA EROFS_FS_ZIP_DEFLATE EROFS_FS_ZIP_ZSTD \
         XZ_DEC_MICROLZMA WQ_POWER_EFFICIENT_DEFAULT; do
         require_config_enabled "${symbol}"
     done
     for symbol in \
-        ARM64_16K_PAGES ARM64_64K_PAGES \
-        LOCALVERSION_AUTO TRIM_UNUSED_KSYMS MODULE_SIG_FORCE SECCOMP_CACHE_DEBUG \
+        LOCALVERSION_AUTO TRIM_UNUSED_KSYMS SECCOMP_CACHE_DEBUG \
         CRYPTO_AES_ARM64_NEON_BLK EFIVAR_FS PSTORE_BLK \
         SND_AUDIO_GRAPH_CARD USB_XHCI_PCI_RENESAS NINTENDO_FF \
         LTO_CLANG_FULL LTO_CLANG_THIN; do
@@ -1144,9 +1157,7 @@ verify_kmi_config() {
     for symbol in PSTORE_ZONE SND_SIMPLE_CARD_UTILS; do
         require_config_not_enabled "${symbol}"
     done
-    for symbol in NETFS_SUPPORT RFKILL CRYPTO_LIB_ARC4 ANDROID_BINDER_IPC_RUST; do
-        require_config_module "${symbol}"
-    done
+    require_config_module ANDROID_BINDER_IPC_RUST
     require_config_disabled CIFS
     if [ "${ENABLE_KERNELSU}" = "1" ]; then
         for symbol in KSU KPROBES EXT4_FS; do require_config_enabled "${symbol}"; done
@@ -1232,9 +1243,15 @@ verify_kmi_config() {
             require_config_enabled "${symbol}"
         done
     fi
+    log_success "项目功能与编译配置检查通过"
+}
+
+audit_config_snapshot() {
+    local config_lines config_sha256
+    config_lines="$(wc -l < "${BUILD_DIR}/.config" | tr -d ' ')"
+    config_sha256="$(sha256sum "${BUILD_DIR}/.config" | awk '{ print $1 }')"
     audit_compare "config.lines" "${STAGE_CONFIG_LINES}" "${config_lines}"
     audit_compare "config.sha256" "${STAGE_CONFIG_SHA256}" "${config_sha256}"
-    log_success "启动与模块兼容所需的配置语义检查通过"
 }
 
 verify_symbol_list_exports() {
@@ -1775,6 +1792,7 @@ bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
 
 BUILD_JOBS="$(detect_cpu_count)"
 BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-sm8850-oryon1-kmi6-2026-09}")"
+LUNA_MODULE_BLACKLIST="${LUNA_MODULE_BLACKLIST:-}"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
 STAGE_MODULE_COUNT="${STAGE_MODULE_COUNT:-}"
@@ -1984,6 +2002,13 @@ MAKE_ARGS+=(CLANG_AUTOFDO_PROFILE="${AUTOFDO_PROFILE}")
 
 log_step "生成 Android 16 GKI ${COMMON_VERSION} 配置"
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" gki_defconfig
+KERNEL_CMDLINE="$(bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" --state CMDLINE)"
+KERNEL_CMDLINE="${KERNEL_CMDLINE} module_blacklist=${LUNA_MODULE_BLACKLIST}"
+bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
+    --set-str CMDLINE "${KERNEL_CMDLINE}" \
+    --enable CMDLINE_EXTEND \
+    --disable CMDLINE_FROM_BOOTLOADER \
+    --disable CMDLINE_FORCE
 bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable WERROR \
     --disable LOCALVERSION_AUTO \
@@ -2137,7 +2162,9 @@ bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable DMABUF_HEAPS_SYSTEM \
     --disable DMABUF_HEAPS_CMA
 make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" olddefconfig -j"${BUILD_JOBS}"
-verify_kmi_config
+verify_boot_kmi_config
+verify_project_config
+audit_config_snapshot
 cp -f "${BUILD_DIR}/.config" "${AUDIT_DIR}/config.current"
 [ "${ENABLE_BBG}" != "1" ] || verify_lsm_slot_capacity
 
