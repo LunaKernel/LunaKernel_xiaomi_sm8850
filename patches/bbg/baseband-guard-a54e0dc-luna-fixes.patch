@@ -1,5 +1,5 @@
 diff --git a/baseband_guard.c b/baseband_guard.c
-index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee1008c6e62d 100644
+index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29b812ce89 100644
 --- a/baseband_guard.c
 +++ b/baseband_guard.c
 @@ -4,125 +4,57 @@
@@ -34,7 +34,8 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
 -DEFINE_HASHTABLE(allowed_devs, 7);
 -
 -static bool allow_has(dev_t dev)
--{
++static struct inode *bbg_block_inode(struct file *file)
+ {
 -	struct device_hash_node *p;
 -
 -	hash_for_each_possible(allowed_devs, p, h, (u64)dev)
@@ -54,8 +55,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
 -}
 -
 -static bool is_zram_device(dev_t dev)
-+static struct inode *bbg_block_inode(struct file *file)
- {
+-{
 -	bool is_zram = bbg_is_named_device(dev, "zram");
 -	if (is_zram) {
 -		bb_pr("zram dev %u:%u identified, whitelisting\n",
@@ -155,12 +155,12 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
  	return -EPERM;
  }
  
-@@ -130,40 +62,35 @@ static int bb_file_permission(struct file *file, int mask)
+@@ -130,40 +62,37 @@ static int bb_file_permission(struct file *file, int mask)
  {
  	struct inode *inode;
  
 -	if (likely(current_process_trusted()))
-+	if (likely(current_process_trusted()) || !(mask & MAY_WRITE))
++	if (!(mask & MAY_WRITE))
  		return 0;
  
 -	if (!(mask & MAY_WRITE)) return 0;
@@ -171,7 +171,9 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
 -
 -	if (allow_has(inode->i_rdev) || reverse_allow_match_and_cache(inode->i_rdev))
 +	inode = bbg_block_inode(file);
-+	if (!inode || bbg_file_allowed(file))
++	if (!inode)
++		return 0;
++	if (likely(current_process_trusted()) || bbg_file_allowed(file))
  		return 0;
  
 -	return deny("write to protected partition", file, inode, 0);
@@ -207,7 +209,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
  }
  
  static inline bool is_destructive_ioctl(unsigned int cmd)
-@@ -197,20 +124,24 @@ static int bb_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+@@ -197,20 +126,24 @@ static int bb_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
  {
  	struct inode *inode;
  
@@ -241,7 +243,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
  }
  
  #ifdef BB_HAS_IOCTL_COMPAT
-@@ -220,26 +151,79 @@ static int bb_file_ioctl_compat(struct file *file, unsigned int cmd, unsigned lo
+@@ -220,26 +153,81 @@ static int bb_file_ioctl_compat(struct file *file, unsigned int cmd, unsigned lo
  }
  #endif
  
@@ -272,12 +274,13 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
 +{
 +	struct inode *inode;
 +
-+	if (likely(current_process_trusted()) || !(prot & PROT_WRITE) ||
-+	    !(flags & MAP_SHARED))
++	if (!(prot & PROT_WRITE) || !(flags & MAP_SHARED))
 +		return 0;
 +
 +	inode = bbg_block_inode(file);
-+	if (!inode || bbg_file_allowed(file))
++	if (!inode)
++		return 0;
++	if (likely(current_process_trusted()) || bbg_file_allowed(file))
 +		return 0;
 +
 +	return deny("shared writable mmap of protected partition", inode, 0);
@@ -289,13 +292,14 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
 +	struct file *file;
 +	struct inode *inode;
 +
-+	if (likely(current_process_trusted()) || !vma ||
-+	    !(prot & PROT_WRITE) || !(vma->vm_flags & VM_SHARED))
++	if (!vma || !(prot & PROT_WRITE) || !(vma->vm_flags & VM_SHARED))
 +		return 0;
 +
 +	file = vma->vm_file;
 +	inode = bbg_block_inode(file);
-+	if (!inode || bbg_file_allowed(file))
++	if (!inode)
++		return 0;
++	if (likely(current_process_trusted()) || bbg_file_allowed(file))
 +		return 0;
 +
 +	return deny("writable mprotect of protected partition", inode, 0);
@@ -328,7 +332,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..3a9b729d1e71bedaace73514eb8aee10
  };
  
  static int __init bbg_init(void)
-@@ -266,5 +250,3 @@ DEFINE_LSM(baseband_guard) = {
+@@ -266,5 +254,3 @@ DEFINE_LSM(baseband_guard) = {
  MODULE_DESCRIPTION("protect All Block & Power by TG@qdykernel");
  MODULE_AUTHOR("秋刀鱼 & https://t.me/qdykernel");
  MODULE_LICENSE("GPL v2");
