@@ -117,7 +117,7 @@ AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaom
 
 ## 6. 真机验证
 
-当前验收基准为项目 `8eb963eb4af4d478c2b5878190869ec89221b667`，release `6.12.92-android16-luna-g8eb963eb-4k`，用户已确认可用；实机记录为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与当前状态见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希；Rust Binder 加载屏蔽、Rust 对齐策略、BBG 提前返回、ExtTSP、MGLRU 与 Kbuild 回移及新 IPSet 组件仍待实机验证。完整本地构建与闭包证据以新提交对应的发布审计为准。
+当前验收基准为项目 `586720039e9896d86e4e55dbdfd4bf8f01cd81b6`，release `6.12.92-android16-luna-g58672003-4k`，2026-10-07 完成本地构建、快速实机回归及用户功能确认，状态为 `accepted`；实机为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与验证范围见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希，也不得视为性能或长期稳定性实测。设备运行时 MGLRU 为关闭状态，其回收路径未触发；新 IPSet 二进制仅经临时执行验证，未替换已安装模块。完整本地构建与闭包证据以对应提交的发布审计为准。
 
 公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
 

@@ -2,31 +2,27 @@
 
 ## 已验收基准
 
-用户已确认 `6.12.92-android16-luna-g8eb963eb-4k` 可用，2026-10-06 作为当前验收基准。完整项目提交为 `8eb963eb4af4d478c2b5878190869ec89221b667`。
+用户于 2026-10-07 确认 `6.12.92-android16-luna-g58672003-4k` 功能正常并验收，完整项目提交为 `586720039e9896d86e4e55dbdfd4bf8f01cd81b6`。
 
-实机为小米 17 `pudding`、HyperOS 4 `OS4.0.0.32.XPCCNXM` / Android 17。保留的身份、启动与模块记录、功能检查、dmesg、logcat 及 pstore/crash 文件检查位于 `evidence/device/luna-xiaomi17-g8eb963eb-20261006-0208/`，由其中 SHA256SUMS 校验。
+实机为小米 17 `pudding`、HyperOS 4 `OS4.0.0.32.XPCCNXM` / Android 17。身份、启动与模块记录、功能测试、dmesg、logcat 及 pstore/crash 文件检查位于 `evidence/device/luna-xiaomi17-g58672003-20261007-0030/`，由其中 `SHA256SUMS` 校验；大日志以 gzip 保留完整原始内容。用户确认屏幕、触控、拍照、声音和移动网络正常。
 
-原始 Image 和 AnyKernel3 ZIP 位于 `kernel_out/luna-xiaomi17-g8eb963eb-20261006-0208/`。构建审计及交付清单位于对应的 `work/audit/` 目录；迁移保持八项交付文件原始摘要。
+Image 和 AnyKernel3 ZIP 位于 `kernel_out/luna-xiaomi17-g58672003-20261007-0030/`；完整构建审计及五项交付清单位于对应 `work/audit/` 目录，`release.tsv` 标记为 `accepted`。更新验证文档不改变或重命名这些二进制，也不能把文档提交当作已构建内核。
 
-构建闭包仍固定于 `OS4.0.0.9.XPCCNXM`：4083 项 vmlinux 依赖，103 个 system_dlkm 模块，其中 102 个严格匹配；唯一 Rust Binder 例外精确为 234 项需求、167 项匹配、67 项构建上下文符号缺失，无 CRC/provider 异常。`.32` 实机记录不替代 `.9` 的完整 OTA 闭包证明，也不扩大支持范围。
+完整本地构建及 ABI/KMI/STG 审计通过，无未确认漂移。构建闭包仍固定于 `OS4.0.0.9.XPCCNXM`：4083 项 vmlinux 依赖，103 个 system_dlkm 模块，其中 102 个严格匹配；唯一 Rust Binder 例外精确为 234 项需求、167 项匹配、67 项构建上下文符号缺失，无 CRC/provider 异常。`.32` 实机记录不替代 `.9` 的完整 OTA 闭包证明，也不扩大支持范围。
 
-## 待验改动
+## 实机回归与范围
 
-以下改动尚未实机验收；完整本地构建与 OTA 闭包结果以新提交对应的 `work/audit/` 发布清单为准。
+运行中的配置为 8261 行，SHA-256 `a21ee20190c2f129d240203835120d780f313c315a63f9f4c9a1684db05f8dde`，与本次 Image 和 `.env` 一致。669 个已加载模块与上一验收 `g8eb963eb` 的集合完全相同；启动完成，Rust Binder 在符号解析前按黑名单拒绝，C Binder 和关键服务正常。观察期间 boot ID 保持不变，未发现新的 panic、Oops、栈 WARN、lockup、CFI 错误或模块符号/CRC 拒绝；pstore 为空，无新增 tombstone/SSR 转储。
 
-`a5b887dd` 的 `module_blacklist=rust_binder` 策略保留 C Binder、Rust Binder 模块配置和既有精确闭包审计，在符号解析前屏蔽 Rust Binder 加载；不把黑名单作为启动门禁。
+KernelSU 为 built-in、version code `32651`、UAPI `4`，提权及模块环境正常；SUSFS v2.3.0 的版本、variant 和启用功能查询正常。六项 LSM 与 SELinux Enforcing 保持，普通应用及 system_server 的 Seccomp 为 `2`，获准 root 为 `0`。
 
-Rust 取消普通内存 strict-align 已通过 kernel/helpers 合并 bitcode 的实际 LLVM 属性检查，softfloat 与 SIMD 禁用约束保持。IPSet/libmnl 的 SM8850 参数、Android ELF/模块包、增量复用、配置失败与编译中断恢复已通过本地验证，尚未实机验收。
+BBG 普通文件读写、共享映射正常；保护分区的零字节写调用、共享可写 mmap 和 mprotect 均返回 `EPERM`，并有三个对应拒绝日志。测试未写分区数据、未发送存储 ioctl，前后读取内容一致。初次在只读 `modem_a` 上的映射由原生只读规则返回 `EINVAL`；最终在非只读保护分区上完成三个钩子的测试。
 
-MGLRU 不可回收 folio 处理回移固定于官方 `f7e698e326b239a91ea15844817551921209e826`，仅适配 r21 上下文并保留 Android vendor hook；已通过 `mm/vmscan.o` 对象编译。当前 37 项独立清单均已通过单项应用、撤销及完整重放，固定基础差异保持不变。
+新 IPSet 命令 SHA-256 为 `96358b9b24991d2a1fcf14b3c7869234b161c35eee872064ca61d794a7b5cba8`，经临时执行完成 IPv4/IPv6 集合创建、增删、查询（含 IPv4 未命中反例）和销毁。现有 IPSet 模块仍使用旧二进制，本轮未安装或替换模块；临时文件和集合均已清理。
 
-Kbuild 宿主优化只含固定的 kallsyms token 索引和参数探测缓存链。真实符号表输出及原生构建参数等价、宏支持/拒绝/回退语义、工具身份刷新、no-op 时间戳保持和来源/路径拒绝测试通过；不改变既有启动或 ABI 门禁。
+设备运行时 `/sys/kernel/mm/lru_gen/enabled` 为 `0x0000`，因此未验证 MGLRU 不可回收页修复的实际回收路径，也未修改该策略。Rust 对齐、ExtTSP 等编译策略通过完整构建和本次启动回归，但未做性能、功耗、内存压力或长期稳定性测试。Kbuild 优化的生成结果和参数等价性属于本地构建验证。
 
-BBG 仅调整 file_permission、mmap_file 和 file_mprotect 的判断顺序，使普通读、非共享写映射及非块设备提前返回；7,776 组局部策略对比一致，其余保护钩子保持原实现。仅对有 profile 函数启用的 ExtTSP 已通过三个代表对象编译，75 个导出 CRC 一致，尚无小米实机性能数据。Rust 仅 core 使用四线程前端，局部编译约 9.23→7.76 秒，峰值内存增加约 116 MiB；完成原有符号重命名后，对象与元数据均与原产物逐字节一致。完整新构建及实机状态仍以对应提交的发布审计和验收记录为准。
-
-已验收 Image 的配置为 8249 行、SHA-256 `9a708cd313d37073cb2e5b1614a4044e003661ea05700e10b614d5c03e85f22c`。当前 `.env` 的 8261 行参考配置包含新增黑名单及 12 个探测缓存项；原有 6576 项配置值与黑名单参考保持一致。新提交不能继承旧 Image 的实机身份。
-
-iorap2 已确认非本项目内核问题，不列为待修复项；功耗暂不追踪，用户态问题不扩展为本项目修复责任。
+早期非 PID 1 的 init 子进程 SIGABRT、可容忍的模块 BTF 调试信息不匹配、ptp_kvm 不支持及运行时非特权 BPF 开关为 `0`，与旧验收记录同类；init 根因仍未证明，本次观察未重复。Manager 的每秒提权轮询和用户态 SELinux 审计噪声仍存在，不据此新增内核修复。iorap2 已确认非本项目内核问题，功耗暂不追踪。
 
 ## 后续验收
 
