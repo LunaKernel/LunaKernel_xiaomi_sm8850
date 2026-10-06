@@ -116,13 +116,13 @@ verify_manifests() {
 	: > "${new_commits}"
 	: > "${old_commits}"
 	for manifest in "${MANIFESTS[@]}"; do
-		for source in aosp stable mainline; do
+		for source in aosp stable mainline kbuild; do
 			run_manifest "${manifest}" list "${source}" >> "${new_commits}"
 		done
 	done
 	duplicates="$(LC_ALL=C sort "${new_commits}" | uniq -d)"
 	[ -z "${duplicates}" ] || die "独立回移清单存在重复官方提交:\n${duplicates}"
-	for source in aosp stable mainline; do
+	for source in aosp stable mainline kbuild; do
 		bash "${MANIFEST_TOOL}" list "${source}" >> "${old_commits}"
 	done
 	overlap="$(LC_ALL=C sort "${new_commits}" "${old_commits}" | uniq -d)"
@@ -248,7 +248,7 @@ case "${1:-}" in
 		;;
 	list)
 		[ "$#" = 2 ] || usage
-		case "$2" in aosp|stable|mainline) ;; *) usage ;; esac
+		case "$2" in aosp|stable|mainline|kbuild) ;; *) usage ;; esac
 		list_commits "$2"
 		;;
 	list-paths)

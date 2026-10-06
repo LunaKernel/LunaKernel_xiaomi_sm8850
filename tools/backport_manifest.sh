@@ -96,6 +96,7 @@ fi
 AOSP_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 STABLE_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
 MAINLINE_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
+KBUILD_DIR="$(resolve_workspace_path "${KBUILD_AUDIT_SOURCE_DIR:-sources/linux_kbuild_audit}")"
 TMP_ROOT=""
 declare -a MANIFEST_ROWS=()
 GROUP_COUNT=0
@@ -127,6 +128,7 @@ validate_manifest() {
 	awk -F '\t' \
 		-v stable_ref="${LINUX_STABLE_AUDIT_REF:-}" \
 		-v snapshot="${BACKPORT_AUDIT_SNAPSHOT:-}" \
+		-v kbuild_ref="${KBUILD_AUDIT_REF:-}" \
 		-v independent="${INDEPENDENT_MANIFEST}" '
 		function fail(message) { print "[FAIL] 九月回移清单: " message > "/dev/stderr"; exit 1 }
 		/^#/ { next }
@@ -136,7 +138,8 @@ validate_manifest() {
 			if ($1 != sprintf("%03d", rows)) fail("顺序号不连续: " $1)
 			if ($2 !~ /^[a-z0-9_]+$/) fail("逻辑组名非法: " $2)
 			if ($3 !~ /^(direct|adapt|proof)$/) fail("动作非法: " $3)
-			if ($4 !~ /^(aosp|stable|mainline)$/) fail("来源非法: " $4)
+			if ($4 !~ /^(aosp|stable|mainline|kbuild)$/) fail("来源非法: " $4)
+			if ($4 == "kbuild" && (independent != 1 || kbuild_ref == "" || $5 != kbuild_ref)) fail("Kbuild 来源必须独立且 ref 固定")
 			if ($4 == "stable" && $5 != stable_ref) fail("stable ref 未固定")
 			if ($4 == "mainline" && $5 != "snapshot-" snapshot) fail("mainline ref 未固定")
 			if ($4 == "aosp" && $5 !~ /^[A-Za-z0-9._-]+$/) fail("AOSP ref 非法")
@@ -220,6 +223,11 @@ source_repo_and_tip() {
 			SOURCE_REPO="${MAINLINE_DIR}"
 			SOURCE_TIP="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
 			;;
+		kbuild)
+			[ "${ref}" = "${KBUILD_AUDIT_REF:-}" ] || die "Kbuild ref 不匹配"
+			SOURCE_REPO="${KBUILD_DIR}"
+			SOURCE_TIP="${KBUILD_AUDIT_COMMIT:-}"
+			;;
 		*) die "未知官方来源: ${source}" ;;
 	esac
 	[ -n "${SOURCE_TIP}" ] || die "${source} 审计终点为空"
@@ -258,7 +266,7 @@ verify_source_row() {
 
 	if [ "${action}" = adapt ]; then
 		verify_project_patch "${group}" "${paths}" "${project_patch}" \
-			"${project_sha}" "${project_patch_id}"
+			"${project_sha}" "${project_patch_id}" "${source}" "${commit}"
 	fi
 }
 
@@ -295,7 +303,8 @@ verify_stable_origin() {
 
 verify_project_patch() {
 	local group="$1" paths="$2" relative_patch="$3" expected_sha="$4" expected_patch_id="$5"
-	local patch_file actual_sha actual_patch_id actual_paths patch_output path
+	local source="$6" commit="$7"
+	local patch_file actual_sha actual_patch_id actual_paths patch_output path source_path
 	patch_file="$(resolve_workspace_path "${relative_patch}")"
 	[ -f "${patch_file}" ] && [ ! -L "${patch_file}" ] || die "${group} 项目适配补丁缺失或不安全"
 	actual_sha="$(sha256sum "${patch_file}" | awk '{ print $1 }')"
@@ -309,8 +318,15 @@ verify_project_patch() {
 	if [ "${INDEPENDENT_MANIFEST}" = 1 ]; then
 		IFS=, read -ra project_paths <<<"${actual_paths}"
 		for path in "${project_paths[@]}"; do
+			source_path="${path}"
+			if [ "${source}" = kbuild ] && [ "${commit}" = 454e00cf8ee5aff555ad5865b8c3dbf3731afcc9 ]; then
+				case "${path}" in
+					init/Kconfig) source_path=scripts/Kconfig.toolchain ;;
+					scripts/Makefile.extrawarn) source_path=scripts/Makefile.warn ;;
+				esac
+			fi
 			case ",${paths}," in
-				*,"${path}",*) ;;
+				*,"${source_path}",*) ;;
 				*) die "${group} 项目适配补丁含官方提交之外的路径: ${path}" ;;
 			esac
 		done
@@ -325,6 +341,9 @@ verify_sources() {
 	verify_audit_repo "AOSP common 审计源" "${AOSP_DIR}" "${COMMON_REPO}"
 	verify_audit_repo "Linux stable 审计源" "${STABLE_DIR}" "${LINUX_STABLE_AUDIT_REPO}"
 	verify_audit_repo "Linux mainline 审计源" "${MAINLINE_DIR}" "${LINUX_MAINLINE_AUDIT_REPO}"
+	if awk -F '\t' '!/^#/ && $4 == "kbuild" { found=1 } END { exit !found }' "${MANIFEST}"; then
+		verify_audit_repo "Kbuild 官方审计源" "${KBUILD_DIR}" "${KBUILD_AUDIT_REPO}"
+	fi
 	for row in "${MANIFEST_ROWS[@]}"; do
 		verify_source_row "${row}"
 	done
@@ -363,12 +382,21 @@ row_patch_file() {
 }
 
 write_path_list() {
-	awk -F '\t' '
-		!/^#/ && $3 != "proof" {
-			count = split($9, path, ",")
-			for (i = 1; i <= count; i++) print path[i]
-		}
-	' "${MANIFEST}" | LC_ALL=C sort -u > "${TMP_ROOT}/paths"
+	local row order group action source ref commit date patch_id paths project_patch project_sha project_patch_id
+	{
+		for row in "${MANIFEST_ROWS[@]}"; do
+			IFS=$'\t' read -r order group action source ref commit date patch_id paths \
+				project_patch project_sha project_patch_id <<<"${row}"
+			[ "${action}" != proof ] || continue
+			if [ "${source}" = kbuild ] && [ "${action}" = adapt ]; then
+				verify_project_patch "${group}" "${paths}" "${project_patch}" \
+					"${project_sha}" "${project_patch_id}" "${source}" "${commit}"
+				sed -n 's#^+++ b/##p' "$(resolve_workspace_path "${project_patch}")"
+			else
+				printf '%s\n' "${paths}" | tr , '\n'
+			fi
+		done
+	} | LC_ALL=C sort -u > "${TMP_ROOT}/paths"
 }
 
 copy_selected_tree() {
@@ -513,17 +541,14 @@ case "${1:-}" in
 		;;
 	list)
 		[ "$#" = 2 ] || usage
-		case "$2" in aosp|stable|mainline) ;; *) usage ;; esac
+		case "$2" in aosp|stable|mainline|kbuild) ;; *) usage ;; esac
 		awk -F '\t' -v source="$2" '!/^#/ && $4 == source { print $6 }' "${MANIFEST}"
 		;;
 	list-paths)
 		[ "$#" = 1 ] || usage
-		awk -F '\t' '
-			!/^#/ && $3 != "proof" {
-				count = split($9, path, ",")
-				for (i = 1; i <= count; i++) print path[i]
-			}
-		' "${MANIFEST}" | LC_ALL=C sort -u
+		TMP_ROOT="$(mktemp -d)"
+		write_path_list
+		cat "${TMP_ROOT}/paths"
 		;;
 	verify-sources)
 		[ "$#" = 1 ] || usage

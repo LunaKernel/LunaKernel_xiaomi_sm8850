@@ -270,6 +270,99 @@ hydrate_audit_patches() {
     done
 }
 
+# Reuse authenticated objects without alternates or lazy network access.
+hydrate_kbuild_objects() {
+    local oid cache type actual reused=0
+    local -a missing=()
+    for oid in "$@"; do
+        if env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file -e "${oid}" 2>/dev/null; then
+            continue
+        fi
+        for cache in "${LINUX_MAINLINE_AUDIT_DIR}" "${AOSP_BACKPORT_AUDIT_DIR}" "${LINUX_STABLE_AUDIT_DIR}" "${COMMON_DIR}"; do
+            if ! env GIT_NO_LAZY_FETCH=1 git -C "${cache}" cat-file -e "${oid}" 2>/dev/null; then
+                continue
+            fi
+            type="$(env GIT_NO_LAZY_FETCH=1 git -C "${cache}" cat-file -t "${oid}")"
+            actual="$(env GIT_NO_LAZY_FETCH=1 git -C "${cache}" cat-file "${type}" "${oid}" |
+                git -C "${KBUILD_AUDIT_DIR}" hash-object -w -t "${type}" --stdin)"
+            [ "${actual}" = "${oid}" ] || die "Kbuild 本地对象复用摘要不匹配"
+            reused=$((reused + 1))
+            break
+        done
+        if ! env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file -e "${oid}" 2>/dev/null; then
+            missing+=("${oid}")
+        fi
+    done
+    [ "${reused}" = 0 ] || log_info "Kbuild 复用 ${reused} 个已有 Git 对象"
+    if [ "${#missing[@]}" -gt 0 ]; then
+        # Depth 1 retains explicitly requested trees but omits their children.
+        git_network -C "${KBUILD_AUDIT_DIR}" fetch --no-tags --filter=tree:1 origin "${missing[@]}"
+    fi
+    for oid in "$@"; do
+        env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file -e "${oid}" 2>/dev/null || \
+            die "Kbuild 必要对象缺失: ${oid}"
+    done
+}
+
+prepare_kbuild_audit() {
+    local commit parent tree paths path state component entry mode type oid filename
+    local -a commits=() states=() next=() objects=() blobs=() commit_paths=()
+    mapfile -t commits < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list kbuild)
+    [ "${#commits[@]}" -gt 0 ] || return 0
+    ensure_audit_repo "Kbuild 官方构建工具历史" "${KBUILD_AUDIT_DIR}" "${KBUILD_AUDIT_REPO}"
+    git -C "${KBUILD_AUDIT_DIR}" config remote.origin.partialclonefilter tree:0
+    if ! env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" merge-base --is-ancestor \
+        "${KBUILD_AUDIT_BASE_COMMIT}" "${KBUILD_AUDIT_COMMIT}" 2>/dev/null; then
+        git_network -C "${KBUILD_AUDIT_DIR}" fetch --no-tags --filter=tree:0 --depth=17 origin "${KBUILD_AUDIT_COMMIT}"
+    fi
+    env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" merge-base --is-ancestor \
+        "${KBUILD_AUDIT_BASE_COMMIT}" "${KBUILD_AUDIT_COMMIT}" || die "Kbuild 固定祖先链不完整"
+    git -C "${KBUILD_AUDIT_DIR}" update-ref refs/backport-audit/kbuild/base "${KBUILD_AUDIT_BASE_COMMIT}"
+    git -C "${KBUILD_AUDIT_DIR}" update-ref "refs/backport-audit/kbuild/${KBUILD_AUDIT_REF}" "${KBUILD_AUDIT_COMMIT}"
+    for commit in "${commits[@]}"; do
+        env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" merge-base --is-ancestor \
+            "${commit}" "${KBUILD_AUDIT_COMMIT}" || die "Kbuild 所选提交不属于固定终点"
+        paths="$(awk -F '\t' -v commit="${commit}" '!/^#/ && $6 == commit { print $9 }' \
+            "${HOST_WORKSPACE_DIR}"/patches/backports/kmi6-2026-09-independent/*.tsv)"
+        for parent in "${commit}" "${commit}^"; do
+            tree="$(env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file commit "${parent}" |
+                awk 'NR == 1 { print $2 }')"
+            IFS=, read -ra commit_paths <<<"${paths}"
+            for path in "${commit_paths[@]}"; do states+=("${tree} ${path}"); done
+        done
+    done
+    # Walk only the paths declared by pinned manifests; never fetch a whole tree.
+    while [ "${#states[@]}" -gt 0 ]; do
+        objects=()
+        for state in "${states[@]}"; do objects+=("${state%% *}"); done
+        mapfile -t objects < <(printf '%s\n' "${objects[@]}" | LC_ALL=C sort -u)
+        hydrate_kbuild_objects "${objects[@]}"
+        next=()
+        for state in "${states[@]}"; do
+            tree="${state%% *}" path="${state#* }" component="${state#* }"
+            component="${component%%/*}"
+            entry="$(env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" ls-tree "${tree}" -- "${component}")"
+            read -r mode type oid filename <<<"${entry}"
+            [[ "${oid}" =~ ^[0-9a-f]{40}$ ]] || die "Kbuild 来源路径缺失: ${path}"
+            if [[ "${path}" = */* ]]; then
+                [ "${type}" = tree ] || die "Kbuild 来源目录类型异常: ${path}"
+                next+=("${oid} ${path#*/}")
+            else
+                [ "${type}" = blob ] || die "Kbuild 来源文件类型异常: ${path}"
+                blobs+=("${oid}")
+            fi
+        done
+        states=("${next[@]}")
+    done
+    mapfile -t blobs < <(printf '%s\n' "${blobs[@]}" | LC_ALL=C sort -u)
+    hydrate_kbuild_objects "${blobs[@]}"
+    for commit in "${commits[@]}"; do
+        env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" show --format= "${commit}" >/dev/null || \
+            die "Kbuild 补丁仍缺少离线审计对象: ${commit}"
+    done
+    log_success "Kbuild 固定提交及必要差异对象已准备，可完全离线审计"
+}
+
 hydrate_audit_blob() {
     local label="$1" repo_dir="$2" commit="$3" path="$4" expected_sha256="$5"
     local actual_sha256
@@ -820,6 +913,7 @@ LINUX_MAINLINE_AUDIT_REPO="${LINUX_MAINLINE_AUDIT_REPO:-https://git.kernel.org/p
 LINUX_MAINLINE_AUDIT_BASE_COMMIT="${LINUX_MAINLINE_AUDIT_BASE_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
+KBUILD_AUDIT_DIR="$(resolve_workspace_path "${KBUILD_AUDIT_SOURCE_DIR:-sources/linux_kbuild_audit}")"
 BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
 INDEPENDENT_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/independent_backports.sh"
 ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH="${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH:-0}"
@@ -1135,6 +1229,7 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list mainline)
     hydrate_audit_patches "Linux mainline 已选补丁" "${LINUX_MAINLINE_AUDIT_DIR}" \
         "${selected_mainline_patches[@]}"
+    prepare_kbuild_audit
     if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
         bash "${BACKPORT_TOOL}" verify-sources
     fi

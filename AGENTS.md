@@ -34,6 +34,8 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 内核直接修复仅授权 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节硬门禁及完整差异审计；拒绝收益极小、路径无关、来源不清或逻辑证据不足的改动。缺少实机性能数据本身不构成否决，不得将机制不明的猜测视为优化。r21 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得重复回移。
 
+另经用户授权，仅接入官方 Kbuild `kbuild-next-speedups` 固定快照中的 kallsyms token 索引及参数探测缓存链，分别由独立清单 `670-kallsyms-token-index.tsv`、`680-kbuild-probe-cache.tsv` 固定。来源与必要 Git 对象独立置于 `sources/linux_kbuild_audit/`，不得将 next 提交标为主线或稳定树。MUST 证明生成结果及现有参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁和早期启动严格对齐；授权不含该快照的其他改动。
+
 九月 selected 回移集合有序且不可拆分：19 项逻辑修复、23 个应用提交。已吸收的层及旧 F2FS 上下文适配 MUST 删除。直接回移为 65 个逻辑项（含宿主 gendwarfksyms 兼容修复），独立项为 35 个；已删除无目标代码收益的 EAS cpumask 回移及 BBG 遗留空函数，不得把未编译路径计作有效功能。吸收、保留理由及质量证据见 `patches/backports/` 中固定 TSV。
 
 新增高置信回移 MUST 置于 `patches/backports/kmi6-2026-09-independent/`，每份清单仅含一个逻辑项，不可拆的官方前置/补修链同清单，独立 pin SHA-256。必须以临时 Git index 证明从固定基础差异单项应用、撤销及固定顺序完整重放；授权不含清单外提交。配置、UAPI、syscall、ABI 或 KMI 影响逐项说明，不得破坏固定 OTA 模块闭包、关键启动配置或用户态语义。
@@ -71,7 +73,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 - `.env`：唯一受版本控制的 pin、构建身份和验证快照来源。
 - `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK 和只读官方审计仓库；不应用补丁、不编译。
-- `patch.sh`：仅应用项目维护的直接内核修复；必须幂等。
+- `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。
 - `patch_external.sh`：仅接入已准备的外部组件；不得下载。
 - `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计；仅在发布闭包齐全且无未确认漂移后打包，不得准备源码。
 
