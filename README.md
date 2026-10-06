@@ -54,11 +54,10 @@ Image-luna-xiaomi17-g<短提交>-YYYYMMDD
 
 ## 验证状态
 
-历史 r21 内核树已通过固定 OTA 的真机验证。当前九月 KMI6 基线的构建与迁移记录见 [迁移审计](docs/KMI6-2026-09-MIGRATION.md)，发布前仍须完成同一 OTA 的真机复测。
+当前已验收基准为 `6.12.92-android16-luna-g8eb963eb-4k`，实机为 `.32` OTA，构建兼容性清单仍固定于 `.9` OTA。Rust Binder 加载屏蔽待下次编译和实机验收；目录整理后的新提交不继承旧 Image 的验收身份。详见 [验证记录](docs/VALIDATION.md)。
 
 ## 文档
 
-- [KernelSU / SUSFS 更新与去重审计](docs/COMPONENTS-2026-09-UPDATE.md)
 - [构建环境、输入与验证方法](docs/BUILDING.md)
 - [验证记录](docs/VALIDATION.md)
 - [维护与回移](docs/MAINTENANCE.md)

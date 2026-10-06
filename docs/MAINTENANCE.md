@@ -1,57 +1,21 @@
 # 维护与回移
 
-## 分支
+当前工作分支为 `chore/kmi6-2026-09`，Linux 6.12.92 / KMI generation 6。`main` 和 `os3-android16-6.12.23` 保留历史；整理不重写 Git 历史，不为已有历史另外留备份。
 
-- `main`：小米 17 HyperOS 4 / Android 17，历史 AOSP r21 主线。
-- `chore/kmi6-2026-09`：九月发布分支迁移，Linux 6.12.92 / KMI generation 6。
-- `os3-android16-6.12.23`：HyperOS 3 / Android 16 历史维护分支。
+## 来源与审计
 
-迁移审计见 [九月 KMI6 记录](KMI6-2026-09-MIGRATION.md)。旧私有仓库及其历史标签不属于公开仓库。
+内核层次为固定 AOSP common、`patch.sh` 的官方直接回移、`patch_external.sh` 的独立组件及最小兼容层、`build.sh` 的配置与发布检查。来源 pin 与快照以 [`.env`](../.env) 为准。
 
-## 改动分层
+[`patches/backports/`](../patches/backports/) 中保留吸收证明、质量审查和有序回移清单。selected 集合不可拆分；independent 中每份清单只含一个逻辑项，官方不可拆的前置/补修链同清单。新增项须固定来源、完整 commit、日期、patch-id、路径及适配补丁摘要，并证明固定基线缺少该改动、上游无明确回退或回归。
 
-内核改动按以下顺序生成：
+通过临时 Git index 验证单项应用、撤销与完整顺序重放。最终源码字节及链接目标必须与真实补丁流程一致；允许路径、patch-id 或“能够应用”均不能替代逻辑与差异审查。不得把未编译对象计作有效功能。
 
-1. 固定 AOSP common。
-2. [`patch.sh`](../patch.sh) 中有明确官方来源的内核修复与改进。
-3. [`patch_external.sh`](../patch_external.sh) 中固定版本的独立组件及最小兼容补丁。
-4. [`build.sh`](../build.sh) 生成配置并执行目标 OTA 模块闭包和发布门禁。
+SM8850 编译链已审查的 Rust 自动导出、私有 DWARF 和非消费者 KCFI 漂移保留在 Git 历史；现行完整快照随每次构建审计归档。固定 OTA 消费接口、相关类型及 CFI 必须兼容，完整快照漂移必须保留、审查并同步刷新参考。
 
-不要把生成后的源码差异、`.config`、`Module.symvers` 或产物反向提交到项目。
+## 提交与验收
 
-## 回移记录
+提交标题为 `<type>: <准确精炼中文描述>`，类型限 chore、feat、fix、refactor、docs。来源、功能、启动门禁、完整差异审计、打包及文档分开审查。直接回移在正文注明完整上游 commit、实际移植方式、接口影响和验证；独立逻辑项必须可独立回退。
 
-[`patches/backports/kmi6-2026-09-selected-backports.tsv`](../patches/backports/kmi6-2026-09-selected-backports.tsv) 是随基线整体携带的有序官方回移集合。
+提交前运行 `git diff --check`、相关脚本语法检查和与风险相称的验证。发布仍需完整构建、固定 OTA 模块闭包、镜像完整性、Image-only 打包检查及 [真机验收](VALIDATION.md)。目录或文档变化不能把旧 Image 改名为新提交产物。
 
-[`patches/backports/kmi6-2026-09-independent/`](../patches/backports/kmi6-2026-09-independent/) 中每个 TSV 只描述一个可独立回退的逻辑项，可包含不可拆分的官方前置/补修链，不得混入无关提交。
-
-每条记录必须固定：
-
-- 官方来源仓库与 ref。
-- 完整上游 commit、日期、patch-id 和受影响路径。
-- 必要时使用的项目适配补丁、SHA-256 与 patch-id。
-
-新增回移前，应证明固定基线缺少该改动，检查上游后续修正或回退，并通过临时 Git index 执行单项 apply、reverse、replay 与全量顺序重放。不能用“补丁能应用”代替逻辑审查。
-
-## 提交
-
-标题格式为 `<type>: <准确精炼中文描述>`，`type` 限 `chore`、`feat`、`fix`、`refactor`、`docs`。官方回移需注明来源，例如：
-
-```text
-fix: 修复 IPv4 分片 MTU 下限校验（回移 Linux stable）
-```
-
-提交正文记录完整上游 commit、实际移植方式、接口影响和已执行验证。一个独立回移对应一个项目提交，确保可以单独审计和回退。
-
-## 发布前检查
-
-1. `git diff --check` 与所有 shell 语法检查通过。
-2. 所有回移清单通过来源、单项撤销和顺序重放检查。
-3. 完整构建、目标 OTA 模块闭包、关键配置和差异审计通过。
-4. AnyKernel3 文件白名单、脚本摘要与 Image-only 边界通过。
-5. 公共引用不包含密钥、日志、ROM/分区镜像、构建目录或历史预制 ZIP。
-6. 真机完成与 [`VALIDATION.md`](VALIDATION.md) 一致的验收。
-
-本分支全量补丁的必要性、跨层去重和实际构建路径审计见 [九月补丁质量审计](PATCH-QUALITY-2026-09.md) 与对应结构化清单；吸收证明不能替代保留理由。
-
-后续接入的官方 AutoFDO、页缓存读取和 F2FS NAT 优化见 [接入与风险审查](AUTOFDO-2026-09.md)。profile 随固定 common 提供，由 `.env` pin 和构建实际命令共同验证；不要求额外下载或真机采样。它会改变大部分对象的编译参数，应合并安排必要重编译，不能以只开启配置开关代替接入。
+本地保留现行工具、必要下载与增量缓存，不保留过时专题报告或重复转储。新发现直接在对话中说明；来源与构建门禁必需的结构化记录继续保留。`evidence/` 的外部 ROM、镜像及日志由用户手动清理。
