@@ -431,7 +431,7 @@ prepare_fixed_git_subtree() {
 }
 
 prepare_clang_source_tree() {
-    local cache_dir="${ENVIRONMENT_DIR}/toolchain/aosp-clang-git-${AOSP_CLANG_COMMIT}"
+    local cache_dir="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}"
     local subtree="clang-${CI_CLANG_REVISION}"
     local paths=(
         "${subtree}/bin"
@@ -450,7 +450,7 @@ prepare_clang_source_tree() {
 }
 
 prepare_rust_source_tree() {
-    local cache_dir="${ENVIRONMENT_DIR}/toolchain/aosp-rust-${AOSP_RUST_COMMIT}"
+    local cache_dir="${WORK_DIR}/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}"
     local paths=(
         "${CI_RUST_SUBTREE}/bin"
         "${CI_RUST_SUBTREE}/etc"
@@ -468,7 +468,7 @@ prepare_rust_source_tree() {
 }
 
 prepare_build_tools_source_tree() {
-    local cache_dir="${ENVIRONMENT_DIR}/toolchain/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}"
+    local cache_dir="${WORK_DIR}/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}"
     local paths=(
         "${CI_BUILD_TOOLS_SUBTREE}/bin"
         "${CI_BUILD_TOOLS_SUBTREE}/include"
@@ -483,8 +483,8 @@ prepare_build_tools_source_tree() {
 }
 
 setup_toolchain() {
-    local files=(bindgen gavinhoward-bc)
-    local file expected actual marker marker_value staging backup rust_bin compiler blob
+    local files=(bindgen gavinhoward-bc stock-fsck.erofs stock-depmod stock-libc++.so)
+    local file expected actual marker marker_value staging backup rust_bin compiler blob stock_tools_dir
     mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
     prepare_clang_source_tree
     prepare_rust_source_tree
@@ -518,6 +518,21 @@ setup_toolchain() {
                 die "工具链缓存 Git blob 不匹配: ${file}"
         fi
     done
+
+    stock_tools_dir="${WORK_DIR}/tools/stock-evidence"
+    [ ! -L "${WORK_DIR}" ] && [ ! -L "${WORK_DIR}/tools" ] && [ ! -L "${stock_tools_dir}" ] || \
+        die "stock 解析工具目录不得经过符号链接"
+    mkdir -p "${stock_tools_dir}"
+    for file in stock-fsck.erofs stock-depmod; do
+        [ ! -L "${stock_tools_dir}/${file#stock-}" ] || die "stock 解析工具不得为符号链接"
+        cp -f "${DL_DIR}/${file}" "${stock_tools_dir}/${file#stock-}"
+        chmod 0755 "${stock_tools_dir}/${file#stock-}"
+    done
+    [ ! -L "${stock_tools_dir}/lib64" ] && [ ! -L "${stock_tools_dir}/lib64/libc++.so" ] || \
+        die "stock 解析工具运行库不得经过符号链接"
+    mkdir -p "${stock_tools_dir}/lib64"
+    cp -f "${DL_DIR}/stock-libc++.so" "${stock_tools_dir}/lib64/libc++.so"
+    chmod 0755 "${stock_tools_dir}/lib64/libc++.so"
 
     marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256"
     if [ -d "${CI_TOOLCHAIN_DIR}" ]; then
@@ -891,14 +906,15 @@ ANDROID_NDK_TREE_SHA256="${ANDROID_NDK_TREE_SHA256:?缺少 NDK 安装树 pin}"
 ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
-ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
+WORK_DIR="$(resolve_workspace_path "${BUILD_WORK_DIR:-work}")"
+ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-work/tools}")"
 CI_TOOLCHAIN_NAME="${CI_TOOLCHAIN_NAME:?缺少工具链目录 pin}"
 CI_CLANG_REVISION="${CI_CLANG_REVISION:?缺少 Clang revision pin}"
 [[ "${CI_TOOLCHAIN_NAME}" =~ ^ci-sm8850-[A-Za-z0-9._-]+$ ]] || die "工具链目录名异常"
 [[ "${CI_CLANG_REVISION}" =~ ^r[0-9]+[a-z]?$ ]] || die "Clang revision 格式错误"
 CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}"
-DL_DIR="${ENVIRONMENT_DIR}/toolchain/ci-sm8850-${CI_CLANG_REVISION}-downloads"
-SOURCE_DOWNLOAD_DIR="${ENVIRONMENT_DIR}/source-downloads"
+DL_DIR="${WORK_DIR}/cache/downloads/toolchain-${CI_CLANG_REVISION}"
+SOURCE_DOWNLOAD_DIR="${WORK_DIR}/cache/downloads/sources"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:?缺少工具链安装树 pin}"
 AOSP_CLANG_COMMIT="${AOSP_CLANG_COMMIT:?缺少 AOSP Clang commit pin}"
@@ -963,6 +979,10 @@ AOSP_HOST_BC_COMMIT="${AOSP_HOST_BC_COMMIT:?缺少 bc commit pin}"
 [[ "${AOSP_HOST_BC_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "bc commit 格式错误"
 [[ "${CI_BINDGEN_GIT_BLOB}" =~ ^[0-9a-f]{40}$ ]] || die "bindgen Git blob 格式错误"
 [[ "${CI_HOST_BC_GIT_BLOB}" =~ ^[0-9a-f]{40}$ ]] || die "bc Git blob 格式错误"
+[[ "${STOCK_AUDIT_TOOLS_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die "stock 解析工具 commit 格式错误"
+[[ "${STOCK_FSCK_EROFS_GIT_BLOB:-}" =~ ^[0-9a-f]{40}$ ]] || die "stock fsck.erofs Git blob 格式错误"
+[[ "${STOCK_KMOD_GIT_BLOB:-}" =~ ^[0-9a-f]{40}$ ]] || die "stock kmod Git blob 格式错误"
+[[ "${STOCK_LIBCXX_GIT_BLOB:-}" =~ ^[0-9a-f]{40}$ ]] || die "stock libc++ Git blob 格式错误"
 [ "${CI_BINDGEN_URL}" = "https://android.googlesource.com/platform/prebuilts/clang-tools/+/${AOSP_BINDGEN_COMMIT}/linux-x86/bin/bindgen?format=TEXT" ] || \
     die "bindgen 必须来自固定 AOSP Gitiles 提交"
 [ "${CI_HOST_BC_URL}" = "https://android.googlesource.com/platform/prebuilts/build-tools/+/${AOSP_HOST_BC_COMMIT}/linux-x86/bin/gavinhoward-bc?format=TEXT" ] || \
@@ -970,14 +990,23 @@ AOSP_HOST_BC_COMMIT="${AOSP_HOST_BC_COMMIT:?缺少 bc commit pin}"
 declare -A TC_PKGS=(
     [bindgen]="${CI_BINDGEN_URL}"
     [gavinhoward-bc]="${CI_HOST_BC_URL}"
+    [stock-fsck.erofs]="${AOSP_BUILD_TOOLS_REPO}/+/${STOCK_AUDIT_TOOLS_COMMIT}/linux-x86/bin/fsck.erofs?format=TEXT"
+    [stock-depmod]="${AOSP_BUILD_TOOLS_REPO}/+/${STOCK_AUDIT_TOOLS_COMMIT}/linux-x86/bin/depmod?format=TEXT"
+    [stock-libc++.so]="${AOSP_BUILD_TOOLS_REPO}/+/${STOCK_AUDIT_TOOLS_COMMIT}/linux-x86/lib64/libc++.so?format=TEXT"
 )
 declare -A TC_SHA256=(
     [bindgen]="${CI_BINDGEN_SHA256}"
     [gavinhoward-bc]="${CI_HOST_BC_SHA256}"
+    [stock-fsck.erofs]="${STOCK_FSCK_EROFS_SHA256:?缺少 stock fsck.erofs SHA-256 pin}"
+    [stock-depmod]="${STOCK_KMOD_SHA256:?缺少 stock kmod SHA-256 pin}"
+    [stock-libc++.so]="${STOCK_LIBCXX_SHA256:?缺少 stock libc++ SHA-256 pin}"
 )
 declare -A TC_GIT_BLOB=(
     [bindgen]="${CI_BINDGEN_GIT_BLOB}"
     [gavinhoward-bc]="${CI_HOST_BC_GIT_BLOB}"
+    [stock-fsck.erofs]="${STOCK_FSCK_EROFS_GIT_BLOB}"
+    [stock-depmod]="${STOCK_KMOD_GIT_BLOB}"
+    [stock-libc++.so]="${STOCK_LIBCXX_GIT_BLOB}"
 )
 
 ensure_repo "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_BRANCH}" "${KERNEL_COMMIT}"

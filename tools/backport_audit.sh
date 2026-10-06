@@ -228,10 +228,10 @@ COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR}")"
 AOSP_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR}")"
 STABLE_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR}")"
 MAINLINE_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR}")"
-OUTPUT_DIR="${WORKSPACE_DIR}/audit_out/backport-${BACKPORT_AUDIT_SNAPSHOT}"
+OUTPUT_DIR="${WORKSPACE_DIR}/${BUILD_WORK_DIR:-work}/audit/backport-${BACKPORT_AUDIT_SNAPSHOT}"
 CANDIDATES_FILE="${OUTPUT_DIR}/candidates.tsv"
 REFS_FILE="${OUTPUT_DIR}/refs.tsv"
-SUMMARY_FILE="${OUTPUT_DIR}/summary.md"
+SUMMARY_FILE="${OUTPUT_DIR}/summary.tsv"
 mkdir -p "${OUTPUT_DIR}"
 
 verify_bare_repo "AOSP common 审计源" "${AOSP_DIR}" "${COMMON_REPO}"
@@ -284,20 +284,18 @@ emit_source_candidates "linux-mainline" "${MAINLINE_DIR}" \
 
 CANDIDATE_TOTAL="$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "${CANDIDATES_FILE}")"
 {
-    printf '# 后续改进审计自动筛选摘要\n\n'
-    printf -- '- 快照日期：`%s`\n' "${BACKPORT_AUDIT_SNAPSHOT}"
-    printf -- '- AOSP `%s` 基线日期：`%s`\n' "${COMMON_BRANCH}" "${AOSP_BASE_DATE}"
-    printf -- '- 候选年龄门槛：无；仅拒绝晚于固定快照的提交\n'
-    printf -- '- AOSP 分支并集：%s 个非 merge 提交\n' "${AOSP_TOTAL}"
-    printf -- '- Linux stable 范围：%s 个非 merge 提交\n' "${STABLE_TOTAL}"
-    printf -- '- Linux mainline 范围：%s 个非 merge 提交\n' "${MAINLINE_TOTAL}"
-    printf -- '- 关键词初筛：%s 个\n\n' "${CANDIDATE_TOTAL}"
-    printf '## 初筛状态\n\n'
+    printf 'metric\tvalue\n'
+    printf 'snapshot\t%s\n' "${BACKPORT_AUDIT_SNAPSHOT}"
+    printf 'aosp.baseline_date\t%s\n' "${AOSP_BASE_DATE}"
+    printf 'aosp.commits\t%s\n' "${AOSP_TOTAL}"
+    printf 'linux-stable.commits\t%s\n' "${STABLE_TOTAL}"
+    printf 'linux-mainline.commits\t%s\n' "${MAINLINE_TOTAL}"
+    printf 'candidates\t%s\n' "${CANDIDATE_TOTAL}"
     for status in SCREEN_FIXES_ONLY REJECT_RELEVANCE REVIEW_INTERFACE_STATIC_RISK \
         DEEP_REVIEW_CORRECTNESS DEEP_REVIEW_PERFORMANCE; do
-        printf -- '- `%s`: %s\n' "${status}" "$(count_status "${status}")"
+        printf '%s\t%s\n' "${status}" "$(count_status "${status}")"
     done
-    printf '\n自动筛选不构成合入结论；接口风险项不得仅凭路径拒绝，所有 review 项仍须证明当前缺陷、收益、用户态兼容和目标 OTA 必需模块闭包。\n'
 } > "${SUMMARY_FILE}"
 
+log_info "自动筛选不构成合入结论；候选仍须完成逻辑、接口与目标 OTA 闭包审查"
 log_success "审计结果已生成: ${OUTPUT_DIR}"

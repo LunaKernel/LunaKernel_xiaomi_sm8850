@@ -96,59 +96,57 @@ reject_git_environment_overrides() {
 }
 reject_git_environment_overrides
 
-clean_previous_release_artifacts() {
-    local output_dir="$1"
-    local manifest_name="$2"
-    local manifest="${output_dir}/${manifest_name}"
-    local digest name extra path
-
-    [ -d "${output_dir}" ] || return
-    if [ -f "${manifest}" ]; then
-        while read -r digest name extra; do
-            if [ -z "${name}" ]; then
-                name="${digest}"
-            else
-                [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] && [ -z "${extra}" ] || \
-                    die "已有产物清单含非法摘要记录"
-            fi
-            case "${name}" in
-                ''|*/*|.|..|*[!A-Za-z0-9._-]*) die "已有产物清单含非法条目: ${name}" ;;
-            esac
-            rm -f -- "${output_dir}/${name}"
-        done < "${manifest}"
-    fi
-
-    while IFS= read -r -d '' path; do
-        rm -f -- "${path}"
-    done < <(
-        find "${output_dir}" -maxdepth 1 \( -type f -o -type l \) \
-            \( -name 'Image-luna-xiaomi17-g????????-????????' \
-            -o -name 'luna-xiaomi17-g????????-????????.zip' \
-            -o -name 'luna-xiaomi17-g????????-????????-audit.zip' \
-            -o -name 'KernelSU_v*-release.apk' \
-            -o -name 'ipset-arm64-v*' \
-            -o -name 'ipset-v*-android-arm64-kernelsu-module.zip' \
-            -o -name 'susfs4ksu-v*.zip' \
-            -o -name 'ksu_susfs_arm64' \) -print0
-    )
-    rm -f -- "${manifest}" "${output_dir}/Image"
-}
-
-prepare_product_directory() {
+prepare_workspace_directory() {
     local relative_dir="$1" path component
     case "${relative_dir}" in
-        ''|/*|.|..|../*|*/../*|*/..) die "构建产物目录必须是项目内的普通相对路径: ${relative_dir}" ;;
+        ''|/*|.|..|../*|*/../*|*/..) die "工作目录必须是项目内的普通相对路径: ${relative_dir}" ;;
     esac
     path="${HOST_WORKSPACE_DIR}"
     while IFS= read -r component; do
         case "${component}" in
-            ''|.|..) die "构建产物目录含非法路径分量: ${relative_dir}" ;;
+            ''|.|..) die "工作目录含非法路径分量: ${relative_dir}" ;;
         esac
         path="${path}/${component}"
-        [ ! -L "${path}" ] || die "构建产物目录不得经过符号链接: ${path}"
+        [ ! -L "${path}" ] || die "工作目录不得经过符号链接: ${path}"
     done < <(printf '%s\n' "${relative_dir}" | tr '/' '\n')
     mkdir -p "${path}"
-    PRODUCT_DIR="${path}"
+    PREPARED_DIRECTORY="${path}"
+}
+
+resolve_build_id() {
+    LUNA_PROJECT_SHORT="${LUNA_PROJECT_COMMIT:0:8}"
+    LUNA_BUILD_ID="${LUNA_BUILD_ID:-luna-xiaomi17-g${LUNA_PROJECT_SHORT}-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)}"
+    [[ "${LUNA_BUILD_ID}" =~ ^luna-xiaomi17-g${LUNA_PROJECT_SHORT}-[0-9]{8}-[0-9]{4}$ ]] || \
+        die "构建目录名与项目提交不匹配"
+    [ "${BUILD_OUTPUT_DIR}" = "kernel_out" ] && [ "${BUILD_WORK_DIR:-work}" = "work" ] || \
+        die "发布目录必须为 kernel_out，工作目录必须为 work"
+    WORK_DIR="${HOST_WORKSPACE_DIR}/work"
+    BUILD_TEMP_DIR="${WORK_DIR}/tmp"
+    PRODUCT_RELATIVE_DIR="kernel_out/${LUNA_BUILD_ID}"
+    COMPONENT_RELATIVE_DIR="work/components/${LUNA_BUILD_ID}"
+    RELEASE_AUDIT_RELATIVE_DIR="work/audit/${LUNA_BUILD_ID}"
+    PRODUCT_DIR="${HOST_WORKSPACE_DIR}/${PRODUCT_RELATIVE_DIR}"
+    COMPONENT_DIR="${HOST_WORKSPACE_DIR}/${COMPONENT_RELATIVE_DIR}"
+    RELEASE_AUDIT_DIR="${HOST_WORKSPACE_DIR}/${RELEASE_AUDIT_RELATIVE_DIR}"
+    ARTIFACT_MANIFEST="${RELEASE_AUDIT_DIR}/${ARTIFACT_MANIFEST_NAME}"
+    RELEASE_DATE="${LUNA_BUILD_ID#luna-xiaomi17-g${LUNA_PROJECT_SHORT}-}"
+    python3 -c 'import datetime, sys; datetime.datetime.strptime(sys.argv[1], "%Y%m%d-%H%M")' \
+        "${RELEASE_DATE}" >/dev/null 2>&1 || die "构建目录中的日期或分钟无效"
+    RELEASE_DATE="${RELEASE_DATE%-*}"
+    export LUNA_BUILD_ID
+    append_orbenv_var LUNA_BUILD_ID
+}
+
+prepare_release_directories() {
+    local relative path
+    # Keep prior builds, including unaccepted candidates. Pruning requires acceptance.
+    for relative in "${PRODUCT_RELATIVE_DIR}" "${COMPONENT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}"; do
+        path="${HOST_WORKSPACE_DIR}/${relative}"
+        [ ! -e "${path}" ] && [ ! -L "${path}" ] || die "拒绝覆盖已有构建目录: ${relative}"
+    done
+    for relative in "${PRODUCT_RELATIVE_DIR}" "${COMPONENT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}" work/tmp; do
+        prepare_workspace_directory "${relative}"
+    done
 }
 
 append_orbenv_var() {
@@ -284,56 +282,60 @@ orbctl_run_host_path() {
 
 sync_control_files_to_orb() {
     local items="init.sh patch.sh patch_external.sh build.sh"
-    [ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "tmp/os4/system_dlkm.img" ] || \
-        die "macOS 同步只接受固定的 tmp/os4/system_dlkm.img"
+    [ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "evidence/os4/system_dlkm.img" ] || \
+        die "macOS 同步只接受固定的 evidence/os4/system_dlkm.img"
     if [ -f "${HOST_WORKSPACE_DIR}/.env" ]; then items="${items} .env"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/ak3_template" ]; then items="${items} ak3_template"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/patches" ]; then items="${items} patches"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/abi" ]; then items="${items} abi"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/tools" ]; then items="${items} tools"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/userspace" ]; then items="${items} userspace"; fi
-    if [ -f "${HOST_WORKSPACE_DIR}/tmp/os4/system_dlkm.img" ]; then
-        items="${items} tmp/os4/system_dlkm.img"
+    if [ -f "${HOST_WORKSPACE_DIR}/evidence/os4/system_dlkm.img" ]; then
+        items="${items} evidence/os4/system_dlkm.img"
     fi
 
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target/tmp/os4\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/abi\" \"\$target/tools\" \"\$target/userspace\"; rm -f \"\$target/tmp/os4/system_dlkm.img\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
+    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target/evidence/os4\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/abi\" \"\$target/tools\" \"\$target/userspace\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
 }
 
 export_orb_results() {
-    orbctl_run sh -lc "set -e; workspace=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; output_dir='${BUILD_OUTPUT_DIR}'; case \"\$output_dir\" in /*) ;; *) output_dir=\"\$workspace/\$output_dir\" ;; esac; manifest=\"\$output_dir/${ARTIFACT_MANIFEST_NAME}\"; [ -s \"\$manifest\" ] && [ ! -L \"\$manifest\" ] || { printf '[FAIL] 当前构建产物清单缺失或不安全: %s\n' \"\$manifest\" >&2; exit 1; }; rm -rf \"\$workspace/../artifact_out\"; mkdir -p \"\$workspace/../artifact_out/kernel_out\" \"\$workspace/../outbox\"; count=0; while read -r digest name extra; do case \"\$digest\" in ''|*[!0-9a-f]*) printf '[FAIL] 非法产物摘要\n' >&2; exit 1 ;; esac; [ \"\${#digest}\" -eq 64 ] && [ -n \"\$name\" ] && [ -z \"\$extra\" ] || { printf '[FAIL] 非法产物清单记录\n' >&2; exit 1; }; case \"\$name\" in ''|*/*|.|..|*[!A-Za-z0-9._-]*) printf '[FAIL] 非法产物清单项: %s\n' \"\$name\" >&2; exit 1 ;; esac; path=\"\$output_dir/\$name\"; [ -f \"\$path\" ] && [ ! -L \"\$path\" ] || { printf '[FAIL] 当前构建产物缺失或不安全: %s\n' \"\$path\" >&2; exit 1; }; actual=\$(sha256sum \"\$path\"); actual=\${actual%% *}; [ \"\$actual\" = \"\$digest\" ] || { printf '[FAIL] 当前构建产物摘要不匹配: %s\n' \"\$name\" >&2; exit 1; }; cp -f \"\$path\" \"\$workspace/../artifact_out/kernel_out/\$name\"; count=\$((count + 1)); done < \"\$manifest\"; [ \"\$count\" -gt 0 ] || { printf '[FAIL] 当前构建产物清单为空\n' >&2; exit 1; }; cp -f \"\$manifest\" \"\$workspace/../artifact_out/kernel_out/${ARTIFACT_MANIFEST_NAME}\"; tar -cf \"\$workspace/../outbox/${ORB_RESULT_ARCHIVE}\" -C \"\$workspace/../artifact_out\" kernel_out"
+    orbctl_run sh -s -- "${ORB_LINUX_WORKSPACE}" "${ORB_LINUX_OUTBOX}" \
+        "${ORB_RESULT_ARCHIVE}" "${LUNA_BUILD_ID}" <<'SH'
+set -eu
+workspace="$HOME/$1"
+outbox="$HOME/$2"
+archive_name="$3"
+build_id="$4"
+mkdir -p "$workspace/work/tmp" "$outbox"
+staging="$(mktemp -d "$workspace/work/tmp/orb-export.XXXXXX")"
+trap 'rm -rf -- "$staging"' EXIT
+python3 "$workspace/tools/release_artifacts.py" export "$workspace" "$build_id" "$staging"
+tar -cf "$outbox/$archive_name" -C "$staging" kernel_out work
+SH
 }
 
 pull_orb_results() {
-    local temp_dir manifest digest name extra path actual count=0
-    temp_dir="$(mktemp -d "${HOST_WORKSPACE_DIR}/.${SCRIPT_NAME%.sh}.pull.XXXXXX")"
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; src=\"\$HOME/${ORB_LINUX_OUTBOX}/${ORB_RESULT_ARCHIVE}\"; dst='${temp_dir}/${ORB_RESULT_ARCHIVE}'; [ -f \"\$src\" ] || { printf '[FAIL] Orb 结果归档不存在: %s\n' \"\$src\" >&2; exit 1; }; cp -f \"\$src\" \"\$dst\""
-    mkdir -p "${temp_dir}/extracted"
-    tar -xf "${temp_dir}/${ORB_RESULT_ARCHIVE}" -C "${temp_dir}/extracted"
-    [ -d "${temp_dir}/extracted/kernel_out" ] || die "Orb 结果缺少 kernel_out"
-    manifest="${temp_dir}/extracted/kernel_out/${ARTIFACT_MANIFEST_NAME}"
-    [ -s "${manifest}" ] && [ ! -L "${manifest}" ] || die "Orb 结果缺少安全的当前构建产物清单"
-    mkdir -p "${PRODUCT_DIR}"
-    clean_previous_release_artifacts "${PRODUCT_DIR}" "${ARTIFACT_MANIFEST_NAME}"
-    while read -r digest name extra; do
-        [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] && [ -n "${name}" ] && [ -z "${extra}" ] || \
-            die "Orb 结果含非法产物摘要记录"
-        case "${name}" in
-            ''|*/*|.|..|*[!A-Za-z0-9._-]*) die "Orb 结果含非法产物清单项: ${name}" ;;
-        esac
-        path="${temp_dir}/extracted/kernel_out/${name}"
-        [ -f "${path}" ] && [ ! -L "${path}" ] || \
-            die "Orb 结果缺少安全的清单产物: ${name}"
-        actual="$(sha256_file "${path}")"
-        [ "${actual}" = "${digest}" ] || die "Orb 结果产物摘要不匹配: ${name}"
-        cp -f "${path}" "${PRODUCT_DIR}/${name}"
-        [ "$(sha256_file "${PRODUCT_DIR}/${name}")" = "${digest}" ] || \
-            die "Orb 结果复制后摘要不匹配: ${name}"
-        count=$((count + 1))
-    done < "${manifest}"
-    [ "${count}" -gt 0 ] || die "Orb 结果产物清单为空"
-    cp -f "${manifest}" "${PRODUCT_DIR}/${ARTIFACT_MANIFEST_NAME}"
-    rm -rf "${temp_dir}"
-    log_success "macOS 当前构建的 ${count} 个产物已同步到: ${PRODUCT_DIR}"
+    local temp_dir
+    prepare_workspace_directory work/tmp
+    temp_dir="$(mktemp -d "${BUILD_TEMP_DIR}/${SCRIPT_NAME%.sh}.pull.XXXXXX")"
+    if ! orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -s -- \
+        "${ORB_LINUX_OUTBOX}" "${temp_dir}" "${ORB_RESULT_ARCHIVE}" <<'SH'
+set -eu
+source="$HOME/$1/$3"
+destination="$2/$3"
+[ -f "$source" ] || { printf '[FAIL] Orb 结果归档不存在: %s\n' "$source" >&2; exit 1; }
+cp -f "$source" "$destination"
+SH
+    then
+        rm -rf -- "${temp_dir}"
+        die "Orb 结果归档复制失败"
+    fi
+    if ! python3 "${HOST_WORKSPACE_DIR}/tools/release_artifacts.py" import \
+        "${temp_dir}/${ORB_RESULT_ARCHIVE}" "${LUNA_BUILD_ID}" "${HOST_WORKSPACE_DIR}"; then
+        rm -rf -- "${temp_dir}"
+        die "Orb 结果身份、路径或摘要校验失败"
+    fi
+    rm -rf -- "${temp_dir}"
+    log_success "macOS 当前构建产物已按目录同步: ${PRODUCT_DIR}"
 }
 
 run_in_orb_if_needed() {
@@ -1604,9 +1606,9 @@ build_ipset_userspace() {
     strings "${binary}" | grep -Fx 'ipset' >/dev/null || die "ipset 二进制命令标识缺失"
     strings "${binary}" | grep -Fx "${IPSET_VERSION}" >/dev/null || die "ipset 二进制版本标识不匹配"
 
-    cp -f "${binary}" "${PRODUCT_DIR}/ipset-arm64-v${IPSET_VERSION}"
-    chmod 0755 "${PRODUCT_DIR}/ipset-arm64-v${IPSET_VERSION}"
-    module_dir="$(mktemp -d "${BUILD_DIR}/ipset-module.XXXXXX")"
+    cp -f "${binary}" "${COMPONENT_DIR}/ipset-arm64-v${IPSET_VERSION}"
+    chmod 0755 "${COMPONENT_DIR}/ipset-arm64-v${IPSET_VERSION}"
+    module_dir="$(mktemp -d "${BUILD_TEMP_DIR}/ipset-module.XXXXXX")"
     mkdir -p "${module_dir}/system/bin" "${module_dir}/LICENSES"
     cp -a "${HOST_WORKSPACE_DIR}/userspace/ipset_module/." "${module_dir}/"
     cp -f "${binary}" "${module_dir}/system/bin/ipset"
@@ -1614,11 +1616,11 @@ build_ipset_userspace() {
     cp -f "${LIBMNL_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.libmnl"
     chmod 0755 "${module_dir}/customize.sh" "${module_dir}/system/bin/ipset"
     normalize_archive_timestamps "${module_dir}"
-    module_zip="${PRODUCT_DIR}/ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
+    module_zip="${COMPONENT_DIR}/ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
     (cd "${module_dir}" && TZ=UTC 7z a -tzip -mtc=off -mta=off "${module_zip}" . >/dev/null)
     unzip -p "${module_zip}" system/bin/ipset | sha256sum | \
         grep -Fx "$(sha256sum "${binary}" | awk '{ print $1 }')  -" >/dev/null || die "IPSet 模块内命令校验失败"
-    case "${module_dir}" in "${BUILD_DIR}"/ipset-module.*) rm -rf -- "${module_dir}" ;; *) die "拒绝清理异常临时目录" ;; esac
+    case "${module_dir}" in "${BUILD_TEMP_DIR}"/ipset-module.*) rm -rf -- "${module_dir}" ;; *) die "拒绝清理异常临时目录" ;; esac
     log_success "IPSet 用户态命令与独立 KernelSU 模块已生成: $(basename "${module_zip}")"
 }
 
@@ -1646,9 +1648,9 @@ BUILD_OUTPUT_DIR="${BUILD_OUTPUT_DIR:-kernel_out}"
 PRODUCT_DIR=""
 
 resolve_project_identity
-prepare_product_directory "${BUILD_OUTPUT_DIR}"
-clean_previous_release_artifacts "${PRODUCT_DIR}" "${ARTIFACT_MANIFEST_NAME}"
+resolve_build_id
 run_in_orb_if_needed "$@"
+prepare_release_directories
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git}"
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
@@ -1791,7 +1793,7 @@ bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
 [ "$(sed -n '2p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_BRANCH}" ] || die "小米 ACK_SHA tag 已变化"
 
 BUILD_JOBS="$(detect_cpu_count)"
-BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-kernel_out/.build-sm8850-oryon1-kmi6-2026-09}")"
+BUILD_DIR="$(resolve_workspace_path "${BUILD_DIR:-work/cache/kernel/sm8850-oryon1-kmi6-2026-09}")"
 LUNA_MODULE_BLACKLIST="${LUNA_MODULE_BLACKLIST:-}"
 STAGE_CONFIG_LINES="${STAGE_CONFIG_LINES:-}"
 STAGE_CONFIG_SHA256="${STAGE_CONFIG_SHA256:-}"
@@ -1817,12 +1819,11 @@ ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256="${ANDROID17_STOCK_RUST_BINDER_MISSIN
 ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX="${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX:-}"
 ANDROID17_STOCK_MODULE_COUNT="${ANDROID17_STOCK_MODULE_COUNT:-}"
 ANDROID17_STOCK_MODULES_ORDER_SHA256="${ANDROID17_STOCK_MODULES_ORDER_SHA256:-}"
-ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-tmp/os4/system_dlkm.img}")"
+ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-evidence/os4/system_dlkm.img}")"
 ANDROID17_STOCK_SYSTEM_DLKM_SHA256="${ANDROID17_STOCK_SYSTEM_DLKM_SHA256:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_SIZE="${ANDROID17_STOCK_SYSTEM_DLKM_SIZE:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_RELEASE="${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT:-}"
-LUNA_PROJECT_SHORT="${LUNA_PROJECT_COMMIT:0:8}"
 KERNEL_LOCALVERSION="-android16-luna-g${LUNA_PROJECT_SHORT}-4k"
 KERNEL_BUILD_USER="${KERNEL_BUILD_USER:-luna}"
 KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
@@ -1896,8 +1897,8 @@ done
 [[ "${ANDROID17_STOCK_MODULES_ORDER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "固定 OTA modules.order SHA-256 格式错误"
 [[ "${ANDROID17_STOCK_SYSTEM_DLKM_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "system_dlkm.img SHA-256 快照格式错误"
 [[ "${ANDROID17_STOCK_SYSTEM_DLKM_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "system_dlkm.img 大小快照格式错误"
-[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "tmp/os4/system_dlkm.img" ] || \
-    die "system_dlkm 兼容性输入路径必须固定为 tmp/os4/system_dlkm.img"
+[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "evidence/os4/system_dlkm.img" ] || \
+    die "system_dlkm 兼容性输入路径必须固定为 evidence/os4/system_dlkm.img"
 [ -n "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" ] && \
     [[ "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" =~ ^[A-Za-z0-9._+-]+$ ]] || \
     die "system_dlkm stock release 快照格式错误"
@@ -1924,7 +1925,7 @@ verify_final_source_deltas
 EXPECTED_RELEASE="${COMMON_VERSION}${KERNEL_LOCALVERSION}"
 EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@${KERNEL_BUILD_HOST}) (${CI_CLANG_VERSION_LINE:?缺少 Clang 版本 pin}, ${CI_LLD_VERSION_TEXT:?缺少 LLD 版本 pin}) #${KERNEL_BUILD_VERSION} SMP PREEMPT ${KERNEL_BUILD_TIMESTAMP}"
 
-ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-environment}")"
+ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-work/tools}")"
 CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME:?缺少工具链目录 pin}"
 ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 MAGISKBOOT_ARM64_PATH="${ENVIRONMENT_DIR}/magisk/v${MAGISK_VERSION}/magiskboot-arm64"
@@ -1964,8 +1965,10 @@ export ARCH=arm64 SUBARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aa
 export KBUILD_GENDWARFKSYMS_STABLE=1 IN_KERNEL_MODULES=1 DO_NOT_STRIP_MODULES=1 PAGE_SIZE=4096
 export CC=clang HOSTCC="${CI_TOOLCHAIN_DIR}/host-bin/cc" LD=ld.lld HOSTLD=/usr/bin/ld HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
 if [ "${ENABLE_CCACHE:-0}" = 1 ] && command -v ccache >/dev/null 2>&1; then
+    prepare_workspace_directory work/cache/ccache
+    export CCACHE_DIR="${PREPARED_DIRECTORY}"
     CC='ccache clang'
-    log_success "复用 ccache 编译缓存"
+    log_success "复用项目 ccache 编译缓存: ${CCACHE_DIR}"
 fi
 
 MAKE_ARGS=(
@@ -1984,10 +1987,9 @@ MAKE_ARGS=(
     KBUILD_BUILD_VERSION="${KERNEL_BUILD_VERSION}"
 )
 
-AUDIT_DIR="${BUILD_DIR%/}/luna-compatibility-audit"
+AUDIT_DIR="${RELEASE_AUDIT_DIR}/snapshot"
 [ ! -L "${AUDIT_DIR}" ] || die "ABI/KMI 审计目录不得为符号链接"
 mkdir -p "${AUDIT_DIR}"
-find "${AUDIT_DIR}" -mindepth 1 -delete
 AUDIT_REPORT="${AUDIT_DIR}/summary.tsv"
 AUDIT_DRIFT_COUNT=0
 {
@@ -2245,37 +2247,34 @@ printf '# drift_count=%s\n' "${AUDIT_DRIFT_COUNT}" >> "${AUDIT_REPORT}"
 log_success "同 OTA 模块闭包已固定：102 个 system_dlkm 模块严格兼容，rust_binder.ko 为 C Binder 默认路径下的精确例外"
 
 mkdir -p "${PRODUCT_DIR}"
-ARTIFACT_MANIFEST="${PRODUCT_DIR}/${ARTIFACT_MANIFEST_NAME}"
 RELEASE_ARTIFACTS=()
-RELEASE_DATE="$(TZ=Asia/Shanghai date +%Y%m%d)"
 AUDIT_ARTIFACT="luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}-audit.zip"
 normalize_archive_timestamps "${AUDIT_DIR}"
 (cd "${AUDIT_DIR}" && \
-    TZ=UTC 7z a -tzip -mtc=off -mta=off "${PRODUCT_DIR}/${AUDIT_ARTIFACT}" . >/dev/null)
-unzip -tq "${PRODUCT_DIR}/${AUDIT_ARTIFACT}" >/dev/null || die "兼容性审计归档损坏"
-[ "$(unzip -Z1 "${PRODUCT_DIR}/${AUDIT_ARTIFACT}" | grep -Fxc 'summary.tsv')" = "1" ] || \
+    TZ=UTC 7z a -tzip -mtc=off -mta=off "${RELEASE_AUDIT_DIR}/${AUDIT_ARTIFACT}" . >/dev/null)
+unzip -tq "${RELEASE_AUDIT_DIR}/${AUDIT_ARTIFACT}" >/dev/null || die "兼容性审计归档损坏"
+[ "$(unzip -Z1 "${RELEASE_AUDIT_DIR}/${AUDIT_ARTIFACT}" | grep -Fxc 'summary.tsv')" = "1" ] || \
     die "兼容性审计归档缺少唯一 summary.tsv"
-RELEASE_ARTIFACTS+=("${AUDIT_ARTIFACT}")
+RELEASE_ARTIFACTS+=("${RELEASE_AUDIT_RELATIVE_DIR}/${AUDIT_ARTIFACT}")
 build_ipset_userspace
 if [ "${ENABLE_IPSET}" = "1" ]; then
     RELEASE_ARTIFACTS+=(
-        "ipset-arm64-v${IPSET_VERSION}"
-        "ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
+        "${COMPONENT_RELATIVE_DIR}/ipset-arm64-v${IPSET_VERSION}"
+        "${COMPONENT_RELATIVE_DIR}/ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
     )
 fi
 TARGET_IMAGE="${PRODUCT_DIR}/Image-luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}"
 cp -f "${IMAGE_PATH}" "${TARGET_IMAGE}"
-cp -f "${IMAGE_PATH}" "${PRODUCT_DIR}/Image"
-RELEASE_ARTIFACTS+=("$(basename "${TARGET_IMAGE}")")
+RELEASE_ARTIFACTS+=("${PRODUCT_RELATIVE_DIR}/$(basename "${TARGET_IMAGE}")")
 log_success "内核 Image 编译成功: ${TARGET_IMAGE}"
 
 if [ "${ENABLE_KERNELSU}" = "1" ]; then
     KSU_MANAGER_PATH="${ENVIRONMENT_DIR}/kernelsu/${KSU_COMMIT:0:8}/${KSU_MANAGER_APK}"
     [ -f "${KSU_MANAGER_PATH}" ] || die "官方 KernelSU Manager 缺失，请先运行 ./init.sh"
     [ "$(sha256sum "${KSU_MANAGER_PATH}" | awk '{ print $1 }')" = "${KSU_MANAGER_SHA256}" ] || die "官方 KernelSU Manager SHA-256 校验失败"
-    cp -f "${KSU_MANAGER_PATH}" "${PRODUCT_DIR}/${KSU_MANAGER_APK}"
-    RELEASE_ARTIFACTS+=("${KSU_MANAGER_APK}")
-    log_success "官方 KernelSU Manager 已复制到产物目录"
+    cp -f "${KSU_MANAGER_PATH}" "${COMPONENT_DIR}/${KSU_MANAGER_APK}"
+    RELEASE_ARTIFACTS+=("${COMPONENT_RELATIVE_DIR}/${KSU_MANAGER_APK}")
+    log_success "官方 KernelSU Manager 已复制到组件目录"
 fi
 
 if [ "${ENABLE_SUSFS}" = "1" ]; then
@@ -2286,19 +2285,19 @@ if [ "${ENABLE_SUSFS}" = "1" ]; then
         die "官方 ksu_susfs arm64 helper SHA-256 校验失败"
     grep -Fx 'version=v2.3.0' "${SUSFS_DIR}/ksu_module_susfs/module.prop" >/dev/null || \
         die "SUSFS module.prop 版本不是 v2.3.0"
-    SUSFS_MODULE_STAGE="$(mktemp -d "${BUILD_DIR}/susfs-module.XXXXXX")"
+    SUSFS_MODULE_STAGE="$(mktemp -d "${BUILD_TEMP_DIR}/susfs-module.XXXXXX")"
     cp -a "${SUSFS_DIR}/ksu_module_susfs/." "${SUSFS_MODULE_STAGE}/"
     normalize_archive_timestamps "${SUSFS_MODULE_STAGE}"
     (cd "${SUSFS_MODULE_STAGE}" && \
-        TZ=UTC 7z a -tzip -mtc=off -mta=off "${PRODUCT_DIR}/${SUSFS_MODULE_NAME}" . >/dev/null)
-    unzip -p "${PRODUCT_DIR}/${SUSFS_MODULE_NAME}" tools/ksu_susfs_arm64 | sha256sum | \
+        TZ=UTC 7z a -tzip -mtc=off -mta=off "${COMPONENT_DIR}/${SUSFS_MODULE_NAME}" . >/dev/null)
+    unzip -p "${COMPONENT_DIR}/${SUSFS_MODULE_NAME}" tools/ksu_susfs_arm64 | sha256sum | \
         grep -Fx "${SUSFS_HELPER_SHA256}  -" >/dev/null || die "SUSFS 模块内 helper 校验失败"
     case "${SUSFS_MODULE_STAGE}" in
-        "${BUILD_DIR}"/susfs-module.*) rm -rf -- "${SUSFS_MODULE_STAGE}" ;;
+        "${BUILD_TEMP_DIR}"/susfs-module.*) rm -rf -- "${SUSFS_MODULE_STAGE}" ;;
         *) die "拒绝清理异常 SUSFS 模块暂存目录" ;;
     esac
-    cp -f "${SUSFS_HELPER}" "${PRODUCT_DIR}/ksu_susfs_arm64"
-    RELEASE_ARTIFACTS+=("${SUSFS_MODULE_NAME}" "ksu_susfs_arm64")
+    cp -f "${SUSFS_HELPER}" "${COMPONENT_DIR}/ksu_susfs_arm64"
+    RELEASE_ARTIFACTS+=("${COMPONENT_RELATIVE_DIR}/${SUSFS_MODULE_NAME}" "${COMPONENT_RELATIVE_DIR}/ksu_susfs_arm64")
     log_success "官方 SUSFS helper 与模块已输出: ${SUSFS_MODULE_NAME}"
 fi
 
@@ -2321,7 +2320,7 @@ done
 
 log_step "从固定源码组装 AnyKernel3 刷机包"
 ZIP_NAME="${PRODUCT_DIR}/luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}.zip"
-AK3_STAGE="$(mktemp -d "${BUILD_DIR}/ak3-package.XXXXXX")"
+AK3_STAGE="$(mktemp -d "${BUILD_TEMP_DIR}/ak3-package.XXXXXX")"
 cp -a "${AK3_UPSTREAM_DIR}/." "${AK3_STAGE}/"
 cp -f "${AK3_TEMPLATE_DIR}/LICENSE" "${AK3_STAGE}/LICENSE"
 cp -f "${AK3_TEMPLATE_DIR}/SOURCE.md" "${AK3_STAGE}/SOURCE.md"
@@ -2413,26 +2412,28 @@ AK3_FILE_LIST="$(unzip -Z1 "${ZIP_NAME}" | sed '/\/$/d' | LC_ALL=C sort)"
   "$(sha256sum "${IMAGE_PATH}" | awk '{ print $1 }')" ] || die "刷机包 Image 与本次构建产物不一致"
 
 case "${AK3_STAGE}" in
-    "${BUILD_DIR}"/ak3-package.*) rm -rf -- "${AK3_STAGE}" ;;
+    "${BUILD_TEMP_DIR}"/ak3-package.*) rm -rf -- "${AK3_STAGE}" ;;
     *) die "拒绝清理异常 AnyKernel3 暂存目录" ;;
 esac
-RELEASE_ARTIFACTS+=("$(basename "${ZIP_NAME}")")
+RELEASE_ARTIFACTS+=("${PRODUCT_RELATIVE_DIR}/$(basename "${ZIP_NAME}")")
 log_success "AnyKernel3 刷机包已生成: ${ZIP_NAME}"
-rm -f -- "${PRODUCT_DIR}/Image"
 
+{
+    printf 'field\tvalue\n'
+    printf 'build_id\t%s\nproject_commit\t%s\nvalidation_status\tawaiting-device\n' \
+        "${LUNA_BUILD_ID}" "${LUNA_PROJECT_COMMIT}"
+} > "${RELEASE_AUDIT_DIR}/release.tsv"
 : > "${ARTIFACT_MANIFEST}"
 for artifact in "${RELEASE_ARTIFACTS[@]}"; do
-    case "${artifact}" in
-        ''|*/*|.|..|*[!A-Za-z0-9._-]*) die "拒绝记录非法产物名: ${artifact}" ;;
-    esac
-    [ -f "${PRODUCT_DIR}/${artifact}" ] && [ ! -L "${PRODUCT_DIR}/${artifact}" ] || \
+    [ -f "${HOST_WORKSPACE_DIR}/${artifact}" ] && [ ! -L "${HOST_WORKSPACE_DIR}/${artifact}" ] || \
         die "当前构建产物缺失或不安全: ${artifact}"
-    artifact_sha256="$(sha256sum "${PRODUCT_DIR}/${artifact}")"
+    artifact_sha256="$(sha256sum "${HOST_WORKSPACE_DIR}/${artifact}")"
     printf '%s  %s\n' "${artifact_sha256%% *}" "${artifact}" >> "${ARTIFACT_MANIFEST}"
 done
-[ -s "${ARTIFACT_MANIFEST}" ] || die "当前构建产物清单为空"
-(cd "${PRODUCT_DIR}" && sha256sum --strict --status -c "${ARTIFACT_MANIFEST_NAME}") || \
-    die "当前构建产物清单摘要自检失败"
-log_success "当前构建产物名称与 SHA-256 已固定 (${#RELEASE_ARTIFACTS[@]} 项)"
+python3 "${HOST_WORKSPACE_DIR}/tools/release_artifacts.py" check \
+    "${HOST_WORKSPACE_DIR}" "${LUNA_BUILD_ID}"
+# The verified ZIP retains the full snapshot; do not keep a second unpacked copy.
+rm -rf -- "${AUDIT_DIR}"
+log_success "当前构建 ${#RELEASE_ARTIFACTS[@]} 个产物已分目录记录，等待真机验收"
 
 log_success "Luna Kernel for Xiaomi 17 构建、固定 OTA 可启动门禁与全量差异审计完成"

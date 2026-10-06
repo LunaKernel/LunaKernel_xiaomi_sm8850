@@ -594,18 +594,18 @@ def prove_module_providers(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--boot-image", type=Path, default=Path("tmp/os4/boot.img"))
-    parser.add_argument("--vendor-boot-image", type=Path, default=Path("tmp/os4/vendor_boot.img"))
-    parser.add_argument("--vendor-dlkm-image", type=Path, default=Path("tmp/os4/vendor_dlkm.img"))
-    parser.add_argument("--system-dlkm-image", type=Path, default=Path("tmp/os4/system_dlkm.img"))
+    parser.add_argument("--boot-image", type=Path, default=Path("evidence/os4/boot.img"))
+    parser.add_argument("--vendor-boot-image", type=Path, default=Path("evidence/os4/vendor_boot.img"))
+    parser.add_argument("--vendor-dlkm-image", type=Path, default=Path("evidence/os4/vendor_dlkm.img"))
+    parser.add_argument("--system-dlkm-image", type=Path, default=Path("evidence/os4/system_dlkm.img"))
     parser.add_argument(
         "--common-repo",
         type=Path,
         default=Path("sources/aosp_common_backport_audit"),
         help="fixed official AOSP audit repository prepared by init.sh",
     )
-    parser.add_argument("--fsck-erofs", type=Path, default=Path("environment/toolchain/ci-sm8850-r536225/build-tools/bin/fsck.erofs"))
-    parser.add_argument("--kmod", type=Path, default=Path("environment/toolchain/ci-sm8850-r536225/build-tools/bin/depmod"))
+    parser.add_argument("--fsck-erofs", type=Path, default=Path("work/tools/stock-evidence/fsck.erofs"))
+    parser.add_argument("--kmod", type=Path, default=Path("work/tools/stock-evidence/depmod"))
     parser.add_argument("--unpack-bootimg", type=Path, default=Path("/usr/bin/unpack_bootimg"))
     parser.add_argument("--bsdtar", type=Path, default=Path("/usr/bin/bsdtar"))
     parser.add_argument(
