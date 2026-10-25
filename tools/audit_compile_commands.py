@@ -137,6 +137,12 @@ def main():
                 kind = 'rustc' if tool == 'rustc' else ('clang-asm' if source.endswith('.S')
                         else 'clang-bitcode' if source.endswith('.bc') else 'clang-c')
                 arm64 = target.startswith('aarch64')
+                if relative == 'drivers/kernelsu/preinit/.runner.elf.cmd':
+                    if (tool != 'clang' or not arm64
+                            or not source.endswith('/drivers/kernelsu/preinit/runner/runner.c')
+                            or '-ffreestanding' not in args):
+                        issues.append(relative + ': invalid userspace preinit runner producer')
+                    kind = 'clang-userspace'
                 counts[(kind, 'arm64' if arm64 else target)] += 1
                 isa = last(args, '-Ctarget-feature=' if tool == 'rustc' else '-march=')
                 model = last(args, '-Ztune-cpu=' if tool == 'rustc' else '-mtune=')
@@ -145,7 +151,7 @@ def main():
                 layout = [last(llvm, prefix) for prefix in
                           ('-enable-ext-tsp-block-placement=', '-ext-tsp-apply-without-profile=')]
                 threads = last(args, '-Zthreads=') if tool == 'rustc' else ''
-                if arm64 and kind != 'clang-asm':
+                if arm64 and kind not in ('clang-asm', 'clang-userspace'):
                     expected = [('-Ctarget-cpu=', 'generic'), ('-Ztune-cpu=', tune),
                                 ('-Ctarget-feature=', rust_features)] if tool == 'rustc' else [
                                 ('-march=', c_arch), ('-mtune=', tune)]
