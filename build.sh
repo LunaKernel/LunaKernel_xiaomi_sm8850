@@ -1141,7 +1141,7 @@ verify_boot_kmi_config() {
         MODULES MODULE_UNLOAD MODVERSIONS \
         ANDROID_VENDOR_HOOKS CFI_CLANG \
         HAVE_ARCH_SECCOMP HAVE_ARCH_SECCOMP_FILTER SECCOMP SECCOMP_FILTER \
-        ANDROID_BINDER_IPC ANDROID_BINDERFS TMPFS TMPFS_XATTR; do
+        ANDROID_BINDER_IPC_RUST TMPFS TMPFS_XATTR; do
         require_config_enabled "${symbol}"
     done
     for symbol in ARM64_16K_PAGES ARM64_64K_PAGES MODULE_SIG_FORCE; do
@@ -1179,7 +1179,8 @@ verify_project_config() {
     for symbol in PSTORE_ZONE SND_SIMPLE_CARD_UTILS; do
         require_config_not_enabled "${symbol}"
     done
-    require_config_module ANDROID_BINDER_IPC_RUST
+    require_config_disabled ANDROID_BINDER_IPC
+    require_config_not_enabled ANDROID_BINDERFS
     require_config_disabled CIFS
     if [ "${ENABLE_KERNELSU}" = "1" ]; then
         for symbol in KSU KPROBES EXT4_FS; do require_config_enabled "${symbol}"; done
@@ -1293,9 +1294,31 @@ verify_symbol_list_exports() {
     fi
 }
 
-verify_android17_stock_rust_binder() {
+verify_android17_stock_rust_binder_replacement() {
     local requirements expected_missing actual_missing matching mismatched non_vmlinux
     local requirement_count requirement_sha256 missing_count missing_sha256 match_count
+    local cmdline word blacklist="" module_path="kernel/drivers/android/binder/rust_binder.ko"
+
+    require_config_enabled ANDROID_BINDER_IPC_RUST
+    require_config_disabled ANDROID_BINDER_IPC
+    require_config_enabled CMDLINE_EXTEND
+    grep -Fx "${module_path}" "${BUILD_DIR}/modules.builtin" >/dev/null || \
+        die "Rust Binder 未进入本次 Image 的 built-in 清单"
+    ! grep -Fx "${module_path#kernel/}" "${BUILD_DIR}/modules.order" >/dev/null || \
+        die "Rust Binder 仍被编译为可加载模块"
+    grep -Eq '[[:space:]]__rust_binder_init$' "${BUILD_DIR}/System.map" && \
+        grep -Eq '[[:space:]]__rust_binder_initcall$' "${BUILD_DIR}/System.map" || \
+        die "vmlinux 缺少 Rust Binder 的内置启动入口"
+    ! grep -Eq '[[:space:]]binder_init$' "${BUILD_DIR}/System.map" || \
+        die "vmlinux 仍包含 C Binder 启动入口"
+    cmdline="$(bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" --state CMDLINE)"
+    for word in ${cmdline}; do
+        case "${word}" in module_blacklist=*) blacklist="${word#*=}" ;; esac
+    done
+    case ",${blacklist}," in
+        *,rust_binder,*) ;;
+        *) die "stock rust_binder.ko 未在符号解析前禁止加载" ;;
+    esac
 
     requirements="${AUDIT_DIR}/rust-binder-requirements.tsv"
     expected_missing="${AUDIT_DIR}/rust-binder-expected-missing.tsv"
@@ -1390,27 +1413,25 @@ verify_android17_stock_rust_binder() {
         }
     ' "${requirements}" "${BUILD_DIR}/Module.symvers"
 
-    [ ! -s "${mismatched}" ] || \
-        die "rust_binder 需求出现 CRC 不匹配:\n$(sed -n '1,20p' "${mismatched}")"
-    [ ! -s "${non_vmlinux}" ] || \
-        die "rust_binder 需求出现非 vmlinux provider:\n$(sed -n '1,20p' "${non_vmlinux}")"
-    cmp -s "${expected_missing}" "${actual_missing}" || \
-        die "rust_binder 67 项缺失例外发生变化:\n$(diff -u "${expected_missing}" "${actual_missing}" | sed -n '1,80p' || true)"
+    # The fixed stock module is blocked and replaced, not claimed ABI-compatible.
+    # Keep its complete import comparison as evidence; the other OTA consumers
+    # still pass the unchanged strict symbol/CRC/provider/namespace closure.
     match_count="$(wc -l < "${matching}" | tr -d ' ')"
-    [ "${match_count}" = "${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT}" ] || \
-        die "rust_binder vmlinux 精确匹配数量错误: ${match_count}"
 
     audit_compare "hard.rust-binder.requirements.count" \
         "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT}" "${requirement_count}"
     audit_compare "hard.rust-binder.requirements.sha256" \
         "${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_SHA256}" "${requirement_sha256}"
-    audit_compare "hard.rust-binder.match.count" \
-        "${ANDROID17_STOCK_RUST_BINDER_MATCH_COUNT}" "${match_count}"
-    audit_compare "hard.rust-binder.missing.count" \
-        "${ANDROID17_STOCK_RUST_BINDER_MISSING_COUNT}" "${missing_count}"
-    audit_compare "hard.rust-binder.missing.sha256" \
-        "${ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256}" "${missing_sha256}"
-    log_success "rust_binder 精确例外硬门禁通过 (${match_count} match / ${missing_count} missing / 0 CRC mismatch / 0 non-vmlinux)"
+    printf 'MATCH\thard.rust-binder.replacement\tbuiltin-and-stock-blocked\tbuiltin-and-stock-blocked\n' \
+        >> "${AUDIT_REPORT}"
+    printf 'INFO\tunused.stock-rust-binder.match.count\t-\t%s\n' "${match_count}" >> "${AUDIT_REPORT}"
+    printf 'INFO\tunused.stock-rust-binder.missing.count\t-\t%s\n' \
+        "$(wc -l < "${actual_missing}" | tr -d ' ')" >> "${AUDIT_REPORT}"
+    printf 'INFO\tunused.stock-rust-binder.crc-mismatch.count\t-\t%s\n' \
+        "$(wc -l < "${mismatched}" | tr -d ' ')" >> "${AUDIT_REPORT}"
+    printf 'INFO\tunused.stock-rust-binder.non-vmlinux.count\t-\t%s\n' \
+        "$(wc -l < "${non_vmlinux}" | tr -d ' ')" >> "${AUDIT_REPORT}"
+    log_success "内置 Rust Binder 与 stock 同名模块屏蔽已验证，保留原始 234 项需求审计"
 }
 
 verify_android17_stock_abi() {
@@ -1478,7 +1499,7 @@ verify_android17_stock_abi() {
         "${ANDROID17_STOCK_ABI_TUPLE_COUNT}" "${stock_tuple_count}"
     audit_compare "hard.stock-vmlinux-tuples.sha256" \
         "${ANDROID17_STOCK_ABI_TUPLE_SHA256}" "${stock_tuple_sha256}"
-    verify_android17_stock_rust_binder
+    verify_android17_stock_rust_binder_replacement
     log_success "小米 17 固定 OTA 模块闭包硬门禁通过 (${actual_count} 个 vmlinux 依赖及完整 tuple)"
 }
 
@@ -2093,6 +2114,10 @@ bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable CMDLINE_FROM_BOOTLOADER \
     --disable CMDLINE_FORCE
 bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
+    --enable ANDROID_BINDER_IPC_RUST \
+    --disable ANDROID_BINDER_IPC \
+    --disable ANDROID_BINDERFS \
+    --disable ANDROID_BINDER_IPC_SELFTEST \
     --disable WERROR \
     --disable LOCALVERSION_AUTO \
     --disable TRIM_UNUSED_KSYMS \
@@ -2325,7 +2350,7 @@ printf '# drift_count=%s\n' "${AUDIT_DRIFT_COUNT}" >> "${AUDIT_REPORT}"
 [ "${AUDIT_DRIFT_COUNT}" = "0" ] || \
     die "发现 ${AUDIT_DRIFT_COUNT} 项未确认参考快照漂移；本次 Image 保留在构建目录，审查 ${AUDIT_DIR} 后更新参考摘要再打包"
 
-log_success "同 OTA 模块闭包已固定：102 个 system_dlkm 模块严格兼容，rust_binder.ko 为 C Binder 默认路径下的精确例外"
+log_success "同 OTA 模块闭包已固定：102 个 system_dlkm 模块严格兼容，stock rust_binder.ko 由本次 Image 内置驱动替代并禁止加载"
 
 mkdir -p "${PRODUCT_DIR}"
 RELEASE_ARTIFACTS=()

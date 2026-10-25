@@ -25,6 +25,8 @@
 
 C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`、`tune-cpu=oryon-1` 与固定 ISA 列表。全部参数在 `.env`；Kbuild 保持内核 SIMD 和分支保护约束，Rust 使用 softfloat，特性列表以 `-strict-align,-neon` 结束，允许普通内存非对齐访问；当前 Rust 对 strict-align 的不稳定特性警告保留。早期启动 C 的严格对齐保持原生规则。保留 O2、CFI、Rust inline helpers 与 `LTO_NONE`，以及上游已有的局部优化等级、汇编和链接布局。
 
+Binder 仅使用内置 Rust 实现：`ANDROID_BINDER_IPC_RUST=y`，关闭 C Binder 及其专用 Binderfs 配置，Rust 驱动自行注册 Binderfs。该模式不需要 C 驱动解析 `binder.impl=rust`，也不同时内置两套同名 tracepoint。`module_blacklist=rust_binder` 只拒绝 ROM 中的旧 `.ko`，内置驱动通过 initcall 正常初始化。构建检查本次 `modules.builtin`、`modules.order`、`System.map` 和实际命令行；旧 `.ko` 的完整 234 项需求仍保留审计，其余 stock 模块继续严格检查 ABI/KMI，刷机包仍仅替换 Image。
+
 AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/Rust 命令必须带 sample-use 参数。构建前验证摘要、Git blob 和 LLVM 可读性；缺失或不匹配失败。该 profile 来自 Pixel 工作负载，不能据此宣称小米实测性能收益。
 
 C/Rust 后端启用 ExtTSP 基本块布局，并显式设置 `ext-tsp-apply-without-profile=false`，仅作用于有 profile 的函数。实际命令审计校验两个 LLVM 参数的最终值，防止被后续选项覆盖。Rust 仅 core 通过原生 `RUSTFLAGS_core.o` 使用四线程前端，继续遵循 GNU Make jobserver，所有内核 crate 保持 `codegen-units=1`；宿主工具保持 O2。
