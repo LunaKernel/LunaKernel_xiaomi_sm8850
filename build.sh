@@ -437,11 +437,14 @@ verify_kernelsu_source_state() {
         grep -Fq -- "${token}" <<<"${official_selinux_hide}" || \
             die "KernelSU 固定提交的官方 SELinux 隐藏实现缺少 ${token}"
     done
-    grep -Fq 'static ssize_t my_write_context' "${COMMON_DIR}/security/selinux/selinuxfs.c" || \
+    grep -Fq 'ssize_t my_write_context(' "${KSU_DIR}/kernel/feature/selinux_hide.c" && \
+        grep -Fq 'return my_write_context(file, buf, size);' "${COMMON_DIR}/security/selinux/selinuxfs.c" || \
         die "SUSFS 接入后缺少 SELinux context 查询代理"
-    grep -Fq 'static ssize_t my_write_access' "${COMMON_DIR}/security/selinux/selinuxfs.c" || \
+    grep -Fq 'ssize_t my_write_access(' "${KSU_DIR}/kernel/feature/selinux_hide.c" && \
+        grep -Fq 'return my_write_access(file, buf, size);' "${COMMON_DIR}/security/selinux/selinuxfs.c" || \
         die "SUSFS 接入后缺少 SELinux access 查询代理"
-    grep -Fq 'static int my_setprocattr' "${COMMON_DIR}/security/selinux/hooks.c" || \
+    grep -Fq 'int my_setprocattr(' "${KSU_DIR}/kernel/feature/selinux_hide.c" && \
+        grep -Fq 'return my_setprocattr(name, value, size);' "${COMMON_DIR}/security/selinux/hooks.c" || \
         die "SUSFS 接入后缺少 SELinux attr/current 代理"
     ! grep -Rqs --exclude='lsm_hook.h' 'security_add_hooks[[:space:]]*(' "${KSU_DIR}/kernel" || \
         die "KernelSU 意外注册了额外 LSM，必须重新审计 MAX_LSM_COUNT"
