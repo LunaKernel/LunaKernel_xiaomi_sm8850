@@ -1,6 +1,6 @@
 # 维护与回移
 
-当前工作分支为 `chore/kmi6-2026-09`，Linux 6.12.92 / KMI generation 6。`main` 和 `os3-android16-6.12.23` 保留历史；整理不重写 Git 历史，不为已有历史另外留备份。
+当前工作分支为 `feat/kmi6-2026-09-r8-rust-binder`，基于官方 `android16-6.12-2026-09_r8`（Linux 6.12.92 / KMI generation 6）。`chore/kmi6-2026-09` 保留上一验收状态；`main` 和 `os3-android16-6.12.23` 保留历史，不重写 Git 历史，不为已有历史另外留备份。
 
 ## 来源与审计
 
