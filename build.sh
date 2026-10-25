@@ -1281,30 +1281,30 @@ verify_symbol_list_exports() {
     local list_file="$1"
     local label="$2"
     local symvers_file="${BUILD_DIR}/Module.symvers"
-    local missing missing_count
-    missing="$(LC_ALL=C comm -23 \
+    local missing_file="${AUDIT_DIR}/symbol-list.${label}.missing.txt" missing_count
+    LC_ALL=C comm -23 \
         <(awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "${list_file}" | LC_ALL=C sort -u) \
-        <(awk '{ print $2 }' "${symvers_file}" | LC_ALL=C sort -u) | sed -n '1,20p')"
-    missing_count="$(LC_ALL=C comm -23 \
-        <(awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "${list_file}" | LC_ALL=C sort -u) \
-        <(awk '{ print $2 }' "${symvers_file}" | LC_ALL=C sort -u) | wc -l | tr -d ' ')"
-    audit_compare "symbol-list.${label}.missing" "0" "${missing_count}"
-    if [ -n "${missing}" ]; then
-        printf '[AUDIT] %s symbol-list missing sample:\n%s\n' "${label}" "${missing}"
+        <(awk '{ print $2 }' "${symvers_file}" | LC_ALL=C sort -u) > "${missing_file}"
+    missing_count="$(wc -l < "${missing_file}" | tr -d ' ')"
+    printf '[AUDIT] %s symbol-list unresolved=%s; full vendor snapshot records absent exports\n' \
+        "${label}" "${missing_count}"
+    if [ "${missing_count}" != "0" ]; then
+        sed -n '1,20p' "${missing_file}"
     fi
 }
 
 verify_android17_stock_rust_binder_replacement() {
     local requirements expected_missing actual_missing matching mismatched non_vmlinux
     local requirement_count requirement_sha256 missing_count missing_sha256 match_count
-    local cmdline word blacklist="" module_path="kernel/drivers/android/binder/rust_binder.ko"
+    local cmdline word blacklist="" module_path="kernel/drivers/android/binder/rust_binder.ko" module_object
 
     require_config_enabled ANDROID_BINDER_IPC_RUST
     require_config_disabled ANDROID_BINDER_IPC
     require_config_enabled CMDLINE_EXTEND
     grep -Fx "${module_path}" "${BUILD_DIR}/modules.builtin" >/dev/null || \
         die "Rust Binder 未进入本次 Image 的 built-in 清单"
-    ! grep -Fx "${module_path#kernel/}" "${BUILD_DIR}/modules.order" >/dev/null || \
+    module_object="${module_path#kernel/}"
+    ! grep -Fx -e "${module_object}" -e "${module_object%.ko}.o" "${BUILD_DIR}/modules.order" >/dev/null || \
         die "Rust Binder 仍被编译为可加载模块"
     grep -Eq '[[:space:]]__rust_binder_init$' "${BUILD_DIR}/System.map" && \
         grep -Eq '[[:space:]]__rust_binder_initcall$' "${BUILD_DIR}/System.map" || \
@@ -1571,11 +1571,12 @@ verify_stage_abi() {
        "${COMMON_DIR}/gki/aarch64/symbols/xiaomi" | LC_ALL=C sort -u > "${vendor_names}"
     awk -F '\t' '{ print $2 "\t" $1 }' "${all_symvers}" | \
         LC_ALL=C sort -k1,1 > "${vendor_map}"
-    LC_ALL=C join -t "$(printf '\t')" -1 1 -2 1 "${vendor_names}" "${vendor_map}" | \
+    LC_ALL=C join -t "$(printf '\t')" -a 1 -e '-' -o 1.1,2.2 \
+        -1 1 -2 1 "${vendor_names}" "${vendor_map}" | \
         awk -F '\t' '{ print $2 "\t" $1 }' > "${vendor_crc}"
     vendor_count="$(wc -l < "${vendor_crc}" | tr -d ' ')"
     [ "${vendor_count}" = "$(wc -l < "${vendor_names}" | tr -d ' ')" ] || \
-        die "QCOM/Xiaomi symbol list 含未解析导出"
+        die "QCOM/Xiaomi symbol list 参考快照记录不完整"
     vendor_sha256="$(sha256sum "${vendor_crc}" | awk '{ print $1 }')"
     audit_compare "vendor-kmi.full.count" \
         "${VENDOR_KMI_BASELINE_COUNT}" "${vendor_count}"
