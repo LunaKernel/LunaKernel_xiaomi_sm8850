@@ -56,7 +56,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 目标闭包符号删除、CRC/provider/namespace/相关类型不兼容或关键启动配置破坏均为绝对拒绝项，安全性或性能收益不能豁免。禁止删除验证对象、伪造导出、硬编码跳过、扩大例外或以空模块掩盖失败；唯一固定 `rust_binder.ko` 的内置替代策略见第 5 节。
 
-全量导出、STG 类型图、配置和模块矩阵是参考快照：哈希、项目数或顺序变化本身不是 ABI/KMI 硬失败或补丁拒绝理由。构建 MUST 报告参考值与本次值、生成结构化漂移摘要并保留本次完整快照。九月基线与 SM8850 LLVM 22 当前参考为：Module.symvers 18592 项、vmlinux/STG 17994 项导出、QCOM/Xiaomi vendor KMI 并集 4740 项；各项 SHA-256、配置与模块清单均以 `.env` 为准。
+全量导出、STG 类型图、配置和模块矩阵是参考快照：哈希、项目数或顺序变化本身不是 ABI/KMI 硬失败或补丁拒绝理由。构建 MUST 报告参考值与本次值、生成结构化漂移摘要并保留本次完整快照。九月 r8 与 SM8850 LLVM 22 当前参考为：Module.symvers 18589 项、vmlinux/STG 17991 项导出、QCOM/Xiaomi vendor 参考并集 4740 项，其中两个 C Binder tracepoint 未导出且无目标 OTA 消费者，参考 CRC 记为 `-`，不得据此伪造导出；各项 SHA-256、配置与模块清单均以 `.env` 为准。
 
 差异审计必须分开记录目标闭包硬门禁与全量快照漂移。目标消费者相关变化须证明完全兼容；无目标消费者的变化须用途明确且无回归。必要配置变化、新增项目模块及其必要导出、模块排序变化均须遵守上述要求，不得绕过关键配置和闭包门禁。出现 `DRIFT` 时必须先保留本次快照、完成影响审查，并在同一变更中更新参考摘要；未确认漂移不得进入发布闭包，也不得放宽 UAPI、syscall 或用户态语义审查。
 
@@ -89,7 +89,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 - `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
-- 参考配置为 8261 行，modules.order 为 104 个活动模块，摘要以 `.env` 为准。配置参考包含 Rust Binder 黑名单和 12 个序列化工具探测缓存项；已证明原有配置值保持，缓存项 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
+- 参考配置为 8259 行，modules.order 为 103 个活动模块，摘要以 `.env` 为准。相对旧验收仅切换四个 Binder 配置项：Rust 模块改内置、C 实现关闭、两个 C 专用选项不再序列化。配置参考包含 stock Rust Binder 模块黑名单和 12 个序列化工具探测缓存项；缓存项 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
 - 按本轮授权，Rust Binder 必须内置并作为唯一实际 Binder 实现：`ANDROID_BINDER_IPC_RUST=y`、`ANDROID_BINDER_IPC=n`，不启用 C 实现专用的 `ANDROID_BINDERFS`；Binderfs 由 Rust 驱动自带实现提供。不得同时内置 C/Rust 两套同名 tracepoint。保留独立 vendor hooks，固定 OTA 的其余模块继续严格闭包检查。配置使用 `CMDLINE_EXTEND=y`，保留 common 原始参数并追加 `module_blacklist=rust_binder`，仅阻止 stock 同名 `.ko` 的符号解析，不影响内置驱动。模块屏蔽策略独立于最小启动门禁；Rust Binder 本身提供核心 IPC，必须纳入启动配置检查。
