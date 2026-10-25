@@ -6,6 +6,8 @@
 
 内核层次为固定 AOSP common、`patch.sh` 的官方直接回移、`patch_external.sh` 的独立组件及最小兼容层、`build.sh` 的配置与发布检查。来源 pin 与快照以 [`.env`](../.env) 为准。
 
+KernelSU/SUSFS 使用 2026-10-26 核实的官方 main / 对应 6.12 分支快照。最新 KSU 的 kernel、UAPI tree 与 SUSFS 明确同步的提交完全相同；BBG main 未变化。组件吸收与保留依据见 [`3ff9fd3-absorption.tsv`](../patches/susfs/3ff9fd3-absorption.tsv)。先审查残差并证明独立重放，再更新源码、pin 和构建；不能通过重复覆盖修正或扩大允许路径隐藏新差异。
+
 [`patches/backports/`](../patches/backports/) 中保留吸收证明、质量审查和有序回移清单。selected 集合不可拆分；independent 中每份清单只含一个逻辑项，官方不可拆的前置/补修链同清单。新增项须固定来源、完整 commit、日期、patch-id、路径及适配补丁摘要，并证明固定基线缺少该改动、上游无明确回退或回归。
 
 通过临时 Git index 验证单项应用、撤销与完整顺序重放。最终源码字节及链接目标必须与真实补丁流程一致；允许路径、patch-id 或“能够应用”均不能替代逻辑与差异审查。不得把未编译对象计作有效功能。

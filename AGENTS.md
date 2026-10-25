@@ -27,8 +27,8 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 当前固定组件：
 
-- KernelSU `v3.3.0-50-g623eba3e`：`623eba3e092b911a3a7389b7d87622a5835d2f3a`，SUSFS 官方明确配套的 main 快照，built-in，version code `32651`、UAPI `4`。Manager 由用户独立获取匹配内核接口的官方版本，不属于项目下载、构建或交付目标。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 object 被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。
-- SUSFS v2.3.0：`b213c54126fb243595ce7876e91d84d6e0861fec`；common 与 KernelSU 官方兼容补丁取自同一提交。SUSFS KernelSU 模块 ZIP 与独立 helper 不属于项目交付目标；内核能力保持启用。已吸收的三个重复补修 MUST 删除；剩余差异与上下文见 `patches/susfs/b213c54-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
+- KernelSU main：`75e179d378d7aaa0de8946358a3384444c3e36b0`，kernel 与 UAPI Git tree 均与 SUSFS 明确配套的 `528bafc5` 相同，built-in，version code `32705`、UAPI `6`。Manager 由用户独立获取匹配内核接口的官方版本，不属于项目下载、构建或交付目标。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 syscall_hook_manager object 仍被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。新版 preinit runner 按 arm64 静态用户态 ELF 审计并嵌入 Image，不得将其参数误作内核参数，也不得静默关闭该能力。
+- SUSFS v2.3.0：`3ff9fd3fac5bb01b71b2cfe96c612d469710fb74`；common 与 KernelSU 官方兼容补丁取自同一提交。SUSFS KernelSU 模块 ZIP 与独立 helper 不属于项目交付目标；内核能力保持启用。已吸收的三个重复补修及已无必要的旧上下文适配层 MUST 删除；剩余差异与证据见 `patches/susfs/3ff9fd3-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；不再维护对其已禁用路径的重复代码删除。内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
 - Baseband Guard：`a54e0dc6cf0aff4dd87fec49644a02d2eb612905`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；file_permission、mmap_file 与 file_mprotect 在凭据检查前排除无关操作和非块设备，保护策略不变。boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
 
@@ -119,7 +119,7 @@ AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaom
 
 当前验收基准为项目 `586720039e9896d86e4e55dbdfd4bf8f01cd81b6`，release `6.12.92-android16-luna-g58672003-4k`，2026-10-07 完成本地构建、快速实机回归及用户功能确认，状态为 `accepted`；实机为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与验证范围见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希，也不得视为性能或长期稳定性实测。设备运行时 MGLRU 为关闭状态，其回收路径未触发；新 IPSet 二进制仅经临时执行验证，未替换已安装模块。完整本地构建与闭包证据以对应提交的发布审计为准。
 
-本开发分支的 r8、内置 Rust Binder 及后续回移尚待对应提交的完整构建与实机验证，不继承上述 C Binder 版本的验收状态。
+本分支 r8、内置 Rust Binder 及相关回移已在 `eb7aa9ca` 完成本地构建与模块闭包验证，尚未实机验收。本次 KernelSU/SUSFS 更新仍须以对应提交的完整构建与实机证据验明，不继承上述 C Binder 版本的验收状态。
 
 公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
 

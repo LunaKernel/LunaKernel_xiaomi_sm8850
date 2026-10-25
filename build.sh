@@ -69,7 +69,7 @@ verify_autofdo_compile_commands() {
     if [ "${1:-}" = --preflight ]; then
         log_success "本次预编译的 C、Rust core、helper 与 bitcode 实际参数检查通过"
     else
-        log_success "全部 C、Rust、helper 与 bitcode 后端的实际 SM8850/AutoFDO 编译参数检查通过"
+        log_success "全部内核 C/Rust/helper/bitcode 参数与独立用户态命令分类检查通过"
     fi
 }
 
@@ -546,9 +546,6 @@ verify_susfs_source_state() {
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
         "${SUSFS_KSU_PATCH_COMMIT}" ] || \
         die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
-    verify_project_patch "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁" \
-        "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_CONTEXT_PATCH_SHA256}" \
-        "${SUSFS_CONTEXT_PATCH_ID}"
     verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
         "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
         "${SUSFS_COMMON_FIX_PATCH_ID}"
@@ -563,7 +560,7 @@ verify_susfs_source_state() {
     cp "${SUSFS_DIR}/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" "${common_patch}"
     verify_rejected_susfs_fdinfo_hunk \
         "${common_patch}" "${COMMON_DIR}" \
-        "${SUSFS_CONTEXT_ADAPTATION}" "${SUSFS_COMMON_FIX_PATCH_FILE}"
+        "${SUSFS_COMMON_FIX_PATCH_FILE}"
     git -C "${KSU_DIR}" apply --reverse --check \
         --exclude=kernel/Kconfig \
         --exclude=kernel/policy/app_profile.c \
@@ -574,20 +571,14 @@ verify_susfs_source_state() {
         --exclude=kernel/supercall/dispatch.c \
         "${ksu_patch}" || die "KernelSU SUSFS 官方补丁状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check \
-        --exclude=fs/exec.c \
         --exclude=fs/namei.c \
         --exclude=fs/namespace.c \
         --exclude=fs/notify/fdinfo.c \
-        --exclude=fs/proc/base.c \
         --exclude=fs/proc/fd.c \
-        --exclude=fs/proc/task_mmu.c \
         --exclude=fs/stat.c \
         --exclude=mm/memory.c \
-        --exclude=security/selinux/hooks.c \
         "${common_patch}" || \
         die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_CONTEXT_ADAPTATION}" || \
-        die "基于 SUSFS 官方实现的 AOSP 6.12.92 上下文补丁状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
         die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
     git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
@@ -625,13 +616,7 @@ verify_susfs_source_state() {
         printf '%s\n' drivers/Kconfig drivers/Makefile drivers/kernelsu
         patch_paths_excluding "${TEGRA_MC_KMI_PATCH_FILE}"
         patch_paths_excluding "${common_patch}" \
-            fs/exec.c \
-            fs/namei.c \
-            fs/notify/fdinfo.c \
-            fs/proc/base.c \
-            fs/proc/task_mmu.c \
-            security/selinux/hooks.c
-        patch_paths_excluding "${SUSFS_CONTEXT_ADAPTATION}"
+            fs/notify/fdinfo.c
         patch_paths_excluding "${SUSFS_COMMON_FIX_PATCH_FILE}"
         printf '%s\n' fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h
         if [ "${ENABLE_BBG}" = "1" ]; then
@@ -1061,10 +1046,20 @@ verify_lsm_slot_capacity() {
 
 verify_kernelsu_build() {
     local cmd_file="${BUILD_DIR}/drivers/kernelsu/core/.init.o.cmd"
+    local runner="${BUILD_DIR}/drivers/kernelsu/preinit/runner.elf" runner_header
     [ -s "${BUILD_DIR}/drivers/kernelsu/built-in.a" ] || die "KernelSU built-in archive 缺失"
     [ -s "${cmd_file}" ] || die "KernelSU init 编译命令记录缺失"
     grep -F -- "-DKSU_VERSION=${KSU_VERSION_CODE}" "${cmd_file}" >/dev/null || die "KernelSU version code 未固定为 ${KSU_VERSION_CODE}"
     "${CI_TOOLCHAIN_DIR}/bin/llvm-nm" "${BUILD_DIR}/vmlinux" | grep -E '[[:space:]]T[[:space:]]+kernelsu_init$' >/dev/null || die "vmlinux 未链接 kernelsu_init"
+    [ -s "${runner}" ] || die "KernelSU preinit runner 缺失，不能静默关闭新版能力"
+    runner_header="$("${CI_TOOLCHAIN_DIR}/bin/llvm-readelf" -h "${runner}")"
+    grep -Eq 'Machine:[[:space:]]+AArch64' <<< "${runner_header}" && \
+        grep -Eq 'Type:[[:space:]]+EXEC' <<< "${runner_header}" || die "KernelSU preinit runner 不是 arm64 可执行文件"
+    if "${CI_TOOLCHAIN_DIR}/bin/llvm-readelf" -l "${runner}" | grep -Eq '[[:space:]](INTERP|DYNAMIC)[[:space:]]'; then
+        die "KernelSU preinit runner 不得依赖动态加载器或共享库"
+    fi
+    grep -Eq '[[:space:]]ksu_preinit_runner_start$' "${BUILD_DIR}/System.map" && \
+        grep -Eq '[[:space:]]ksu_preinit_runner_end$' "${BUILD_DIR}/System.map" || die "vmlinux 未嵌入 preinit runner"
     [ -s "${BUILD_DIR}/kernel/seccomp.o" ] || die "内核 seccomp 对象缺失"
     [ -s "${BUILD_DIR}/drivers/kernelsu/infra/seccomp_cache.o" ] || die "KernelSU seccomp cache 对象缺失"
     for symbol in disable_seccomp ksu_seccomp_allow_cache ksu_seccomp_clear_cache seccomp_filter_release; do
@@ -1758,20 +1753,19 @@ TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-main}"
-KSU_COMMIT="${KSU_COMMIT:-623eba3e092b911a3a7389b7d87622a5835d2f3a}"
+KSU_COMMIT="${KSU_COMMIT:-75e179d378d7aaa0de8946358a3384444c3e36b0}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
-KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2651}"
-KSU_VERSION_CODE="${KSU_VERSION_CODE:-32651}"
+KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2705}"
+KSU_VERSION_CODE="${KSU_VERSION_CODE:-32705}"
 KSU_SELINUX_HIDE_FIX_COMMIT="${KSU_SELINUX_HIDE_FIX_COMMIT:-3f388ef137c78e1ca0c92c0ada3b8717cdcc4302}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-b213c54126fb243595ce7876e91d84d6e0861fec}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-3ff9fd3fac5bb01b71b2cfe96c612d469710fb74}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-b213c54126fb243595ce7876e91d84d6e0861fec}"
-SUSFS_CONTEXT_ADAPTATION="${HOST_WORKSPACE_DIR}/${SUSFS_CONTEXT_PATCH}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-3ff9fd3fac5bb01b71b2cfe96c612d469710fb74}"
 SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
 SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
@@ -1788,8 +1782,8 @@ BBG_LUNA_FIX_PATCH_ID="${BBG_LUNA_FIX_PATCH_ID:-0122073137e18f229626307d84bd4339
 BBG_COMMON_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_COMMON_CREDENTIAL_PATCH:-patches/bbg/aosp-6.12.69-credential-api.patch}"
 BBG_COMMON_CREDENTIAL_PATCH_SHA256="${BBG_COMMON_CREDENTIAL_PATCH_SHA256:-2898be21ea20f4b80cacb12459f0e3cab25faff25921a9b81bae0d9226ab42be}"
 BBG_COMMON_CREDENTIAL_PATCH_ID="${BBG_COMMON_CREDENTIAL_PATCH_ID:-a770f38f4f9c7a1a14e7cf46b81bfa1f6a7db897}"
-BBG_KSU_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_KSU_CREDENTIAL_PATCH:-patches/bbg/kernelsu-623eba3e-credential-marking.patch}"
-BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-e1308a48dde630014aff4cc594705842f66539fb7fa97bf9c516dea9f9fe33bb}"
+BBG_KSU_CREDENTIAL_PATCH="${HOST_WORKSPACE_DIR}/${BBG_KSU_CREDENTIAL_PATCH:-patches/bbg/kernelsu-75e179d3-credential-marking.patch}"
+BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-c2a3a8cb62f77cdf663be0dc0c214b5bc225f65c15598ad20553d57dc865e3e0}"
 BBG_KSU_CREDENTIAL_PATCH_ID="${BBG_KSU_CREDENTIAL_PATCH_ID:-2eec8ddd3b3257dd38e7ed342eb83a17191f972b}"
 BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
 ENABLE_STAGE4_FS="${ENABLE_STAGE4_FS:-0}"

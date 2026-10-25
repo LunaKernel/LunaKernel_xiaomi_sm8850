@@ -29,7 +29,11 @@ Binder 仅使用内置 Rust 实现：`ANDROID_BINDER_IPC_RUST=y`，关闭 C Bind
 
 QCOM/Xiaomi 全量参考清单与固定 OTA 的实际模块闭包分开检查。参考清单中的未导出项完整保留于审计，`vendor-kmi.full.tsv` 对应 CRC 记为 `-`；参考摘要变化仍阻止打包，必须审查并更新。实际模块需要的符号缺失、CRC、provider、导出类型或 namespace 变化仍立即拒绝。
 
+C Binder 源码保留在固定 common 中，可用于重新构建回退版本。当前两套 tracepoint 对象含 111 个重复全局符号，不能原样同时内置；官方共存机制使用 C 内置、Rust 模块。当前 Image-only、Rust 内置方案保持单一实现，不引入模块交付或私有 tracepoint 改名层。
+
 AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/Rust 命令必须带 sample-use 参数。构建前验证摘要、Git blob 和 LLVM 可读性；缺失或不匹配失败。该 profile 来自 Pixel 工作负载，不能据此宣称小米实测性能收益。
+
+KernelSU 新版内嵌的 preinit runner 是独立的静态 nolibc 用户态程序，其真实命令单独记录，保持官方用户态参数，不使用内核 AutoFDO/ExtTSP。构建检查 arm64 静态 ELF 与 Image 中的嵌入符号；内核对象的原有编译参数门禁保持。
 
 C/Rust 后端启用 ExtTSP 基本块布局，并显式设置 `ext-tsp-apply-without-profile=false`，仅作用于有 profile 的函数。实际命令审计校验两个 LLVM 参数的最终值，防止被后续选项覆盖。Rust 仅 core 通过原生 `RUSTFLAGS_core.o` 使用四线程前端，继续遵循 GNU Make jobserver，所有内核 crate 保持 `codegen-units=1`；宿主工具保持 O2。
 

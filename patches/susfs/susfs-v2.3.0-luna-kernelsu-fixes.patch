@@ -12,10 +12,10 @@ index fcb0e6645caebebb712acce3544ed16831eddd68..cb83052a04fe25709b7c26a18683527d
  
  config KSU_SUSFS_SUS_MOUNT
 diff --git a/kernel/manager/pkg_observer.c b/kernel/manager/pkg_observer.c
-index 512b99296fead6d86282f2a199e4d20fabda0806..5b89858612742a362e0482530eeb069f05f74c96 100644
+index 0c1f5dbaf1bd68dec286964ca695b01e1d95b7c7..384f57f520c35e43146cd3cbb069aa66d6dae9bc 100644
 --- a/kernel/manager/pkg_observer.c
 +++ b/kernel/manager/pkg_observer.c
-@@ -35,8 +35,14 @@ static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask, struct i
+@@ -72,8 +72,14 @@ static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask, struct i
      return 0;
  }
  
@@ -30,7 +30,7 @@ index 512b99296fead6d86282f2a199e4d20fabda0806..5b89858612742a362e0482530eeb069f
  };
  
  static int add_mark_on_inode(struct inode *inode, u32 mask, struct fsnotify_mark **out)
-@@ -121,4 +127,4 @@ void __exit ksu_observer_exit(void)
+@@ -158,4 +164,4 @@ void __exit ksu_observer_exit(void)
      unwatch_one_dir(&g_watch);
      fsnotify_put_group(g);
      pr_info("observer exit done\n");
@@ -38,7 +38,7 @@ index 512b99296fead6d86282f2a199e4d20fabda0806..5b89858612742a362e0482530eeb069f
 \ No newline at end of file
 +}
 diff --git a/kernel/runtime/boot_event.c b/kernel/runtime/boot_event.c
-index 99dcb7dd1fc682824657c47067dbc291312808f8..04cc1ae09da8f4b86af0513b289f4359aea8f70b 100644
+index d469c21315c36948a4e715615615e6fb3c65baaa..3e5d88c080e32f1523776548071a94be800f623e 100644
 --- a/kernel/runtime/boot_event.c
 +++ b/kernel/runtime/boot_event.c
 @@ -1,4 +1,5 @@
@@ -47,7 +47,7 @@ index 99dcb7dd1fc682824657c47067dbc291312808f8..04cc1ae09da8f4b86af0513b289f4359
  #include <linux/err.h>
  #include <linux/fs.h>
  #include <linux/namei.h>
-@@ -17,14 +18,13 @@ extern struct static_key_true ksu_is_input_hook_enabled;
+@@ -18,14 +19,13 @@ extern struct static_key_true ksu_is_input_hook_enabled;
  
  void on_post_fs_data(void)
  {
@@ -65,10 +65,10 @@ index 99dcb7dd1fc682824657c47067dbc291312808f8..04cc1ae09da8f4b86af0513b289f4359
  
      ksu_load_allow_list();
 diff --git a/kernel/selinux/selinux.c b/kernel/selinux/selinux.c
-index 3b0fcb3d36ed72060b8297720f4c33f92e2e0085..ced7b1a8720bc91249a1d3898eb91d16afdf59fe 100644
+index 01d07eebd9aaf6803cdf7ead1989e292c84fd230..4f05d2266c6fb852d2723515184c0330bd3ee208 100644
 --- a/kernel/selinux/selinux.c
 +++ b/kernel/selinux/selinux.c
-@@ -235,7 +235,7 @@ u32 susfs_priv_app_sid __read_mostly = 0;
+@@ -249,7 +249,7 @@ u32 susfs_priv_app_sid __read_mostly = 0;
  static inline void susfs_set_sid(const char *secctx_name, u32 *out_sid)
  {
      int err;
@@ -77,7 +77,7 @@ index 3b0fcb3d36ed72060b8297720f4c33f92e2e0085..ced7b1a8720bc91249a1d3898eb91d16
      if (!secctx_name || !out_sid) {
          pr_err("secctx_name || out_sid is NULL\n");
          return;
-@@ -267,7 +267,7 @@ u32 susfs_get_sid_from_name(const char *secctx_name)
+@@ -281,7 +281,7 @@ u32 susfs_get_sid_from_name(const char *secctx_name)
  {
      u32 out_sid = 0;
      int err;
@@ -87,10 +87,10 @@ index 3b0fcb3d36ed72060b8297720f4c33f92e2e0085..ced7b1a8720bc91249a1d3898eb91d16
          pr_err("secctx_name is NULL\n");
          return 0;
 diff --git a/kernel/sulog/event.c b/kernel/sulog/event.c
-index 9f996cc00b43853bd3e8f25e9023bb6ca842d662..0c732d912f8190ee644bad805d2253e2e676b514 100644
+index 3b61cb1d66c8e97873f2fdeb774760c92c83ca1f..266ac8eb28360237ec88a6393a420a260eb24d17 100644
 --- a/kernel/sulog/event.c
 +++ b/kernel/sulog/event.c
-@@ -114,14 +114,11 @@ static __u32 ksu_sulog_copy_filename_kernel(const char *filename, char *dst, __u
+@@ -94,14 +94,11 @@ static __u32 ksu_sulog_copy_filename_kernel(const char *filename, char *dst, __u
      if (!filename)
          return ksu_sulog_copy_empty_string(dst);
  
@@ -110,22 +110,25 @@ index 9f996cc00b43853bd3e8f25e9023bb6ca842d662..0c732d912f8190ee644bad805d2253e2
      return ret + 1;
  }
 diff --git a/kernel/supercall/dispatch.c b/kernel/supercall/dispatch.c
-index dbf8720634bb8eee697c125de847e085f533c392..c05eb6286a27c1e4b349a9664cd20dff9eccf15c 100644
+index 4060bff731d98a9b8287e2c1ce72b2dbf45fa309..59a4423f22b4af530ff1f692321b273389192d8c 100644
 --- a/kernel/supercall/dispatch.c
 +++ b/kernel/supercall/dispatch.c
 @@ -1,3 +1,4 @@
 +#include <linux/atomic.h>
  #include <linux/capability.h>
  #include <linux/cred.h>
- #include <linux/slab.h>
-@@ -97,18 +98,16 @@ static int do_report_event(void __user *arg)
+ #include <linux/kallsyms.h>
+@@ -107,21 +108,19 @@ static int do_report_event(void __user *arg)
  
      switch (cmd.event) {
      case EVENT_POST_FS_DATA: {
 -        static bool post_fs_data_lock = false;
++        static atomic_t post_fs_data_once = ATOMIC_INIT(0);
+ 
+         // Reset for emulated soft reboot
+         services_started = false;
 -        if (!post_fs_data_lock) {
 -            post_fs_data_lock = true;
-+        static atomic_t post_fs_data_once = ATOMIC_INIT(0);
 +        if (atomic_cmpxchg(&post_fs_data_once, 0, 1) == 0) {
              pr_info("post-fs-data triggered\n");
              on_post_fs_data();
@@ -141,7 +144,7 @@ index dbf8720634bb8eee697c125de847e085f533c392..c05eb6286a27c1e4b349a9664cd20dff
              pr_info("boot_complete triggered\n");
              on_boot_completed();
              susfs_start_sdcard_monitor_fn();
-@@ -470,7 +469,7 @@ static int do_manage_mark(void __user *arg)
+@@ -498,7 +497,7 @@ static int do_manage_mark(void __user *arg)
  int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
  {
      if (magic1 != KSU_INSTALL_MAGIC1) {
