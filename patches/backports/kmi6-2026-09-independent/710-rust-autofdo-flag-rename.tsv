@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	rust_autofdo_flag_rename	direct	mainline	snapshot-2026-08-28	7594302d9ddd9f198173a658250e7b7debc6ed76	2026-06-04	f12ba25eb8ee374f9cb9feb097cb0bdb733e9631	scripts/Makefile.autofdo	-	-	-
