@@ -4,7 +4,9 @@
 
 `eb7aa9ca` 已完成 r8 与内置 Rust Binder 的完整本地构建和模块闭包验证，`c0cb0f53` 已完成 KSU 32705 / SUSFS `3ff9fd3` 的完整本地构建。本次更新至 r11、KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f` 与新版 AnyKernel3，删除 r11 已吸收的两项 Rust Binder 回移；保留兼容的 Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。本次构建与实机状态按新提交的对应审计核实。Manager 须匹配新版接口，旧验收记录中的 32651 / UAPI 4 不适用于本次更新。
 
-此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。本次 r11 必须另行审查完整快照漂移并通过全部构建门禁，不沿用旧版本的通过结论。
+此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。
+
+r11 / LLVM 22 候选 `b438efd3` 已完成 Image 和模块编译、固定 OTA 闭包及漂移审查：配置、103 项活动模块、18589 项完整导出及 4083 项目标依赖记录与 r8 参考完全一致。唯一 STG 漂移是官方 `2dcfe8477` 在 `dw_pcie_rp` 的既有填充中加入 `keep_rp_msi_en` 位域，结构大小与既有成员偏移不变；该类型不在目标 OTA 消费者图内，4083 项接口及全部可达类型图逐字一致（SHA-256 `7aa3ecad888492399365f1b1446a48cc40accbc0b2c950ddc11c7aadc8479344`）。已仅更新完整 STG 参考摘要，最终交付仍须在干净提交上通过标准流程，不将本地通过视为实机验收。
 
 LLVM 23 本轮不交付：固定 OTA 消费的 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，虽然该符号及全部可达类型的 STG 文本除 CRC 外完全一致，仍不满足模块闭包硬门禁。已确认 gendwarfksyms 输出类型串存在分隔符差异，最新官方 Linux 与 ACK 尚无对应修复；因此选择兼容的 LLVM 22 配对，撤销仅 Rust 1.98 需要的参数更名回移，保留 r11 和其他组件更新。
 
