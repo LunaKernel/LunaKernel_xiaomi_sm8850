@@ -6,7 +6,9 @@
 
 此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。本次 r11 必须另行审查完整快照漂移并通过全部构建门禁，不沿用旧版本的通过结论。
 
-LLVM 23 本轮不交付：固定 OTA 消费的 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，虽然该符号及全部可达类型的 STG 文本除 CRC 外完全一致，仍不满足模块闭包硬门禁。已确认 gendwarfksyms 输出类型串存在分隔符差异，最新官方 Linux 与 ACK 尚无对应修复；因此选择兼容的 LLVM 22 配对，撤销 LLVM 23 专用适配，保留 r11 和其他组件更新。
+LLVM 23 本轮不交付：固定 OTA 消费的 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，虽然该符号及全部可达类型的 STG 文本除 CRC 外完全一致，仍不满足模块闭包硬门禁。已确认 gendwarfksyms 输出类型串存在分隔符差异，最新官方 Linux 与 ACK 尚无对应修复；因此选择兼容的 LLVM 22 配对，撤销仅 Rust 1.98 需要的参数更名回移，保留 r11 和其他组件更新。
+
+当前输入下 LLVM 22/23 均在 `filemap.o` 的 MIR profile 流量推断中出现持续单核异常耗时。只追加官方 `-sample-profile-even-flow-distribution=false` 的隔离编译分别在 1.369/1.271 秒完成；该策略保留 AutoFDO、Profi 最小费用流和 MIR loader，实际 C/Rust 最终参数独立审计。此验证说明该对象可以正常编译，不代表权重推断或实机性能等价。
 
 ## 已验收基准
 
