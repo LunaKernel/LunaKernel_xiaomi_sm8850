@@ -8,6 +8,8 @@
 
 本次已生成的 8259 行配置相对 r8 仅改变 Clang、LLD、Rust 的八项版本身份字段，功能开关与工具探测缓存项不变；配置摘要已据完整差异更新。Rust 1.98 的 AutoFDO 参数更名采用官方 Linux `7594302d` 原样适配，保留 sample-use、profile 调试信息及其余 LLVM 参数；其余导出与类型快照仍由完整构建独立核验。
 
+Clang r614150 的单对象预编译中，`filemap.o` 持续单核运行 630 秒仍未完成，主动中止后栈定位为 `__filemap_get_folio` 的 MIR profile loader / `MinCostMaxFlow::findAugmentingDAG()`。保持原编译命令，仅追加官方 `-sample-profile-even-flow-distribution=false` 的隔离诊断在 1.271 秒完成；据此固定该兼容策略并审计最终参数。该结果证明此对象的编译耗时问题可规避，不证明默认路径无限循环，也不代表整树提速比例或实机性能结论。
+
 ## 已验收基准
 
 用户于 2026-10-07 确认 `6.12.92-android16-luna-g58672003-4k` 功能正常并验收，完整项目提交为 `586720039e9896d86e4e55dbdfd4bf8f01cd81b6`。

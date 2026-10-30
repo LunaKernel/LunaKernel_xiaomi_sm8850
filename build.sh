@@ -65,7 +65,8 @@ verify_autofdo_compile_commands() {
         "${BUILD_DIR}" "${AUTOFDO_PROFILE}" "${SM8850_C_ARCH}" \
         "${SM8850_TUNE_CPU}" "${SM8850_RUST_FEATURES}" \
         "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" "${CI_TOOLCHAIN_DIR}" \
-        "${KERNEL_EXTTSP_LLVM_FLAGS}" "${RUST_CORE_THREADS}" "$@"
+        "${KERNEL_EXTTSP_LLVM_FLAGS}" "${RUST_CORE_THREADS}" \
+        "${KERNEL_AUTOFDO_LLVM_FLAGS}" "$@"
     if [ "${1:-}" = --preflight ]; then
         log_success "本次预编译的 C、Rust core、helper 与 bitcode 实际参数检查通过"
     else
@@ -2060,14 +2061,17 @@ fi
 [ "${KERNEL_EXTTSP_LLVM_FLAGS:?缺少 ExtTSP 参数 pin}" = \
     '-enable-ext-tsp-block-placement=true -ext-tsp-apply-without-profile=false' ] || \
     die "ExtTSP 必须仅作用于有 profile 的函数"
+[ "${KERNEL_AUTOFDO_LLVM_FLAGS:?缺少 AutoFDO 后端参数 pin}" = \
+    '-sample-profile-even-flow-distribution=false' ] || \
+    die "AutoFDO 必须使用已验证的单路径增广策略"
 [[ "${RUST_CORE_THREADS:?缺少 Rust core 前端并行度 pin}" =~ ^[1-9][0-9]*$ ]] || \
     die "Rust core 前端并行度无效"
-read -r -a EXTTSP_LLVM_FLAGS <<< "${KERNEL_EXTTSP_LLVM_FLAGS}"
-KERNEL_LAYOUT_CFLAGS=''
-KERNEL_LAYOUT_RUSTFLAGS=''
-for flag in "${EXTTSP_LLVM_FLAGS[@]}"; do
-    KERNEL_LAYOUT_CFLAGS+=" -mllvm ${flag}"
-    KERNEL_LAYOUT_RUSTFLAGS+=" -Cllvm-args=${flag}"
+read -r -a KERNEL_LLVM_FLAGS <<< "${KERNEL_EXTTSP_LLVM_FLAGS} ${KERNEL_AUTOFDO_LLVM_FLAGS}"
+KERNEL_LLVM_CFLAGS=''
+KERNEL_LLVM_RUSTFLAGS=''
+for flag in "${KERNEL_LLVM_FLAGS[@]}"; do
+    KERNEL_LLVM_CFLAGS+=" -mllvm ${flag}"
+    KERNEL_LLVM_RUSTFLAGS+=" -Cllvm-args=${flag}"
 done
 
 MAKE_ARGS=(
@@ -2077,8 +2081,8 @@ MAKE_ARGS=(
     CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
     RUSTC=rustc HOSTRUSTC=rustc HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
     BINDGEN=bindgen HOSTLD=/usr/bin/ld
-    KCFLAGS="-Wno-error=unknown-warning-option -march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin}${KERNEL_LAYOUT_CFLAGS}"
-    KRUSTFLAGS="-Ctarget-cpu=generic -Ztune-cpu=${SM8850_TUNE_CPU} -Ctarget-feature=${SM8850_RUST_FEATURES:?缺少 SM8850 Rust ISA pin}${KERNEL_LAYOUT_RUSTFLAGS}"
+    KCFLAGS="-Wno-error=unknown-warning-option -march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin}${KERNEL_LLVM_CFLAGS}"
+    KRUSTFLAGS="-Ctarget-cpu=generic -Ztune-cpu=${SM8850_TUNE_CPU} -Ctarget-feature=${SM8850_RUST_FEATURES:?缺少 SM8850 Rust ISA pin}${KERNEL_LLVM_RUSTFLAGS}"
     RUSTFLAGS_core.o="-Zthreads=${RUST_CORE_THREADS}"
     LOCALVERSION="${KERNEL_LOCALVERSION}"
     KBUILD_BUILD_USER="${KERNEL_BUILD_USER}"
