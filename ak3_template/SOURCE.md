@@ -5,8 +5,8 @@ snapshot and a reviewable Luna patch. No prebuilt template archive is stored in
 this repository.
 
 - Script upstream: `https://github.com/osm0sis/AnyKernel3.git`
-- Script commit: `f63f136037d74f0e6b7eab941eadec5ff30e34c4`
-- arm64 tools commit: `e9101f0378055aa844fd80b7d819e0e1b3f59aed`
+- Script commit: `41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1`
+- arm64 tools commit: `cc7d2cee9b1b4298f6ab8666eb4486dea342748c`
 - Luna delta: `luna.patch`
 - AnyKernel3 license: `LICENSE`
 

@@ -1,14 +1,16 @@
 # 维护与回移
 
-当前工作分支为 `feat/kmi6-2026-09-r8-rust-binder`，基于官方 `android16-6.12-2026-09_r8`（Linux 6.12.92 / KMI generation 6）。`chore/kmi6-2026-09` 保留上一验收状态；`main` 和 `os3-android16-6.12.23` 保留历史，不重写 Git 历史，不为已有历史另外留备份。
+当前工作分支为 `feat/kmi6-2026-09-r8-rust-binder`，基线更新至官方 `android16-6.12-2026-09_r11`（Linux 6.12.92 / KMI generation 6）。`chore/kmi6-2026-09` 保留上一验收状态；`main` 和 `os3-android16-6.12.23` 保留历史，不重写 Git 历史，不为已有历史另外留备份。
 
 ## 来源与审计
 
 内核层次为固定 AOSP common、`patch.sh` 的官方直接回移、`patch_external.sh` 的独立组件及最小兼容层、`build.sh` 的配置与发布检查。来源 pin 与快照以 [`.env`](../.env) 为准。
 
-KernelSU/SUSFS 使用 2026-10-26 核实的官方 main / 对应 6.12 分支快照。最新 KSU 的 kernel、UAPI tree 与 SUSFS 明确同步的提交完全相同；BBG main 未变化。组件吸收与保留依据见 [`3ff9fd3-absorption.tsv`](../patches/susfs/3ff9fd3-absorption.tsv)。先审查残差并证明独立重放，再更新源码、pin 和构建；不能通过重复覆盖修正或扩大允许路径隐藏新差异。
+KernelSU/SUSFS 使用 2026-10-31 核实的官方 main / 对应 6.12 分支快照：KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`。最新 KSU 已超出 SUSFS 原配 `528bafc5`，须精确重放兼容层并保留新增 SELinux 修复；不再用源码树相同作为兼容性依据。组件吸收与保留依据见 [`6b60a30-absorption.tsv`](../patches/susfs/6b60a30-absorption.tsv)。先审查残差并证明独立重放，再更新源码、pin 和构建；不能通过重复覆盖修正或扩大允许路径隐藏新差异。
 
 [`patches/backports/`](../patches/backports/) 中保留吸收证明、质量审查和有序回移清单。selected 集合不可拆分；independent 中每份清单只含一个逻辑项，官方不可拆的前置/补修链同清单。新增项须固定来源、完整 commit、日期、patch-id、路径及适配补丁摘要，并证明固定基线缺少该改动、上游无明确回退或回归。
+
+r11 相对 r8 增加 16 个提交，已完整吸收 690/700 两项 Rust Binder 修复；其清单和 pin 删除，效果由基线保留。其余 66 个逻辑回移（其中 36 个独立项）已在临时 index 按固定顺序重放并完整逆序撤销，无新增上下文适配；实际源码与发布门禁仍由标准流程验证。
 
 通过临时 Git index 验证单项应用、撤销与完整顺序重放。最终源码字节及链接目标必须与真实补丁流程一致；允许路径、patch-id 或“能够应用”均不能替代逻辑与差异审查。不得把未编译对象计作有效功能。
 

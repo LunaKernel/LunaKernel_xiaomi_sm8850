@@ -1748,7 +1748,7 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.g
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-8349fd96abe644d106ea2145cbadf93da9a484e3}"
+COMMON_COMMIT="${COMMON_COMMIT:-aa556307b679df7ced0cc644068a529280dbc412}"
 COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
@@ -1756,25 +1756,25 @@ TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-main}"
-KSU_COMMIT="${KSU_COMMIT:-75e179d378d7aaa0de8946358a3384444c3e36b0}"
+KSU_COMMIT="${KSU_COMMIT:-51c217863c5e1fb639501e92ef17ac6d0cf90c92}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
-KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2705}"
-KSU_VERSION_CODE="${KSU_VERSION_CODE:-32705}"
+KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2712}"
+KSU_VERSION_CODE="${KSU_VERSION_CODE:-32712}"
 KSU_SELINUX_HIDE_FIX_COMMIT="${KSU_SELINUX_HIDE_FIX_COMMIT:-3f388ef137c78e1ca0c92c0ada3b8717cdcc4302}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-3ff9fd3fac5bb01b71b2cfe96c612d469710fb74}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-6b60a305d418148bd311f4fc9bddedc82d99e1fc}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-3ff9fd3fac5bb01b71b2cfe96c612d469710fb74}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-6b60a305d418148bd311f4fc9bddedc82d99e1fc}"
 SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
 SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
-BBG_COMMIT="${BBG_COMMIT:-a54e0dc6cf0aff4dd87fec49644a02d2eb612905}"
+BBG_COMMIT="${BBG_COMMIT:-028ff7fd509e2104596da7cc1ef8e6ce2a0c9082}"
 BBG_DIR="$(resolve_workspace_path "${BBG_SOURCE_DIR:-sources/baseband_guard}")"
 BBG_LSM_COUNT_PATCH="${HOST_WORKSPACE_DIR}/${BBG_LSM_COUNT_PATCH:-patches/bbg/aosp-6.12.69-lsm-count.patch}"
 BBG_LSM_COUNT_PATCH_SHA256="${BBG_LSM_COUNT_PATCH_SHA256:-f3792ead7a5dfd1b813e3260a2840e16a2eba548ca6a7c7e72f9bf144c9b30a1}"
@@ -1915,7 +1915,7 @@ ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRI
 KERNEL_LOCALVERSION="-android16-luna-g${LUNA_PROJECT_SHORT}-4k"
 KERNEL_BUILD_USER="${KERNEL_BUILD_USER:-luna}"
 KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
-KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-10-21 16:44:02 -0700}"
+KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-10-28 05:44:21 -0700}"
 KERNEL_BUILD_VERSION="${KERNEL_BUILD_VERSION:-1}"
 AK3_BOOT_PARTITION_SIZE="${AK3_BOOT_PARTITION_SIZE:-100663296}"
 AK3_UPSTREAM_COMMIT="${AK3_UPSTREAM_COMMIT:-}"
@@ -1931,9 +1931,9 @@ AK3_LUNA_ANYKERNEL_SH_SHA256="${AK3_LUNA_ANYKERNEL_SH_SHA256:-}"
 AK3_LUNA_UPDATE_BINARY_SHA256="${AK3_LUNA_UPDATE_BINARY_SHA256:-}"
 AK3_LUNA_UPDATER_SCRIPT_SHA256="${AK3_LUNA_UPDATER_SCRIPT_SHA256:-}"
 AK3_LUNA_CORE_SHA256="${AK3_LUNA_CORE_SHA256:-}"
-MAGISK_VERSION="${MAGISK_VERSION:-30.7}"
-MAGISK_COMMIT="${MAGISK_COMMIT:-e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac}"
-MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-d7440e2cd89899426e809554bf793baef9804ccbe5a52ce34a8b6242725d3c77}"
+MAGISK_VERSION="${MAGISK_VERSION:-31.1}"
+MAGISK_COMMIT="${MAGISK_COMMIT:-0972f67d97f9b6302b67c5171283330c74114b4a}"
+MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-97e9ec75731103d31c9e1effca7a50c6444309ce8f78c2ec27e9fe721da4bb54}"
 [ "${KERNEL_BUILD_USER}" = "luna" ] || die "内核构建用户必须固定为 luna"
 [ "${KERNEL_BUILD_HOST}" = "luna-build" ] || die "内核构建主机标识必须固定为 luna-build"
 [ "${KERNEL_BUILD_TIMESTAMP}" = "$(git -C "${COMMON_DIR}" show -s --format=%ci "${COMMON_COMMIT}")" ] || die "内核构建时间必须固定为 common 提交时间"
@@ -2436,18 +2436,18 @@ for AK3_SLOT_SCRIPT in META-INF/com/google/android/update-binary tools/ak3-core.
         die "AnyKernel3 包含不可信的临时文件或静态属性槽位猜测: ${AK3_SLOT_SCRIPT}"
     fi
 done
-[ "$(grep -Fxc '      slot=$(find_slot);' "${AK3_STAGE}/tools/ak3-core.sh")" = "1" ] || \
+[ "$(grep -Fxc '      SLOT=$(find_slot);' "${AK3_STAGE}/tools/ak3-core.sh")" = "1" ] || \
     die "AnyKernel3 未唯一使用受检槽位解析入口"
-grep -Fx 'slot_select=active;' "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未固定刷写当前启动槽"
+grep -Fx 'SLOT_SELECT=active;' "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未固定刷写当前启动槽"
 grep -Fx '[ ! -d /postinstall/tmp ] || abort "OTA post-install is not supported. Aborting...";' \
     "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未拒绝语义不同的 OTA post-install 环境"
-grep -Fx 'luna_expected_boot="/dev/block/by-name/boot$slot";' "${AK3_STAGE}/anykernel.sh" >/dev/null || \
+grep -Fx 'luna_expected_boot="/dev/block/by-name/boot$SLOT";' "${AK3_STAGE}/anykernel.sh" >/dev/null || \
     die "AnyKernel3 未绑定带槽位后缀的 boot 目标"
-grep -Fx '[ "$block" = "$luna_expected_boot" ] || \' "${AK3_STAGE}/anykernel.sh" >/dev/null || \
+grep -Fx '[ "$BLOCK" = "$luna_expected_boot" ] || \' "${AK3_STAGE}/anykernel.sh" >/dev/null || \
     die "AnyKernel3 未拒绝无后缀或错槽 boot 目标"
 grep -Fx "boot_partition_size=${AK3_BOOT_PARTITION_SIZE};" "${AK3_STAGE}/anykernel.sh" >/dev/null || \
     die "AnyKernel3 未固定小米 17 boot 分区容量"
-grep -Fx '  partition_size="$(blockdev --getsize64 "$block" 2>/dev/null)";' \
+grep -Fx '  partition_size="$(blockdev --getsize64 "$BLOCK" 2>/dev/null)";' \
     "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未读取真实 boot 块设备容量"
 grep -Fx '  if [ "$partition_size" -ne "$boot_partition_size" ]; then' \
     "${AK3_STAGE}/anykernel.sh" >/dev/null || die "AnyKernel3 未校验小米 17 boot 分区容量"

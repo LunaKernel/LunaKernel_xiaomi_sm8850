@@ -21,7 +21,9 @@
 
 ## 编译策略
 
-固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库，并验证官方 Git 对象、明确检出树与安装树摘要。
+固定 AOSP Clang r614150 / 23.0.1、Rust 1.98.1-dev（LLVM 23.0.1）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库，并验证官方 Git 对象、明确检出树与安装树摘要。
+
+common 使用官方 `android16-6.12-2026-09_r11`（Linux 6.12.92 / KMI generation 6）。按用户本轮确认，仅构建和交付 4 KiB 页面版本，16 KiB 暂不交付；固定 OTA 的模块与启动兼容性门禁保持。
 
 C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`、`tune-cpu=oryon-1` 与固定 ISA 列表。全部参数在 `.env`；Kbuild 保持内核 SIMD 和分支保护约束，Rust 使用 softfloat，特性列表以 `-strict-align,-neon` 结束，允许普通内存非对齐访问；当前 Rust 对 strict-align 的不稳定特性警告保留。早期启动 C 的严格对齐保持原生规则。保留 O2、CFI、Rust inline helpers 与 `LTO_NONE`，以及上游已有的局部优化等级、汇编和链接布局。
 
@@ -56,6 +58,6 @@ Image-luna-xiaomi17-g<8位提交>-YYYYMMDD
 
 完整审计归档、工作日志和 `.build-artifacts` 清单位于 `work/audit/<同名目录>/`；IPSet 命令与 KernelSU 模块 ZIP 位于 `work/components/<同名目录>/`。默认交付集合包含 Image、内核 ZIP、审计 ZIP、IPSet 命令与 IPSet 模块 ZIP 共五个文件。清单绑定全部交付文件的 SHA-256 和项目相对路径，OrbStack 保持这些目录关系；历史发布清单按原有文件集合校验。
 
-AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。KernelSU/SUSFS 保持内核集成；Manager 由用户独立获取匹配内核接口的官方版本。标准流程不下载 Manager，不打包 SUSFS KernelSU 模块或独立 helper。
+AnyKernel3 由官方 `41f04bdb` 脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。Luna 差异沿用上游大写变量接口，保留 bootconfig 优先的当前槽检测、实际 boot 分区容量及镜像大小检查；不覆盖上游 `AK_BASE_VERSION=20261027`。KernelSU/SUSFS 保持内核集成；Manager 由用户独立获取匹配内核接口的官方版本。标准流程不下载 Manager，不打包 SUSFS KernelSU 模块或独立 helper。
 
 构建只接受干净项目提交；成功后状态为 `awaiting-device`，不等同于实机验收。内核产物保留最新三套，第四套经用户确认验收后再清理最旧一套；构建不会提前删除旧内核产物。构建审计（含日志、失败快照）、回移审计及配套组件按类别各保留 `.env` 的 `WORK_HISTORY_KEEP=3` 份，生成流程退出或宿主导入完成后自动清理超额记录。构建记录按目录时间排序，回移审计按快照日期排序，同快照复用目录。审计被轮换掉的旧内核不再构成可重新发布的完整集合。外部 `evidence/` 由用户手动管理。

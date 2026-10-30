@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	rust_binder_node_debug_overflow	direct	aosp	android16-6.12	de98b82a04a1b657c5d9ed056a5dacee9c4343fa	2026-10-21	14f187d90fe0739cfc7d520ddad56fcf8b707a2f	drivers/android/binder/process.rs	-	-	-

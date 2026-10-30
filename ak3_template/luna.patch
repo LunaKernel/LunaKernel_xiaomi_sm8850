@@ -1,6 +1,5 @@
-diff -urN a/META-INF/com/google/android/update-binary b/META-INF/com/google/android/update-binary
---- a/META-INF/com/google/android/update-binary	2026-08-29 22:47:01.130505425 +0800
-+++ b/META-INF/com/google/android/update-binary	2026-08-29 22:47:01.123505383 +0800
+--- a/META-INF/com/google/android/update-binary
++++ b/META-INF/com/google/android/update-binary
 @@ -33,15 +33,38 @@
  }
  show_progress() { echo "progress $1 $2" >> /proc/self/fd/$OUTFD; }
@@ -38,10 +37,11 @@ diff -urN a/META-INF/com/google/android/update-binary b/META-INF/com/google/andr
 -    slot=$(getprop ro.boot.slot 2>/dev/null);
 -    [ "$slot" ] || slot=$(grep -o 'androidboot.slot=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
 -    [ "$slot" ] && slot=_$slot;
+-  fi;
+-  [ "$slot" == "normal" ] && unset slot;
 +    slot=$(normalize_slot "$(getprop ro.boot.slot 2>/dev/null)");
 +    [ "$slot" ] || slot=$(normalize_slot "$(grep -o 'androidboot.slot=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2)");
-   fi;
--  [ "$slot" == "normal" ] && unset slot;
++  fi;
 +  [ "$slot" ] || slot=$(find_slot_from_bootctl);
    [ "$slot" ] && echo "$slot";
  }
@@ -55,18 +55,8 @@ diff -urN a/META-INF/com/google/android/update-binary b/META-INF/com/google/andr
            if [ "$propval" ]; then
              break 2;
            else
-diff -urN a/META-INF/com/google/android/updater-script b/META-INF/com/google/android/updater-script
---- a/META-INF/com/google/android/updater-script	2026-08-29 22:47:01.132505437 +0800
-+++ b/META-INF/com/google/android/updater-script	2026-08-29 22:47:01.125505395 +0800
-@@ -3,4 +3,4 @@
- # Dummy file; update-binary is a shell script (DO NOT CHANGE)
- #
- #
--# AK_BASE_VERSION=20231020
-+# AK_BASE_VERSION=20240203
-diff -urN a/anykernel.sh b/anykernel.sh
---- a/anykernel.sh	2026-08-29 22:47:01.128505413 +0800
-+++ b/anykernel.sh	2026-08-29 22:47:01.122505377 +0800
+--- a/anykernel.sh
++++ b/anykernel.sh
 @@ -4,22 +4,41 @@
  ### AnyKernel setup
  # global properties
@@ -102,7 +92,7 @@ diff -urN a/anykernel.sh b/anykernel.sh
 +    ''|*[!0-9]*) abort "Unable to determine new boot image size. Aborting...";;
 +  esac;
 +
-+  partition_size="$(blockdev --getsize64 "$block" 2>/dev/null)";
++  partition_size="$(blockdev --getsize64 "$BLOCK" 2>/dev/null)";
 +  case "$partition_size" in
 +    ''|*[!0-9]*) abort "Unable to determine target boot partition size. Aborting...";;
 +  esac;
@@ -121,25 +111,25 @@ diff -urN a/anykernel.sh b/anykernel.sh
  } # end attributes
  
  # boot shell variables
--block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;
--is_slot_device=0;
-+block=/dev/block/by-name/boot;
-+is_slot_device=1;
-+slot_select=active;
+-BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;
+-IS_SLOT_DEVICE=0;
++BLOCK=/dev/block/by-name/boot;
++IS_SLOT_DEVICE=1;
++SLOT_SELECT=active;
 +boot_partition_size=100663296;
- ramdisk_compression=auto;
- patch_vbmeta_flag=auto;
+ RAMDISK_COMPRESSION=auto;
+ PATCH_VBMETA_FLAG=auto;
  
  # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
  . tools/ak3-core.sh;
  
 +[ ! -d /postinstall/tmp ] || abort "OTA post-install is not supported. Aborting...";
-+case "$slot" in
++case "$SLOT" in
 +  _a|_b) ;;
 +  *) abort "Invalid active slot. Aborting...";;
 +esac;
-+luna_expected_boot="/dev/block/by-name/boot$slot";
-+[ "$block" = "$luna_expected_boot" ] || \
++luna_expected_boot="/dev/block/by-name/boot$SLOT";
++[ "$BLOCK" = "$luna_expected_boot" ] || \
 +  abort "Resolved boot partition does not match active slot. Aborting...";
 +
  # boot install
@@ -182,13 +172,13 @@ diff -urN a/anykernel.sh b/anykernel.sh
  #write_boot; # use flash_boot to skip ramdisk repack, e.g. for dtb on devices with hdr v4 but no vendor_kernel_boot
  ## end vendor_boot install
 -
-diff -urN a/tools/ak3-core.sh b/tools/ak3-core.sh
---- a/tools/ak3-core.sh	2026-08-29 22:47:01.134505449 +0800
-+++ b/tools/ak3-core.sh	2026-08-29 22:47:01.126505401 +0800
-@@ -37,6 +37,40 @@
+--- a/tools/ak3-core.sh
++++ b/tools/ak3-core.sh
+@@ -36,6 +36,40 @@
+ # file_getprop <file> <property>
  file_getprop() {
    grep "^$2=" "$1" | tail -n1 | cut -d= -f2-;
- }
++}
 +normalize_slot() {
 +  case "$1" in
 +    _a|_b) echo "$1";;
@@ -222,34 +212,34 @@ diff -urN a/tools/ak3-core.sh b/tools/ak3-core.sh
 +  fi;
 +  [ "$slot" ] || slot=$(find_slot_from_bootctl);
 +  [ "$slot" ] && echo "$slot";
-+}
+ }
  ###
  
- ### file/directory attributes functions:
-@@ -436,9 +470,8 @@
+@@ -510,9 +544,8 @@
  
    if [ ! -f boot-new.img ]; then
      abort "No repacked image found to flash. Aborting...";
 -  elif [ "$(wc -c < boot-new.img)" -gt "$(wc -c < boot.img)" ]; then
 -    abort "New image larger than target partition. Aborting...";
-   fi;
+-  fi;
++  fi;
 +  luna_verify_boot_image_size boot-new.img;
-   blockdev --setrw $block 2>/dev/null;
-   if [ -f "$bin/flash_erase" -a -f "$bin/nandwrite" ]; then
-     $bin/flash_erase $block 0 0;
-@@ -811,14 +844,7 @@
-   # slot detection enabled by is_slot_device=1 or auto (from anykernel.sh)
-   case $is_slot_device in
+   blockdev --setrw $BLOCK 2>/dev/null;
+   if [ -f "$BIN/flash_erase" -a -f "$BIN/nandwrite" ]; then
+     flash_erase $BLOCK 0 0;
+@@ -881,14 +914,7 @@
+   # slot detection enabled by IS_SLOT_DEVICE=1 or auto (from anykernel.sh)
+   case $IS_SLOT_DEVICE in
      1|auto)
--      slot=$(getprop ro.boot.slot_suffix 2>/dev/null);
--      [ "$slot" ] || slot=$(grep -o 'androidboot.slot_suffix=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
--      if [ ! "$slot" ]; then
--        slot=$(getprop ro.boot.slot 2>/dev/null);
--        [ "$slot" ] || slot=$(grep -o 'androidboot.slot=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
--        [ "$slot" ] && slot=_$slot;
+-      SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null);
+-      [ "$SLOT" ] || SLOT=$(grep -o 'androidboot.slot_suffix=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
+-      if [ ! "$SLOT" ]; then
+-        SLOT=$(getprop ro.boot.slot 2>/dev/null);
+-        [ "$SLOT" ] || SLOT=$(grep -o 'androidboot.slot=.*$' /proc/cmdline | cut -d\  -f1 | cut -d= -f2);
+-        [ "$SLOT" ] && SLOT=_$SLOT;
 -      fi;
--      [ "$slot" == "normal" ] && unset slot;
-+      slot=$(find_slot);
-       if [ "$slot" ]; then
-         if [ -d /postinstall/tmp -a ! "$slot_select" ]; then
-           slot_select=inactive;
+-      [ "$SLOT" == "normal" ] && unset SLOT;
++      SLOT=$(find_slot);
+       if [ "$SLOT" ]; then
+         if [ -d /postinstall/tmp -a ! "$SLOT_SELECT" ]; then
+           SLOT_SELECT=inactive;

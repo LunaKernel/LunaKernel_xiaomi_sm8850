@@ -1,10 +1,10 @@
 # 当前验证状态
 
-开发分支 `feat/kmi6-2026-09-r8-rust-binder` 已切换到官方九月 r8，并改为内置 Rust Binder、关闭 C Binder、屏蔽 ROM 中同名模块。完整构建证据以本分支对应发布审计为准，尚未实机验收；以下验收仅属于历史 `g58672003`。
+开发分支 `feat/kmi6-2026-09-r8-rust-binder` 本轮更新至官方九月 r11，保留内置 Rust Binder、关闭 C Binder、屏蔽 ROM 中同名模块。按用户确认仅交付 4 KiB 版本，16 KiB 暂不交付。完整构建证据以本分支对应发布审计为准，尚未实机验收；以下验收仅属于历史 `g58672003`。
 
-`eb7aa9ca` 已完成 r8 与内置 Rust Binder 的完整本地构建和模块闭包验证。本次更新 KernelSU 至 `75e179d3`（32705 / UAPI 6）、SUSFS 至 `3ff9fd3`，同时精简补丁；其构建与实机状态按新提交的对应审计核实。Manager 须匹配新版接口，旧验收记录中的 32651 / UAPI 4 不适用于本次更新。
+`eb7aa9ca` 已完成 r8 与内置 Rust Binder 的完整本地构建和模块闭包验证，`c0cb0f53` 已完成 KSU 32705 / SUSFS `3ff9fd3` 的完整本地构建。本次更新至 r11、Clang r614150 / LLVM 23.0.1、Rust 1.98.1-dev、KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30` 和 BBG `028ff7f`，删除 r11 已吸收的两项 Rust Binder 回移；本次构建与实机状态按新提交的对应审计核实。Manager 须匹配新版接口，旧验收记录中的 32651 / UAPI 4 不适用于本次更新。
 
-r8 参考快照已通过旧验收归档与本次对象、独立链接结果的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象；发布仍须重新通过全部构建门禁。
+此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。本次 r11 / LLVM 23 必须另行审查完整快照漂移并通过全部构建门禁，不沿用旧版本的通过结论。
 
 ## 已验收基准
 
@@ -18,7 +18,7 @@ Image 和 AnyKernel3 ZIP 位于 `kernel_out/luna-xiaomi17-g58672003-20261007-003
 
 ## 实机回归与范围
 
-运行中的配置为 8261 行，SHA-256 `a21ee20190c2f129d240203835120d780f313c315a63f9f4c9a1684db05f8dde`，与本次 Image 和 `.env` 一致。669 个已加载模块与上一验收 `g8eb963eb` 的集合完全相同；启动完成，Rust Binder 在符号解析前按黑名单拒绝，C Binder 和关键服务正常。观察期间 boot ID 保持不变，未发现新的 panic、Oops、栈 WARN、lockup、CFI 错误或模块符号/CRC 拒绝；pstore 为空，无新增 tombstone/SSR 转储。
+历史验收运行配置为 8261 行，SHA-256 `a21ee20190c2f129d240203835120d780f313c315a63f9f4c9a1684db05f8dde`，与当时 Image 和 `.env` 一致。669 个已加载模块与上一验收 `g8eb963eb` 的集合完全相同；启动完成，Rust Binder 在符号解析前按黑名单拒绝，C Binder 和关键服务正常。观察期间 boot ID 保持不变，未发现新的 panic、Oops、栈 WARN、lockup、CFI 错误或模块符号/CRC 拒绝；pstore 为空，无新增 tombstone/SSR 转储。
 
 KernelSU 为 built-in、version code `32651`、UAPI `4`，提权及模块环境正常；SUSFS v2.3.0 的版本、variant 和启用功能查询正常。六项 LSM 与 SELinux Enforcing 保持，普通应用及 system_server 的 Seccomp 为 `2`，获准 root 为 `0`。
 

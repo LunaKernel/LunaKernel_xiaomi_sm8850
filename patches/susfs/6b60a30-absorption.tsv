@@ -1,4 +1,4 @@
-# old SUSFS b213c54 / KernelSU 623eba3e -> SUSFS 3ff9fd3 / KernelSU 75e179d3
+# SUSFS 3ff9fd3 / KernelSU 75e179d3 -> SUSFS 6b60a305 / KernelSU 51c21786; AOSP r11; BBG 028ff7fd
 layer	logical_item	status	path	evidence
 susfs-common	SUS_PATH namei ENOENT/RCU 生命周期	retain	fs/namei.c	官方仍使用 fake qstr 重查；保留严格 ENOENT、RCU 重试及 dentry 引用清理
 susfs-common	proc fd d_path 错误指针	retain	fs/proc/fd.c	上游重排 KSTAT/MOUNT 路径后仍以 !dpath 判断；按新缩进保留 IS_ERR
@@ -21,8 +21,12 @@ susfs-ksu	post-fs-data 单次执行	retain	kernel/runtime/boot_event.c	bool done
 susfs-ksu	sulog 内核字符串复制	retain	kernel/sulog/event.c	官方 SUSFS 新兼容补丁仍把 strncpy 指针写入 int；保留 strscpy 与 E2BIG 处理
 susfs-ksu	启动事件分发单次执行	retain	kernel/supercall/dispatch.c	新版仍使用非原子 bool；保留 post-fs-data/boot_complete 原子门闩
 bbg-ksu	授权凭据标记	adapt	kernel/policy/app_profile.c;kernel/selinux/selinux.c	核对兼容层后全部三处 commit_creds，保持授权/app profile/init/adb root 标记
-context	execve su-session 配套钩子	absorbed	fs/exec.c	新版官方补丁已重置到 6.12.92，完整包含 su-session 与 preinit hook；可直接应用到固定 r8，删除整个旧上下文补丁
+context	execve su-session 配套钩子	absorbed	fs/exec.c	3ff9fd3 官方补丁已重置到 6.12.92，完整包含 su-session 与 preinit hook；6b60a305 可直接应用到固定 r11，继续不保留旧上下文补丁
 context	proc map/pagewalk 与 SELinux	absorbed	fs/proc/base.c;fs/proc/task_mmu.c;security/selinux/hooks.c	官方新上下文直接匹配；setprocattr 复用新版 KernelSU 的实现，保留 SETCURRENT、bounded transition、DYNTRANSITION、PTRACE 检查后才 commit_creds；删除旧私有副本
 boundary	已关闭 OPEN_REDIRECT 的重复代码删除	drop	fs/namei.c	不再维护 do_tmpfile/do_o_path/path_openat/vfs_readlink 中的禁用分支删除；四个函数在 OPEN_REDIRECT=n 时活动代码与旧修正版本一致，配置及链接拒绝门禁继续保留
 boundary	fdinfo 官方不适用块	rejected	fs/notify/fdinfo.c	仍错误使用 inotify anon_inode 的路径及三参数 callback；保留原 AOSP 实现
 boundary	OPEN_REDIRECT	blocked	fs/namei.c;fs/susfs.c	两处 nd->name UAF 已修；readlink 仍成功返回 0、短 buffer 返回 ENAMETOOLONG；等待上游完整修复
+upstream	SELinux 双策略上下文解析与重载重试	native	kernel/feature/selinux_hide.c	51c21786 上游修复保留；最新 SUSFS 兼容层及现有 Luna 残余不覆盖该修复，无重复回移
+upstream	priority UID bitmap 回收同步	native	fs/susfs.c	6b60a305 两处新增 synchronize_rcu 原样保留；现有用户输入、SRCU、fsnotify 及日志残余仍未被吸收
+upstream	SELinux credential 接口探测	native	Makefile;tracing/tracing.c	BBG 028ff7fd 新兼容探测保留；现有 Luna 块设备保护与凭据标记修复仍未被吸收
+integration	r11 与新组件组合精确重放	verified	common;KernelSU;Baseband-guard	官方层和现有残余均无冲突应用；临时 index 正反及完整重放一致，fdinfo 保持 r11 原样；不据此代替完整编译及实机验收
