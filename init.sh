@@ -529,8 +529,8 @@ prepare_clang_source_tree() {
     local paths=(
         "${subtree}/bin"
         "${subtree}/include"
-        "${subtree}/lib/clang/23/include"
-        "${subtree}/lib/clang/23/share"
+        "${subtree}/lib/clang/22/include"
+        "${subtree}/lib/clang/22/share"
         "${subtree}/lib/x86_64-unknown-linux-gnu"
         "${subtree}/libexec"
         "${subtree}/prebuilt_include"

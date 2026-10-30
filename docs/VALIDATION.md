@@ -2,13 +2,11 @@
 
 开发分支 `feat/kmi6-2026-09-r8-rust-binder` 本轮更新至官方九月 r11，保留内置 Rust Binder、关闭 C Binder、屏蔽 ROM 中同名模块。按用户确认仅交付 4 KiB 版本，16 KiB 暂不交付。完整构建证据以本分支对应发布审计为准，尚未实机验收；以下验收仅属于历史 `g58672003`。
 
-`eb7aa9ca` 已完成 r8 与内置 Rust Binder 的完整本地构建和模块闭包验证，`c0cb0f53` 已完成 KSU 32705 / SUSFS `3ff9fd3` 的完整本地构建。本次更新至 r11、Clang r614150 / LLVM 23.0.1、Rust 1.98.1-dev、KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30` 和 BBG `028ff7f`，删除 r11 已吸收的两项 Rust Binder 回移；本次构建与实机状态按新提交的对应审计核实。Manager 须匹配新版接口，旧验收记录中的 32651 / UAPI 4 不适用于本次更新。
+`eb7aa9ca` 已完成 r8 与内置 Rust Binder 的完整本地构建和模块闭包验证，`c0cb0f53` 已完成 KSU 32705 / SUSFS `3ff9fd3` 的完整本地构建。本次更新至 r11、KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f` 与新版 AnyKernel3，删除 r11 已吸收的两项 Rust Binder 回移；保留兼容的 Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。本次构建与实机状态按新提交的对应审计核实。Manager 须匹配新版接口，旧验收记录中的 32651 / UAPI 4 不适用于本次更新。
 
-此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。本次 r11 / LLVM 23 必须另行审查完整快照漂移并通过全部构建门禁，不沿用旧版本的通过结论。
+此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。本次 r11 必须另行审查完整快照漂移并通过全部构建门禁，不沿用旧版本的通过结论。
 
-本次已生成的 8259 行配置相对 r8 仅改变 Clang、LLD、Rust 的八项版本身份字段，功能开关与工具探测缓存项不变；配置摘要已据完整差异更新。Rust 1.98 的 AutoFDO 参数更名采用官方 Linux `7594302d` 原样适配，保留 sample-use、profile 调试信息及其余 LLVM 参数；其余导出与类型快照仍由完整构建独立核验。
-
-Clang r614150 的单对象预编译中，`filemap.o` 持续单核运行 630 秒仍未完成，主动中止后栈定位为 `__filemap_get_folio` 的 MIR profile loader / `MinCostMaxFlow::findAugmentingDAG()`。保持原编译命令，仅追加官方 `-sample-profile-even-flow-distribution=false` 的隔离诊断在 1.271 秒完成；据此固定该兼容策略并审计最终参数。该结果证明此对象的编译耗时问题可规避，不证明默认路径无限循环，也不代表整树提速比例或实机性能结论。
+LLVM 23 本轮不交付：固定 OTA 消费的 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，虽然该符号及全部可达类型的 STG 文本除 CRC 外完全一致，仍不满足模块闭包硬门禁。已确认 gendwarfksyms 输出类型串存在分隔符差异，最新官方 Linux 与 ACK 尚无对应修复；因此选择兼容的 LLVM 22 配对，撤销 LLVM 23 专用适配，保留 r11 和其他组件更新。
 
 ## 已验收基准
 

@@ -89,13 +89,12 @@ def audit_bitcode(root, toolchain, tune, report):
 
 def main():
     (root, profile, c_arch, tune, rust_features, report,
-     toolchain, layout_flags, core_threads, autofdo_flags) = sys.argv[1:11]
-    scope = sys.argv[11:]
+     toolchain, layout_flags, core_threads) = sys.argv[1:10]
+    scope = sys.argv[10:]
     if scope not in ([], ['--preflight']):
         raise SystemExit('unexpected compiler audit scope')
     root = pathlib.Path(root)
     expected_layout = shlex.split(layout_flags)
-    expected_autofdo = shlex.split(autofdo_flags)
     rows, issues = [], []
     counts = collections.Counter()
     required = {
@@ -151,8 +150,6 @@ def main():
                 llvm = llvm_arguments(args, tool)
                 layout = [last(llvm, prefix) for prefix in
                           ('-enable-ext-tsp-block-placement=', '-ext-tsp-apply-without-profile=')]
-                autofdo = next((arg for arg in reversed(llvm) if arg.lstrip('-').partition('=')[0]
-                                == 'sample-profile-even-flow-distribution'), '')
                 threads = last(args, '-Zthreads=') if tool == 'rustc' else ''
                 if arm64 and kind not in ('clang-asm', 'clang-userspace'):
                     expected = [('-Ctarget-cpu=', 'generic'), ('-Ztune-cpu=', tune),
@@ -169,8 +166,6 @@ def main():
                         issues.append(relative + ': unexpected -mcpu')
                     if layout != expected_layout:
                         issues.append(relative + ': missing or overridden profile-only ExtTSP flags')
-                    if [autofdo] != expected_autofdo:
-                        issues.append(relative + ': missing or overridden AutoFDO inference flags')
                     if tool == 'rustc':
                         expected_threads = ('-Zthreads=' + core_threads
                                             if relative == 'rust/.core.o.cmd' else '')
@@ -197,19 +192,17 @@ def main():
                         if '-mgeneral-regs-only' not in args or '-mno-general-regs-only' in args:
                             issues.append(relative + ': missing GPR restriction')
                 elif (model or isa in ('-march=' + c_arch, '-Ctarget-feature=' + rust_features)
-                      or any(layout) or autofdo or threads):
+                      or any(layout) or threads):
                     issues.append(relative + ': SM8850 flags leaked into ' + target + '/' + kind)
                 rows.append([relative, kind, target, source, isa, model, sample,
-                             str('-mgeneral-regs-only' in args), *layout, autofdo,
-                             threads, shlex.join(tokens)])
+                             str('-mgeneral-regs-only' in args), *layout, threads, shlex.join(tokens)])
     issues += ['missing required compiler stage: ' + path + '/' + kind
                for path, kind in sorted(required)]
     with pathlib.Path(report).open('w') as stream:
         writer = csv.writer(stream, delimiter='\t', lineterminator='\n')
         writer.writerow(['object', 'stage', 'target', 'source', 'effective_isa',
                          'effective_tune', 'profile', 'gpr_only', 'exttsp',
-                         'exttsp_without_profile', 'autofdo_even_flow_distribution',
-                         'frontend_threads', 'command'])
+                         'exttsp_without_profile', 'frontend_threads', 'command'])
         writer.writerows(rows)
     for (kind, target), count in sorted(counts.items()):
         print(kind, target, count)

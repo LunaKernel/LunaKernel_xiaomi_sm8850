@@ -21,7 +21,7 @@
 
 ## 编译策略
 
-固定 AOSP Clang r614150 / 23.0.1、Rust 1.98.1-dev（LLVM 23.0.1）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库，并验证官方 Git 对象、明确检出树与安装树摘要。
+固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22.1.6）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库，并验证官方 Git 对象、明确检出树与安装树摘要。
 
 common 使用官方 `android16-6.12-2026-09_r11`（Linux 6.12.92 / KMI generation 6）。按用户本轮确认，仅构建和交付 4 KiB 页面版本，16 KiB 暂不交付；固定 OTA 的模块与启动兼容性门禁保持。
 
@@ -33,7 +33,7 @@ QCOM/Xiaomi 全量参考清单与固定 OTA 的实际模块闭包分开检查。
 
 C Binder 源码保留在固定 common 中，可用于重新构建回退版本。当前两套 tracepoint 对象含 111 个重复全局符号，不能原样同时内置；官方共存机制使用 C 内置、Rust 模块。当前 Image-only、Rust 内置方案保持单一实现，不引入模块交付或私有 tracepoint 改名层。
 
-AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/Rust 命令必须带 sample-use 参数。官方 710 回移按 Rust 1.98 版本边界将 `-Zdebug-info-for-profiling` 切换为 `-Zdebuginfo-for-profiling`，保留其他 AutoFDO 参数和能力。C/Rust 另固定 `-sample-profile-even-flow-distribution=false`，使用 Profi 官方单路径增广，规避当前 `filemap.o` 在均匀分流 DAG 搜索中的异常耗时；最小费用流、MIR profile loader 与 ExtTSP 保留。该策略会影响权重推断，不宣称性能等价。构建前验证 profile 摘要、Git blob 和 LLVM 可读性；缺失或不匹配失败。该 profile 来自 Pixel 工作负载，不能据此宣称小米实测性能收益。
+AutoFDO 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，实际 C/Rust 命令必须带 sample-use 参数。构建前验证 profile 摘要、Git blob 和 LLVM 可读性；缺失或不匹配失败。该 profile 来自 Pixel 工作负载，不能据此宣称小米实测性能收益。
 
 KernelSU 新版内嵌的 preinit runner 是独立的静态 nolibc 用户态程序，其真实命令单独记录，保持官方用户态参数，不使用内核 AutoFDO/ExtTSP。构建检查 arm64 静态 ELF 与 Image 中的嵌入符号；内核对象的原有编译参数门禁保持。
 
