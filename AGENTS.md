@@ -29,7 +29,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 当前固定组件：
 
-- KernelSU main：`51c217863c5e1fb639501e92ef17ac6d0cf90c92`，built-in，version code `32712`、UAPI `6`。该快照已包含 SUSFS 原配 `528bafc5` 之后的更新，必须精确重放兼容补丁并保留新版 SELinux 修复，不得宣称两者源码树相同。Manager 由用户独立获取匹配内核接口的官方版本，不属于项目下载、构建或交付目标。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 syscall_hook_manager object 仍被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。新版 preinit runner 按 arm64 静态用户态 ELF 审计并嵌入 Image，不得将其参数误作内核参数，也不得静默关闭该能力。
+- KernelSU main：`51c217863c5e1fb639501e92ef17ac6d0cf90c92`，built-in，version code `32712`、UAPI `6`。该快照已包含 SUSFS 原配 `528bafc5` 之后的更新，必须精确重放兼容补丁并保留新版 SELinux 修复，不得宣称两者源码树相同。按用户持续要求，每次交付 MUST 配套放置兼容的官方 CI Manager APK，与 Image、刷机 ZIP 同目录；固定 CI 来源、APK 摘要与接口身份，优先复用缓存，不自行本地编译替代或触发 CI。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 syscall_hook_manager object 仍被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。新版 preinit runner 按 arm64 静态用户态 ELF 审计并嵌入 Image，不得将其参数误作内核参数，也不得静默关闭该能力。
 - SUSFS v2.3.0：`6b60a305d418148bd311f4fc9bddedc82d99e1fc`；common 与 KernelSU 官方兼容补丁取自同一提交。SUSFS KernelSU 模块 ZIP 与独立 helper 不属于项目交付目标；内核能力保持启用。已吸收的三个重复补修及已无必要的旧上下文适配层 MUST 删除；剩余差异与证据见 `patches/susfs/6b60a30-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；不再维护对其已禁用路径的重复代码删除。内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
 - Baseband Guard：`028ff7fd509e2104596da7cc1ef8e6ce2a0c9082`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；file_permission、mmap_file 与 file_mprotect 在凭据检查前排除无关操作和非块设备，保护策略不变。boot/recovery 分区保护关闭，其余能力启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
@@ -74,14 +74,14 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 ```
 
 - `.env`：唯一受版本控制的 pin、构建身份和验证快照来源。
-- `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK 和只读官方审计仓库；不应用补丁、不编译。
+- `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK、配套官方 CI Manager APK 和只读官方审计仓库；不应用补丁、不编译。
 - `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。
 - `patch_external.sh`：仅接入已准备的外部组件；不得下载。
 - `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计；仅在发布闭包齐全且无未确认漂移后打包，不得准备源码。
 
 固定源码仓库必须保持干净，或其差异能被补丁脚本用允许路径和 reverse-apply 精确证明。`sources/`、`work/`、`evidence/`、`kernel_out/`、日志、转储和测试包不得提交。不得在输出目录手工修改 `.config`、`Module.symvers` 或包内容绕过守卫。
 
-`kernel_out/` 只存 Image 与内核刷机 ZIP，每次构建使用 `luna-xiaomi17-g<项目提交前8位>-YYYYMMDD-HHMM/`，上海时区，同名拒绝覆盖。工具、缓存、审计、配套组件与暂存分别置于 `work/` 子目录；`evidence/` 是用户手动维护的外部证据，MUST NOT 自动清理。内核产物保留最新三套，第四套经用户确认验收后才清理最旧一套；构建开始或失败时 MUST NOT 删除旧内核产物。
+`kernel_out/` 只存 Image、内核刷机 ZIP 与配套官方 CI Manager APK，每次构建使用 `luna-xiaomi17-g<项目提交前8位>-YYYYMMDD-HHMM/`，上海时区，同名拒绝覆盖。工具、缓存、审计、其余配套组件与暂存分别置于 `work/` 子目录；`evidence/` 是用户手动维护的外部证据，MUST NOT 自动清理。内核产物保留最新三套，第四套经用户确认验收后才清理最旧一套；构建开始或失败时 MUST NOT 删除旧内核产物。
 
 构建审计（含日志、失败快照）、回移审计及配套组件按类别各保留最新三份，份数由 `.env` 的 `WORK_HISTORY_KEEP=3` 固定；生成流程退出及宿主导入完成后自动删除超额的最旧目录。构建与组件按构建目录时间排序，回移审计按固定快照日期排序且同快照复用目录。清理 MUST 仅作用于 `work/audit/`、`work/components/` 下匹配项目命名的普通目录，不得跟随符号链接或删除源码、工具与缓存。已轮换掉审计的旧内核不再构成完整发布集合，MUST NOT 绕过清单校验重新发布。
 
@@ -114,6 +114,8 @@ Image-luna-xiaomi17-g<项目提交前8位>-YYYYMMDD
 ```
 
 AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。模板必须由 `ak3_template/` 中固定的官方脚本基线与 Luna 差异补丁重新组装；BusyBox 和 MagiskBoot 必须来自 `.env` 固定来源并在使用前校验摘要，禁止重新提交预制模板 ZIP。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
+
+Manager APK 属于配套交付检查，不是内核启动门禁。`.env` MUST 固定官方 main CI 的提交、run/artifact ID、归档与 APK SHA-256、版本、UAPI 和签名证书；更新 KernelSU 时一并审查兼容性。`init.sh` 优先复用 `work/cache/ksu-manager/` 或已验证的现有 APK；`build.sh` 只离线校验、记录来源并交付，校验签名证书与实际内核编译参数一致。APK MUST 纳入 `.build-artifacts`，由 `release.tsv` 的 `ksu_manager_apk` 指定，导入导出不得遗漏；历史未要求 APK 的发布按原清单验证。缺少兼容官方产物时不得静默省略或宣称交付齐全。
 
 当前 KernelSU 仍为 built-in，本轮不得借门禁重构改变交付边界。若后续经专项审计切换为 LKM，面向用户必须保持单一安装入口，不得要求分别管理或手工刷入两个分区镜像；该专项还必须新增模块交付、逐项依赖与真机加载门禁，不能把 `modules.order` 中存在 `.ko` 当成已完成验证。首次安装后只有在驻留 LKM 与新 `Image` 的完整依赖闭包通过同等硬门禁时，才允许仅更新或直接刷入已组装的 boot 镜像。
 

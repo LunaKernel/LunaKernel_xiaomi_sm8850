@@ -1083,6 +1083,14 @@ if [ "${ENABLE_KERNELSU}" = "1" ]; then
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
     git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
         die "固定 KernelSU 版本未包含官方增强安全功能移除提交"
+    [[ "${KSU_MANAGER_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die "KernelSU Manager commit pin 无效"
+    if ! env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" cat-file -e "${KSU_MANAGER_COMMIT}^{commit}" 2>/dev/null; then
+        git_network -C "${KSU_DIR}" fetch --filter=blob:none --no-tags origin "${KSU_MANAGER_COMMIT}"
+    fi
+    KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" prepare \
+        --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \
+        die "官方 KernelSU Manager 准备失败"
+    log_success "官方 KernelSU Manager 已准备: ${KSU_MANAGER_APK}"
 fi
 if [ "${ENABLE_SUSFS}" = "1" ]; then
     [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"

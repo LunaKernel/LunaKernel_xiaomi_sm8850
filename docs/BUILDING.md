@@ -17,7 +17,7 @@
 ./build.sh
 ```
 
-`init.sh` 复用并校验固定源码与工具；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，不准备源码。补丁脚本必须幂等。
+`init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
 ## 编译策略
 
@@ -56,8 +56,10 @@ luna-xiaomi17-g<8位提交>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<8位提交>-YYYYMMDD
 ```
 
-完整审计归档、工作日志和 `.build-artifacts` 清单位于 `work/audit/<同名目录>/`；IPSet 命令与 KernelSU 模块 ZIP 位于 `work/components/<同名目录>/`。默认交付集合包含 Image、内核 ZIP、审计 ZIP、IPSet 命令与 IPSet 模块 ZIP 共五个文件。清单绑定全部交付文件的 SHA-256 和项目相对路径，OrbStack 保持这些目录关系；历史发布清单按原有文件集合校验。
+完整审计归档、工作日志和 `.build-artifacts` 清单位于 `work/audit/<同名目录>/`；IPSet 命令与 KernelSU 模块 ZIP 位于 `work/components/<同名目录>/`。默认交付集合包含 Image、内核 ZIP、同目录官方 CI Manager APK、审计 ZIP、IPSet 命令与 IPSet 模块 ZIP 共六个文件。清单绑定全部交付文件的 SHA-256 和项目相对路径，`release.tsv` 的 `ksu_manager_apk` 指定配套 APK；OrbStack 导入导出完整携带，历史发布清单按原有文件集合校验。
 
-AnyKernel3 由官方 `41f04bdb` 脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。Luna 差异沿用上游大写变量接口，保留 bootconfig 优先的当前槽检测、实际 boot 分区容量及镜像大小检查；不覆盖上游 `AK_BASE_VERSION=20261027`。KernelSU/SUSFS 保持内核集成；Manager 由用户独立获取匹配内核接口的官方版本。标准流程不下载 Manager，不打包 SUSFS KernelSU 模块或独立 helper。
+AnyKernel3 由官方 `41f04bdb` 脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image。Luna 差异沿用上游大写变量接口，保留 bootconfig 优先的当前槽检测、实际 boot 分区容量及镜像大小检查；不覆盖上游 `AK_BASE_VERSION=20261027`。KernelSU/SUSFS 保持内核集成；不打包 SUSFS KernelSU 模块或独立 helper。
+
+配套 Manager 使用 `.env` 固定的官方 main CI，当前为 `ab05a062` / 32709 / UAPI 6，其 Manager、用户态及接口源码与内核使用的 `51c21786` 一致。`tools/ksu_manager.py` 校验来源、归档与 APK 摘要、官方签名证书、包名版本及 arm64 组件；构建后还核对实际内核接受的签名。`init.sh` 先复用 `work/cache/ksu-manager/<提交>/` 或现有已验证 APK，再按固定 artifact 下载；`build.sh` 不联网。更新 KernelSU 时同时审查 Manager pin，不在构建时追随 latest，不自行触发 CI 或本地编译替代。APK 缺失或不兼容会在编译前报错，避免浪费构建时间。
 
 构建只接受干净项目提交；成功后状态为 `awaiting-device`，不等同于实机验收。内核产物保留最新三套，第四套经用户确认验收后再清理最旧一套；构建不会提前删除旧内核产物。构建审计（含日志、失败快照）、回移审计及配套组件按类别各保留 `.env` 的 `WORK_HISTORY_KEEP=3` 份，生成流程退出或宿主导入完成后自动清理超额记录。构建记录按目录时间排序，回移审计按快照日期排序，同快照复用目录。审计被轮换掉的旧内核不再构成可重新发布的完整集合。外部 `evidence/` 由用户手动管理。

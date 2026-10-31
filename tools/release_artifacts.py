@@ -117,12 +117,6 @@ def verify(root, build_id):
                 directories[1] + "/" + stem + "-audit.zip"}
     if not required <= records.keys():
         raise ValueError("发布清单缺少 Image、刷机包或完整审计归档")
-    kernel_files = {name for name in records if name.startswith(directories[0] + "/")}
-    if kernel_files != {name for name in required if name.startswith(directories[0] + "/")}:
-        raise ValueError("kernel_out 只能交付 Image 和刷机包")
-    actual_kernel_files = {path.name for path in checked_path(root, directories[0]).iterdir()}
-    if actual_kernel_files != {Path(name).name for name in kernel_files}:
-        raise ValueError("内核产物目录含清单外文件")
     state_name = directories[1] + "/release.tsv"
     state_path = checked_path(root, state_name)
     if not state_path.is_file():
@@ -141,6 +135,20 @@ def verify(root, build_id):
             not re.fullmatch(r"[0-9a-f]{40}", commit) or commit[:8] != match[1] or
             state.get("validation_status") not in ("accepted", "awaiting-device")):
         raise ValueError("发布身份或验收状态错误")
+    if "ksu_manager_apk" in state:
+        manager = state["ksu_manager_apk"]
+        if not re.fullmatch(r"KernelSU_[A-Za-z0-9][A-Za-z0-9._-]*\.apk", manager):
+            raise ValueError("非法 KernelSU Manager APK 文件名: " + manager)
+        manager_path = directories[0] + "/" + manager
+        if manager_path not in records:
+            raise ValueError("发布清单缺少 KernelSU Manager APK")
+        required.add(manager_path)
+    kernel_files = {name for name in records if name.startswith(directories[0] + "/")}
+    if kernel_files != {name for name in required if name.startswith(directories[0] + "/")}:
+        raise ValueError("kernel_out 含未声明的交付文件")
+    actual_kernel_files = {path.name for path in checked_path(root, directories[0]).iterdir()}
+    if actual_kernel_files != {Path(name).name for name in kernel_files}:
+        raise ValueError("内核产物目录含清单外文件")
     # The manifest is the completion marker and must be copied last.
     return list(records) + [state_name, manifest_name]
 

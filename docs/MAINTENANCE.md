@@ -8,6 +8,8 @@
 
 KernelSU/SUSFS 使用 2026-10-31 核实的官方 main / 对应 6.12 分支快照：KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`。最新 KSU 已超出 SUSFS 原配 `528bafc5`，须精确重放兼容层并保留新增 SELinux 修复；不再用源码树相同作为兼容性依据。组件吸收与保留依据见 [`6b60a30-absorption.tsv`](../patches/susfs/6b60a30-absorption.tsv)。先审查残差并证明独立重放，再更新源码、pin 和构建；不能通过重复覆盖修正或扩大允许路径隐藏新差异。
 
+每次交付同时提供与内核同目录的官方 CI Manager APK。更新 KernelSU pin 时核对 Manager、用户态和 UAPI 源码、官方 CI 提交与签名，更新 `.env` 中配套 artifact 和摘要；只下载已完成的官方 CI，不触发远端工作流或自行本地编译。缓存可跨构建复用，APK 纳入发布清单及导入导出校验。
+
 [`patches/backports/`](../patches/backports/) 中保留吸收证明、质量审查和有序回移清单。selected 集合不可拆分；independent 中每份清单只含一个逻辑项，官方不可拆的前置/补修链同清单。新增项须固定来源、完整 commit、日期、patch-id、路径及适配补丁摘要，并证明固定基线缺少该改动、上游无明确回退或回归。
 
 r11 相对 r8 增加 16 个提交，已完整吸收 690/700 两项 Rust Binder 修复；其清单和 pin 删除，效果由基线保留。当前 66 个逻辑回移（其中 36 个独立项）已在临时 index 按固定顺序重放并完整逆序撤销，无新增上下文适配；实际源码与发布门禁仍由标准流程验证。工具链保留兼容的 AOSP Clang r596125 / LLVM 22 与 Rust 1.97.0-dev，其他已核实的组件更新保持。

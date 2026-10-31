@@ -1074,6 +1074,11 @@ verify_kernelsu_build() {
         awk 'tolower($NF) ~ /open_redirect/ { found = 1 } END { exit(found ? 0 : 1) }'; then
         die "vmlinux 不得链接已关闭的 SUSFS OPEN_REDIRECT 实现"
     fi
+    KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" check \
+        --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}" \
+        --kernel-command "${BUILD_DIR}/drivers/kernelsu/manager/.apk_sign.o.cmd" \
+        --audit "${AUDIT_DIR}/ksu-manager.current.tsv")" || \
+        die "官方 KernelSU Manager 与本次内核的签名或接口不匹配"
     log_success "KernelSU built-in、version code ${KSU_VERSION_CODE}、标准 seccomp 与 OPEN_REDIRECT 关闭状态检查通过"
 }
 
@@ -1876,6 +1881,9 @@ verify_android17_selected_fixes
 bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
     verify-applied "${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_source_state
+KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" check \
+    --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \
+    die "官方 KernelSU Manager 缺失或校验失败，请先运行 init.sh"
 [ "${ENABLE_SUSFS}" != "1" ] || verify_susfs_source_state
 [ "${ENABLE_BBG}" != "1" ] || verify_bbg_source_state
 [ "$(sed -n '1p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_COMMIT}" ] || die "小米 ACK_SHA commit 已变化"
@@ -2356,6 +2364,12 @@ log_success "同 OTA 模块闭包已固定：102 个 system_dlkm 模块严格兼
 
 mkdir -p "${PRODUCT_DIR}"
 RELEASE_ARTIFACTS=()
+[ ! -e "${PRODUCT_DIR}/${KSU_MANAGER_APK_NAME}" ] && [ ! -L "${PRODUCT_DIR}/${KSU_MANAGER_APK_NAME}" ] || \
+    die "拒绝覆盖已有 KernelSU Manager APK"
+cp -- "${KSU_MANAGER_APK}" "${PRODUCT_DIR}/${KSU_MANAGER_APK_NAME}"
+[ "$(sha256_file "${PRODUCT_DIR}/${KSU_MANAGER_APK_NAME}")" = "${KSU_MANAGER_APK_SHA256}" ] || \
+    die "交付目录中的 KernelSU Manager APK 摘要错误"
+RELEASE_ARTIFACTS+=("${PRODUCT_RELATIVE_DIR}/${KSU_MANAGER_APK_NAME}")
 AUDIT_ARTIFACT="luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}-audit.zip"
 normalize_archive_timestamps "${AUDIT_DIR}"
 (cd "${AUDIT_DIR}" && \
@@ -2497,6 +2511,7 @@ log_success "AnyKernel3 刷机包已生成: ${ZIP_NAME}"
     printf 'field\tvalue\n'
     printf 'build_id\t%s\nproject_commit\t%s\nvalidation_status\tawaiting-device\n' \
         "${LUNA_BUILD_ID}" "${LUNA_PROJECT_COMMIT}"
+    printf 'ksu_manager_apk\t%s\n' "${KSU_MANAGER_APK_NAME}"
 } > "${RELEASE_AUDIT_DIR}/release.tsv"
 : > "${ARTIFACT_MANIFEST}"
 for artifact in "${RELEASE_ARTIFACTS[@]}"; do
