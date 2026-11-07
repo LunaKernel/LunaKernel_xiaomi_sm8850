@@ -6,7 +6,7 @@
 
 ## 输入与流程
 
-发布构建需要 `evidence/os4.0.6.0/system_dlkm.img`。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。重建 stock 清单还需要同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。
+发布构建直接使用仓库中的 `ci/inputs/os4.0.6.0/system_dlkm.img`，共 17,281,024 字节。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。正常构建不重新提取 stock 清单，不需要完整 OTA 或其余分区镜像；人工重建清单才需要 `evidence/os4.0.6.0/` 中同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。原始外部证据仍按 `evidence/` 规则保留，不自动清理。
 
 清单工具由 `init.sh` 按固定 Git blob 与 SHA-256 准备于 `work/tools/stock-evidence/`。同一 OTA 的实机验收与静态模块闭包核对均已完成，范围见 [VALIDATION.md](VALIDATION.md)。
 
@@ -18,6 +18,21 @@
 ```
 
 `init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
+
+`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2。并发 2 要求实际准备工具链的 Linux shell 为 Bash 5.1 或更新版本；任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
+
+## GitHub Actions
+
+`.github/workflows/check.yml` 在 main 的 push 和以 main 为目标的 PR 执行轻量检查，使用 `.env` 固定的官方 actionlint 校验 workflow；`.github/workflows/build.yml` 仅支持从 main 手动触发完整构建，不创建 GitHub Release。首次云端完整构建尚未执行，现有实机验收只属于 [VALIDATION.md](VALIDATION.md) 中的既有二进制。
+
+完整流程使用 GitHub 托管 `ubuntu-24.04`，分为 build、notify 两个 job：
+
+- **build**：`tools/ci/prepare_runner.sh` 准备宿主，完整构建前要求至少 50 GiB 可用空间；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
+- **缓存**：保留 5 GiB ccache、固定归档下载及官方 Manager APK 缓存。ccache 使用 `compiler_check=content`，保持严格内容和路径校验；下载缓存恢复后仍校验固定摘要。构建目录、历史审计和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
+- **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为一个保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`；云端构建成功不等同于实机验收。
+- **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，只发送已校验的内核 ZIP、官方 Manager APK 及 SHA-256，不发送源码、原始证据或凭据。通知失败可单独重跑 notify，下载同一次构建的 artifact 重新校验并发送，无需重新编译；artifact 过期后不能通过重跑通知恢复产物。
+
+两个 Telegram secrets 仅供 notify 使用，不写入 `.env` 或日志。发送成功但响应丢失时，重试可能产生重复文件消息。首次 CI 的实际磁盘占用、缓存命中和耗时以运行记录为准；不得以提速为由引入时间劫持、宽松 ccache 校验或省略 Image/modules 及闭包审计。
 
 ## 编译策略
 

@@ -78,6 +78,10 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 - `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。
 - `patch_external.sh`：仅接入已准备的外部组件；不得下载。
 - `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计；仅在发布闭包齐全且无未确认漂移后打包，不得准备源码。
+- `tools/ci/`：CI 宿主准备、标准流程调度与交付通知；不得绕过上述脚本和门禁。`.github/workflows/check.yml` 在 main 的 push/PR 执行轻量检查，`build.yml` 仅手动在 main 执行完整构建，分为 build、notify 两个 job，不创建 Release。
+- `ci/inputs/os4.0.6.0/system_dlkm.img`：用户批准随仓库保存的唯一分区镜像，作为本地与 CI 共用的固定运行输入；大小和摘要仍由 `.env` 校验。其他 ROM、分区镜像及设备证据不得提交。
+
+`INIT_FETCH_JOBS` 是 `init.sh` 的运行时并发参数，本地默认 1、CI 使用 2，不属于 `.env` pin。CI 只复用内容校验的 ccache、固定下载和官方 Manager 缓存；不得通过伪造时间、宽松文件状态匹配或关闭编译器身份校验换取命中。完整 CI 的宿主、缓存、产物和通知流程见 `docs/BUILDING.md`。
 
 固定源码仓库必须保持干净，或其差异能被补丁脚本用允许路径和 reverse-apply 精确证明。`sources/`、`work/`、`evidence/`、`kernel_out/`、日志、转储和测试包不得提交。不得在输出目录手工修改 `.config`、`Module.symvers` 或包内容绕过守卫。
 
@@ -89,7 +93,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 ## 5. 构建与发布门槛
 
-- `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
+- `init.sh`、`patch.sh`、`patch_external.sh`、`build.sh`、`tools/backport_audit.sh`、`tools/backport_manifest.sh`、`tools/independent_backports.sh` 和 `tools/ci/*.sh` 必须逐个通过 `bash -n`；`bash tools/ci/check.sh` 统一执行轻量检查。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
 - 项目配置、modules.order 及摘要以 `.env` 为准；保留 stock Rust Binder 黑名单和工具探测缓存项，后者 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
@@ -104,7 +108,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 - ExtTSP MUST 显式禁止作用于无 profile 的函数。AutoFDO 的 Profi 固定使用 `-sample-profile-even-flow-distribution=false`，以官方单路径增广规避当前组合中均匀分流 DAG 搜索的异常耗时；LLVM 22 与 LLVM 23 均已复现该路径，保留 sample-use、Profi 最小费用流与 MIR profile loader。该策略可能改变推断权重和代码布局，不得声称性能等价。C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。
 - stock 清单覆盖 `OS4.0.6.0.XPCCNXM` 同包四分区全部模块，4090 项实际 vmlinux 依赖及五列 tuple 的摘要以 `.env` 为准。system_dlkm 的 103 个模块中，102 个必须严格闭包；唯一 stock `rust_binder.ko` 保留固定镜像身份、240 项原始需求及无导出、无模块依赖、无反向依赖证明，其本次比较完整记录，不得宣称该 `.ko` 可加载。放行另须证明 `modules.builtin` 包含 Rust Binder、`modules.order` 不含它、`System.map` 含 Rust 初始化函数/initcall 且无 C 初始化函数，实际配置在符号解析前屏蔽 stock 同名模块。其余模块不得套用此替代；项目新增模块独立执行第 3 节门禁。
-- 输入固定为 `evidence/os4.0.6.0/system_dlkm.img`，大小与 SHA-256 由 `.env` 固定。`build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
+- 输入固定为 `ci/inputs/os4.0.6.0/system_dlkm.img`，大小与 SHA-256 由 `.env` 固定。`build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
 
 发布产物名称：
 

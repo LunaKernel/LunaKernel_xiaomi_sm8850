@@ -6,7 +6,7 @@
 
 - 保持改动最小、可独立回退；提交标题采用 `<type>: <准确精炼中文描述>`，类型限 `chore`、`feat`、`fix`、`refactor`、`docs`。
 - 对上游回移保留完整来源、commit、patch-id 和实际适配方式，不改写上游归属。
-- 不提交源码缓存、工具链、ROM/分区镜像、日志、构建产物或设备数据。
+- 不提交源码缓存、工具链、ROM/分区镜像、日志、构建产物或设备数据；唯一经用户批准的镜像例外是 `ci/inputs/os4.0.6.0/system_dlkm.img`，仅用于固定 OTA 兼容性校验，不进入刷机包。
 - 至少运行 `git diff --check`、相关 shell 语法检查和与风险相称的回移/构建验证。
 - 在合并请求中列出验证结果与未覆盖项目；本地构建通过不等同于实机验收。
 
@@ -19,6 +19,8 @@
 更新 KernelSU/SUSFS 时先审查兼容补丁残差及已吸收修复，再更新 pin、源码和构建；仅存在于源码但未编译的对象不能算作有效功能。同时核对官方 CI Manager 的源码、UAPI、签名及固定 artifact，不追随 latest 或自行编译替代。
 
 固定 OTA 模块实际消费的接口、相关类型和加载条件必须兼容。全量配置、符号及类型快照的变化须独立审查并更新参考；不得以参考漂移为由放宽目标闭包。发布还需镜像完整性、Image-only 打包检查及 [真机验收](docs/VALIDATION.md)。
+
+main 的 push/PR 运行轻量 CI 检查，完整构建仅从 main 手动触发，不能用轻量检查代替构建门禁。新 Image 成功构建后仍为 `awaiting-device`。CI 产物与 Telegram 通知的配置见 [构建说明](docs/BUILDING.md#github-actions)，不自动创建 Release。
 
 ## 许可证与记录
 
