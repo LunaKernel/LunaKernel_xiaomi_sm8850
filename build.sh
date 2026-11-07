@@ -1694,7 +1694,7 @@ build_ipset_userspace() {
     binary="${ipset_build}/src/ipset"
     [ -s "${binary}" ] || die "Android arm64 ipset 命令未生成"
     file "${binary}" | grep -Eq 'ELF 64-bit.*ARM aarch64' || die "ipset 不是 arm64 ELF"
-    "${ndk_bin}/llvm-readelf" -l "${binary}" | grep -Fq 'Requesting program interpreter: /system/bin/linker64' || \
+    "${ndk_bin}/llvm-readelf" -l "${binary}" | grep -F 'Requesting program interpreter: /system/bin/linker64' >/dev/null || \
         die "ipset Android linker ABI 不匹配"
     needed="$("${ndk_bin}/llvm-readelf" -d "${binary}" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' | LC_ALL=C sort -u)"
     unexpected_needed="$(printf '%s\n' "${needed}" | grep -Ev '^(libc\.so|libdl\.so)$' || true)"
