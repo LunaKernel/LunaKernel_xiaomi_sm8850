@@ -1,4 +1,4 @@
-name: Bug report
+name: 问题报告
 description: 报告 Luna Kernel 构建、启动或运行问题
 title: "[Bug] "
 labels:
@@ -18,7 +18,7 @@ body:
     id: rom
     attributes:
       label: ROM
-      placeholder: 例如 OS4.0.0.9.XPCCNXM
+      placeholder: 完整系统版本，例如 OS4.0.6.0.XPCCNXM
     validations:
       required: true
   - type: textarea
@@ -37,7 +37,7 @@ body:
     attributes:
       label: 确认
       options:
-        - label: 设备为小米 17 pudding，ROM 与项目支持范围一致
+        - label: 设备为小米 17 pudding，已填写实际内核与 ROM 版本
           required: true
         - label: 已删除隐私、凭证和无关日志内容
           required: true
