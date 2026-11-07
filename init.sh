@@ -599,15 +599,9 @@ stop_toolchain_fetches() {
 }
 
 prepare_toolchain_source_trees() {
-    local task index completed_pid monitor_enabled=0
+    local task index monitor_enabled=0
     local -a fetch_pids=()
     local -a tasks=(prepare_clang_source_tree prepare_rust_source_tree prepare_build_tools_source_tree)
-
-    # Check the Linux worker shell, after any macOS-to-Orb handoff.
-    if [ "${INIT_FETCH_JOBS}" = 2 ] && \
-            (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then
-        die "INIT_FETCH_JOBS=2 需要 Bash 5.1 或更新版本"
-    fi
 
     # Child shells cannot return variables; derive all paths before launching.
     CI_CLANG_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}/clang-${CI_CLANG_REVISION}"
@@ -626,20 +620,16 @@ prepare_toolchain_source_trees() {
         if [ "${#fetch_pids[@]}" -eq "${INIT_FETCH_JOBS}" ] || \
                 [ "${task}" = prepare_build_tools_source_tree ]; then
             while [ "${#fetch_pids[@]}" -gt 0 ]; do
-                if [ "${INIT_FETCH_JOBS}" = 2 ]; then
-                    # Observe the first completed task, regardless of launch order.
-                    wait -n -p completed_pid "${fetch_pids[@]}" || \
-                        die "固定工具链来源准备失败，停止安装"
-                else
-                    completed_pid="${fetch_pids[0]}"
-                    wait "${completed_pid}" || die "固定工具链来源准备失败，停止安装"
-                fi
                 for index in "${!fetch_pids[@]}"; do
-                    if [ "${fetch_pids[$index]}" = "${completed_pid}" ]; then
+                    # Plain wait retains completed statuses on Bash 5.2. Check
+                    # both workers so an earlier failure never waits on a download.
+                    if [ "${INIT_FETCH_JOBS}" = 1 ] || \
+                            ! kill -0 "${fetch_pids[$index]}" 2>/dev/null; then
+                        wait "${fetch_pids[$index]}" || die "固定工具链来源准备失败，停止安装"
                         unset 'fetch_pids[index]'
-                        break
                     fi
                 done
+                [ "${#fetch_pids[@]}" -eq 0 ] || sleep 0.05
             done
             fetch_pids=()
         fi

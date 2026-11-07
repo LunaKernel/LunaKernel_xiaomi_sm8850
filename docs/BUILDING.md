@@ -19,11 +19,11 @@
 
 `init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
-`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2。并发 2 要求实际准备工具链的 Linux shell 为 Bash 5.1 或更新版本；任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
+`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2；任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
 
 ## GitHub Actions
 
-`.github/workflows/check.yml` 在 main 的 push 和以 main 为目标的 PR 执行轻量检查，使用 `.env` 固定的官方 actionlint 校验 workflow；`.github/workflows/build.yml` 仅支持从 main 手动触发完整构建，不创建 GitHub Release。首次云端完整构建尚未执行，现有实机验收只属于 [VALIDATION.md](VALIDATION.md) 中的既有二进制。
+`.github/workflows/check.yml` 在 main 的 push 和以 main 为目标的 PR 执行轻量检查，使用 `.env` 固定的官方 actionlint 校验 workflow；`.github/workflows/build.yml` 仅支持从 main 手动触发完整构建，不创建 GitHub Release。云端构建状态以对应提交的 Actions 记录为准，现有实机验收只属于 [VALIDATION.md](VALIDATION.md) 中的既有二进制。
 
 完整流程使用 GitHub 托管 `ubuntu-24.04`，分为 build、notify 两个 job：
 

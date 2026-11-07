@@ -14,6 +14,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / "init.sh").read_text()
+BASH = os.environ.get("INIT_TEST_BASH", "bash")
 
 
 def function(name):
@@ -40,7 +41,7 @@ if os.environ.get("MOCK_MODE") == "cancel":
     "child": child.pid if child else None}))
 if os.environ.get("MOCK_FAIL") == name:
     time.sleep(0.05)
-    sys.exit(7)
+    sys.exit(int(os.environ.get("MOCK_EXIT", "7")))
 time.sleep(30 if child or os.environ.get("MOCK_SLOW") == name else 0.15)
 (root / (name + ".end")).write_text(str(time.monotonic()))
 '''
@@ -64,6 +65,17 @@ prepare_rust_source_tree() {
 prepare_build_tools_source_tree() {
     python3 "$MOCK_ROOT/mock.py" tools
     touch "$MOCK_ROOT/tools.continued"
+}
+wait() {
+    # Deterministically exercise statuses Bash already collected before wait.
+    if [ "${MOCK_WAIT_COMPLETED:-0}" = 1 ]; then
+        for arg in "$@"; do
+            case "${arg}" in
+                [0-9]*) while kill -0 "${arg}" 2>/dev/null; do sleep 0.01; done ;;
+            esac
+        done
+    fi
+    builtin wait "$@"
 }
 prepare_toolchain_source_trees
 printf '%s\n' "$CI_CLANG_PAYLOAD_DIR" "$CI_RUST_PAYLOAD_DIR" "$CI_BUILD_TOOLS_PAYLOAD_DIR" > "$MOCK_ROOT/paths"
@@ -110,7 +122,7 @@ class InitParallelTests(unittest.TestCase):
         env.pop("INIT_FETCH_JOBS", None)
         if jobs is not None:
             env["INIT_FETCH_JOBS"] = jobs
-        process = subprocess.Popen(["bash", "-c", SCRIPT], env=env,
+        process = subprocess.Popen([BASH, "-c", SCRIPT], env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
         self.processes.append(process)
@@ -120,8 +132,8 @@ class InitParallelTests(unittest.TestCase):
         stdout, stderr = process.communicate(timeout=5)
         return process.returncode, stdout + stderr
 
-    def check_success(self, jobs, limit):
-        code, output = self.finish(self.start(jobs))
+    def check_success(self, jobs, limit, **extra):
+        code, output = self.finish(self.start(jobs, **extra))
         self.assertEqual(code, 0, output)
         self.assertTrue((self.root / "installed").exists())
         events = []
@@ -144,6 +156,22 @@ class InitParallelTests(unittest.TestCase):
 
     def test_parallel_limit_is_two(self):
         self.check_success("2", 2)
+
+    def test_completed_tasks_are_reaped_successfully(self):
+        self.check_success("2", 2, MOCK_WAIT_COMPLETED="1")
+
+    def test_completed_failure_status_is_not_ignored(self):
+        for status in ("7", "127"):
+            with self.subTest(status=status):
+                code, _ = self.finish(self.start("2", MOCK_FAIL="rust", MOCK_EXIT=status,
+                                                 MOCK_WAIT_COMPLETED="1"))
+                self.assertNotEqual(code, 0)
+                self.assertFalse((self.root / "tools.start").exists())
+                self.assertFalse((self.root / "installed").exists())
+                self.assertFalse((self.root / "rust.continued").exists())
+                for entry in self.root.iterdir():
+                    if entry.name != "mock.py":
+                        entry.unlink()
 
     def test_invalid_limits_fail_before_preparation(self):
         for jobs in ("", "0", "3", "two"):
