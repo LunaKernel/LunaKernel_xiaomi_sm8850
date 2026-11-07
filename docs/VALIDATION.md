@@ -1,40 +1,30 @@
-# 当前验证状态
+# 当前基线与验收
 
-开发分支 `feat/kmi6-2026-09-r8-rust-binder` 本轮更新至官方九月 r11，保留内置 Rust Binder、关闭 C Binder、屏蔽 ROM 中同名模块。按用户确认仅交付 4 KiB 版本，16 KiB 暂不交付。完整构建证据以本分支对应发布审计为准，尚未实机验收；以下验收仅属于历史 `g58672003`。
+当前内核为官方九月 r11 / Linux 6.12.92 / KMI 6，仅交付 4 KiB；Rust Binder 内置，C Binder 关闭，ROM 同名模块被屏蔽。用户于 2026-11-08 确认最新产物已完成严格实机验收并通过；本轮只读核实设备运行的是 `6.12.92-android16-luna-g1d3c30f1-4k`，OTA 为 `OS4.0.6.0.XPCCNXM`。
 
-`eb7aa9ca` 已完成 r8 与内置 Rust Binder 的完整本地构建和模块闭包验证，`c0cb0f53` 已完成 KSU 32705 / SUSFS `3ff9fd3` 的完整本地构建。本次更新至 r11、KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f` 与新版 AnyKernel3，删除 r11 已吸收的两项 Rust Binder 回移；保留兼容的 Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。本次构建与实机状态按新提交的对应审计核实。Manager 须匹配新版接口，旧验收记录中的 32651 / UAPI 4 不适用于本次更新。
+已验收项目提交为 `1d3c30f1945ad2c70bbf084886339649b3017123`，使用 KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`、Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。后续 Manager 交付脚本及仓库整理提交不改变这个二进制的身份，也不自动成为已验收内核。
 
-此前 r8 参考快照已完成相对旧验收归档的差异审查：配置只变更四个 Binder 项，活动模块减少同名 Rust Binder；全量导出减少 11 项、增加 8 项、3 项 CRC 变化，分别对应 C Binder 专属导出、r8 Rust 内部调整及新增音频 hook。STG 差异限于上述符号和 C Binder 类型定义消失；固定 OTA 的 4083 项五列依赖记录摘要保持一致。QCOM 参考中的两个 C Binder tracepoint 记为未导出，未删除参考对象。
+对应构建审计保存完整配置、模块、导出及 STG 快照。r11 的官方 `dw_pcie_rp` 位域变化已审查，不影响当时固定 OTA 的消费者类型图；两个 C Binder tracepoint 没有目标消费者，保持未导出。历史版本的差异和排查过程从 Git 历史检出。
 
-r11 / LLVM 22 候选 `b438efd3` 已完成 Image 和模块编译、固定 OTA 闭包及漂移审查：配置、103 项活动模块、18589 项完整导出及 4083 项目标依赖记录与 r8 参考完全一致。唯一 STG 漂移是官方 `2dcfe8477` 在 `dw_pcie_rp` 的既有填充中加入 `keep_rp_msi_en` 位域，结构大小与既有成员偏移不变；该类型不在目标 OTA 消费者图内，4083 项接口及全部可达类型图逐字一致（SHA-256 `7aa3ecad888492399365f1b1446a48cc40accbc0b2c950ddc11c7aadc8479344`）。已仅更新完整 STG 参考摘要，最终交付仍须在干净提交上通过标准流程，不将本地通过视为实机验收。
+LLVM 23 不在当前基线中：此前实测 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，gendwarfksyms 类型串存在分隔符差异，不满足固定 OTA 闭包。保留已验证的 LLVM 22 配对；未来升级必须重新证明兼容性。
 
-LLVM 23 本轮不交付：固定 OTA 消费的 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，虽然该符号及全部可达类型的 STG 文本除 CRC 外完全一致，仍不满足模块闭包硬门禁。已确认 gendwarfksyms 输出类型串存在分隔符差异，最新官方 Linux 与 ACK 尚无对应修复；因此选择兼容的 LLVM 22 配对，撤销仅 Rust 1.98 需要的参数更名回移，保留 r11 和其他组件更新。
-
-当前输入下 LLVM 22/23 均在 `filemap.o` 的 MIR profile 流量推断中出现持续单核异常耗时。只追加官方 `-sample-profile-even-flow-distribution=false` 的隔离编译分别在 1.369/1.271 秒完成；该策略保留 AutoFDO、Profi 最小费用流和 MIR loader，实际 C/Rust 最终参数独立审计。此验证说明该对象可以正常编译，不代表权重推断或实机性能等价。
+AutoFDO 的官方单路径增广参数已消除当前输入下 `filemap.o` 的异常编译耗时，实际 C/Rust 参数独立审计；不据此声称权重推断或实机性能等价。具体策略见 [BUILDING.md](BUILDING.md)。
 
 ## 已验收基准
 
-用户于 2026-10-07 确认 `6.12.92-android16-luna-g58672003-4k` 功能正常并验收，完整项目提交为 `586720039e9896d86e4e55dbdfd4bf8f01cd81b6`。
+Image、AnyKernel3 ZIP 与配套官方 Manager APK 位于 `kernel_out/luna-xiaomi17-g1d3c30f1-20261031-0332/`；完整构建审计、交付清单和 `accepted` 状态位于同名 `work/audit/` 目录。Image SHA-256 为 `2bdae1def07346f10da42449130fa00f26a660eabf2415198a9c671464b9f124`。
 
-实机为小米 17 `pudding`、HyperOS 4 `OS4.0.0.32.XPCCNXM` / Android 17。身份、启动与模块记录、功能测试、dmesg、logcat 及 pstore/crash 文件检查位于 `evidence/device/luna-xiaomi17-g58672003-20261007-0030/`，由其中 `SHA256SUMS` 校验；大日志以 gzip 保留完整原始内容。用户确认屏幕、触控、拍照、声音和移动网络正常。
+实机为小米 17 `pudding` / Android 17。本轮原始身份与启动完成记录位于 `evidence/device/luna-xiaomi17-g1d3c30f1-20261031-0332/`，由 `SHA256SUMS` 校验。严格功能验收结论来自用户明确确认；本轮没有重复功能测试，也没有采集新日志来冒充用户的测试过程。
 
-Image 和 AnyKernel3 ZIP 位于 `kernel_out/luna-xiaomi17-g58672003-20261007-0030/`；完整构建审计及五项交付清单位于对应 `work/audit/` 目录，`release.tsv` 标记为 `accepted`。更新验证文档不改变或重命名这些二进制，也不能把文档提交当作已构建内核。
+原构建审计针对 `.9` OTA，保持其原始含义。新基线 `OS4.0.6.0.XPCCNXM` 的四镜像、payload 元数据及补充核验记录位于 `evidence/os4.0.6.0/`，大小和摘要逐项匹配同包 manifest，system_dlkm 的 AVB/EROFS 完整性通过。
 
-完整本地构建及 ABI/KMI/STG 审计通过，无未确认漂移。构建闭包仍固定于 `OS4.0.0.9.XPCCNXM`：4083 项 vmlinux 依赖，103 个 system_dlkm 模块，其中 102 个严格匹配；唯一 Rust Binder 例外精确为 234 项需求、167 项匹配、67 项构建上下文符号缺失，无 CRC/provider 异常。`.32` 实机记录不替代 `.9` 的完整 OTA 闭包证明，也不扩大支持范围。
+复用与交付 Image 完全相同的构建缓存完成新 OTA 静态核验：678 个去重模块中 677 个严格闭包，唯一 stock Rust Binder 单独按内置替代审计；4090 项 vmlinux 依赖无缺符号、CRC 或 provider 错误，模块 namespace、GPL 导入及依赖图检查通过。相对旧清单新增 8 项、移除 1 项，共有接口 CRC 未变。stock Rust Binder 的 240 项需求完整保留（166 项匹配、74 项构建上下文符号缺失，无 CRC/provider 异常），不宣称该模块可加载；实际内置 Rust Binder、屏蔽及无 C 初始化函数的证据均通过。
 
-## 实机回归与范围
+新 4090 项接口及全部可达类型图，从原完整 STG 归档与同 Image 的 vmlinux 两路提取后逐字一致，SHA-256 为 `bfae072ca3f63c7ccbe7526aaea2187f77734e100f3e51c6fb6824f56c8a4654`。本次未重新编译内核，也未改变其配置或优化参数。
 
-历史验收运行配置为 8261 行，SHA-256 `a21ee20190c2f129d240203835120d780f313c315a63f9f4c9a1684db05f8dde`，与当时 Image 和 `.env` 一致。669 个已加载模块与上一验收 `g8eb963eb` 的集合完全相同；启动完成，Rust Binder 在符号解析前按黑名单拒绝，C Binder 和关键服务正常。观察期间 boot ID 保持不变，未发现新的 panic、Oops、栈 WARN、lockup、CFI 错误或模块符号/CRC 拒绝；pstore 为空，无新增 tombstone/SSR 转储。
+## 验收范围
 
-KernelSU 为 built-in、version code `32651`、UAPI `4`，提权及模块环境正常；SUSFS v2.3.0 的版本、variant 和启用功能查询正常。六项 LSM 与 SELinux Enforcing 保持，普通应用及 system_server 的 Seccomp 为 `2`，获准 root 为 `0`。
-
-BBG 普通文件读写、共享映射正常；保护分区的零字节写调用、共享可写 mmap 和 mprotect 均返回 `EPERM`，并有三个对应拒绝日志。测试未写分区数据、未发送存储 ioctl，前后读取内容一致。初次在只读 `modem_a` 上的映射由原生只读规则返回 `EINVAL`；最终在非只读保护分区上完成三个钩子的测试。
-
-新 IPSet 命令 SHA-256 为 `96358b9b24991d2a1fcf14b3c7869234b161c35eee872064ca61d794a7b5cba8`，经临时执行完成 IPv4/IPv6 集合创建、增删、查询（含 IPv4 未命中反例）和销毁。现有 IPSet 模块仍使用旧二进制，本轮未安装或替换模块；临时文件和集合均已清理。
-
-设备运行时 `/sys/kernel/mm/lru_gen/enabled` 为 `0x0000`，因此未验证 MGLRU 不可回收页修复的实际回收路径，也未修改该策略。Rust 对齐、ExtTSP 等编译策略通过完整构建和本次启动回归，但未做性能、功耗、内存压力或长期稳定性测试。Kbuild 优化的生成结果和参数等价性属于本地构建验证。
-
-早期非 PID 1 的 init 子进程 SIGABRT、可容忍的模块 BTF 调试信息不匹配、ptp_kvm 不支持及运行时非特权 BPF 开关为 `0`，与旧验收记录同类；init 根因仍未证明，本次观察未重复。Manager 的每秒提权轮询和用户态 SELinux 审计噪声仍存在，不据此新增内核修复。iorap2 已确认非本项目内核问题，功耗暂不追踪。
+此次确认仅属于上述 Image 与 OTA，不外推至其他设备、后续提交或未来 CI 产物，也不补造性能、功耗或压力测试数据。历史已知问题及早期日志从 Git 历史和原始 `evidence/` 查询，不把旧版本的现象当成当前仍在发生的问题。非内核职责问题不扩展兜底，功耗暂不追踪。
 
 ## 后续验收
 

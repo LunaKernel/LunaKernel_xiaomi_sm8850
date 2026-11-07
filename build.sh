@@ -302,19 +302,19 @@ orbctl_run_host_path() {
 
 sync_control_files_to_orb() {
     local items="init.sh patch.sh patch_external.sh build.sh"
-    [ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "evidence/os4/system_dlkm.img" ] || \
-        die "macOS 同步只接受固定的 evidence/os4/system_dlkm.img"
+    [ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "evidence/os4.0.6.0/system_dlkm.img" ] || \
+        die "macOS 同步只接受固定的 evidence/os4.0.6.0/system_dlkm.img"
     if [ -f "${HOST_WORKSPACE_DIR}/.env" ]; then items="${items} .env"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/ak3_template" ]; then items="${items} ak3_template"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/patches" ]; then items="${items} patches"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/abi" ]; then items="${items} abi"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/tools" ]; then items="${items} tools"; fi
     if [ -d "${HOST_WORKSPACE_DIR}/userspace" ]; then items="${items} userspace"; fi
-    if [ -f "${HOST_WORKSPACE_DIR}/evidence/os4/system_dlkm.img" ]; then
-        items="${items} evidence/os4/system_dlkm.img"
+    if [ -f "${HOST_WORKSPACE_DIR}/evidence/os4.0.6.0/system_dlkm.img" ]; then
+        items="${items} evidence/os4.0.6.0/system_dlkm.img"
     fi
 
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target/evidence/os4\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/abi\" \"\$target/tools\" \"\$target/userspace\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
+    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target/evidence/os4.0.6.0\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/abi\" \"\$target/tools\" \"\$target/userspace\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
 }
 
 export_orb_results() {
@@ -1435,7 +1435,7 @@ verify_android17_stock_rust_binder_replacement() {
         "$(wc -l < "${mismatched}" | tr -d ' ')" >> "${AUDIT_REPORT}"
     printf 'INFO\tunused.stock-rust-binder.non-vmlinux.count\t-\t%s\n' \
         "$(wc -l < "${non_vmlinux}" | tr -d ' ')" >> "${AUDIT_REPORT}"
-    log_success "内置 Rust Binder 与 stock 同名模块屏蔽已验证，保留原始 234 项需求审计"
+    log_success "内置 Rust Binder 与 stock 同名模块屏蔽已验证，保留 stock 原始 ${ANDROID17_STOCK_RUST_BINDER_REQUIREMENT_COUNT} 项需求审计"
 }
 
 verify_android17_stock_abi() {
@@ -1916,7 +1916,7 @@ ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256="${ANDROID17_STOCK_RUST_BINDER_MISSIN
 ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX="${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX:-}"
 ANDROID17_STOCK_MODULE_COUNT="${ANDROID17_STOCK_MODULE_COUNT:-}"
 ANDROID17_STOCK_MODULES_ORDER_SHA256="${ANDROID17_STOCK_MODULES_ORDER_SHA256:-}"
-ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-evidence/os4/system_dlkm.img}")"
+ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-evidence/os4.0.6.0/system_dlkm.img}")"
 ANDROID17_STOCK_SYSTEM_DLKM_SHA256="${ANDROID17_STOCK_SYSTEM_DLKM_SHA256:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_SIZE="${ANDROID17_STOCK_SYSTEM_DLKM_SIZE:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_RELEASE="${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE:-}"
@@ -1994,8 +1994,8 @@ done
 [[ "${ANDROID17_STOCK_MODULES_ORDER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "固定 OTA modules.order SHA-256 格式错误"
 [[ "${ANDROID17_STOCK_SYSTEM_DLKM_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "system_dlkm.img SHA-256 快照格式错误"
 [[ "${ANDROID17_STOCK_SYSTEM_DLKM_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "system_dlkm.img 大小快照格式错误"
-[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "evidence/os4/system_dlkm.img" ] || \
-    die "system_dlkm 兼容性输入路径必须固定为 evidence/os4/system_dlkm.img"
+[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "evidence/os4.0.6.0/system_dlkm.img" ] || \
+    die "system_dlkm 兼容性输入路径必须固定为 evidence/os4.0.6.0/system_dlkm.img"
 [ -n "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" ] && \
     [[ "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" =~ ^[A-Za-z0-9._+-]+$ ]] || \
     die "system_dlkm stock release 快照格式错误"

@@ -6,7 +6,7 @@
 
 ## 1. 项目与基线
 
-Luna Kernel 面向小米 17（`pudding`）HyperOS 4（Android 17），以小米官方 SM8850 `popsicle` 为 SoC/vendor 基线，从官方 AOSP `android16-6.12` KMI generation 6 common 构建 4 KiB `Image`。固定 OTA 为 `OS4.0.0.9.XPCCNXM`，metadata `post-build` 为 `Xiaomi/pudding/pudding:17/CP2A.260605.016/17OS4.0.260809.194304611.QCPECN.S:user/release-keys`。`android16` 是 GKI/KMI 名称，不代表目标 Android 版本。该 OTA 复用的 `system_dlkm` fingerprint 含 Android 16 与 `OS4.0.0.8.XPCCN` 原始字段，MUST 保留，不得据此单独否定 OTA 目标版本。
+Luna Kernel 面向小米 17（`pudding`）HyperOS 4 / Android 17，以小米 SM8850 `popsicle` 为 SoC/vendor 基线，从官方 AOSP `android16-6.12` KMI generation 6 common 构建 4 KiB `Image`。固定 OTA 为 `OS4.0.6.0.XPCCNXM`，metadata `post-build` 为 `Xiaomi/pudding/pudding:17/CP2A.260605.016/17OS4.0.261026.212859010.QCPECN.S:user/release-keys`。`android16` 是 GKI/KMI 名称；system_dlkm fingerprint 的 Android 16 与 `OS4.0.6.0.XPCCN` 原始字段必须保留，不得据此否定 OTA 的 Android 17 身份。
 
 内核发布字符串必须由干净的项目提交派生：
 
@@ -27,22 +27,22 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 取证优先级为：固定的小米与 AOSP 上游、官方 AOSP/Linux 历史与 KMI 清单、已验证产物和真机日志。不得从无关整树内核复制实现，不得保留无关作者或项目品牌。实际集成的独立组件必须保留准确来源、固定提交及许可证信息。
 
-当前固定组件：
+组件版本和全部来源、摘要以 `.env` 为唯一 pin 来源；集成边界如下：
 
-- KernelSU main：`51c217863c5e1fb639501e92ef17ac6d0cf90c92`，built-in，version code `32712`、UAPI `6`。该快照已包含 SUSFS 原配 `528bafc5` 之后的更新，必须精确重放兼容补丁并保留新版 SELinux 修复，不得宣称两者源码树相同。按用户持续要求，每次交付 MUST 配套放置兼容的官方 CI Manager APK，与 Image、刷机 ZIP 同目录；固定 CI 来源、APK 摘要与接口身份，优先复用缓存，不自行本地编译替代或触发 CI。MUST 使用上游已吸收的修复实现并删除重复回移层。`c20d48a` 修改的 syscall_hook_manager object 仍被 SUSFS 官方兼容层从 Kbuild 移除，不得视为当前组合中的有效功能。新版 preinit runner 按 arm64 静态用户态 ELF 审计并嵌入 Image，不得将其参数误作内核参数，也不得静默关闭该能力。
-- SUSFS v2.3.0：`6b60a305d418148bd311f4fc9bddedc82d99e1fc`；common 与 KernelSU 官方兼容补丁取自同一提交。SUSFS KernelSU 模块 ZIP 与独立 helper 不属于项目交付目标；内核能力保持启用。已吸收的三个重复补修及已无必要的旧上下文适配层 MUST 删除；剩余差异与证据见 `patches/susfs/6b60a30-absorption.tsv`。`OPEN_REDIRECT` 的 nd->name 生命周期已修复，但 readlink 返回值及短 buffer 语义缺陷仍存在，MUST 在编译期关闭并等待上游完整修复；不再维护对其已禁用路径的重复代码删除。内核日志静态键 MUST 默认关闭，仅允许显式运行时启用。
-- Baseband Guard：`028ff7fd509e2104596da7cc1ef8e6ce2a0c9082`，叠加项目固定的无缓存块设备身份复核、固定上游判定的破坏性 block ioctl 与 UFS BSG 原始命令封堵、`io_uring discard`/共享可写映射入口保护、KernelSU 授权凭据标记与最小限速拒绝日志；file_permission、mmap_file 与 file_mprotect 在凭据检查前排除无关操作和非块设备，保护策略不变。boot/recovery 分区保护关闭，其余能力启用。
+- KernelSU main `51c21786`：built-in，32712 / UAPI 6。精确重放 SUSFS 兼容层，保留新版 SELinux 修复；不得将其等同于 SUSFS 原配旧树，或把被移出 Kbuild 的 syscall_hook_manager object 计作有效功能。已吸收修复使用上游实现、删除重复层。preinit runner 保持启用，按 arm64 静态用户态 ELF 审计并嵌入 Image，不能套用内核参数。
+- SUSFS v2.3.0 `6b60a305`：common 与 KernelSU 兼容补丁取自同一提交；内核能力启用，模块 ZIP 和独立 helper 不交付。保留差异及吸收依据见 `patches/susfs/6b60a30-absorption.tsv`，不保留重复补修或无用上下文层。`OPEN_REDIRECT` 因 readlink 返回值及短 buffer 语义缺陷保持编译期关闭，等待完整上游修复，不维护禁用路径的重复代码删除。日志静态键默认关闭，仅允许显式运行时启用。
+- Baseband Guard `028ff7fd`：保留无缓存块设备身份复核、固定上游判定的破坏性 ioctl/UFS BSG 封堵、io_uring discard/共享可写映射保护、KernelSU 凭据标记和限速拒绝日志。file_permission/mmap_file/file_mprotect 在凭据检查前排除无关操作和非块设备；仅 boot/recovery 分区保护关闭，其余保护启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
 
-内核直接修复仅授权 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节硬门禁及完整差异审计；拒绝收益极小、路径无关、来源不清或逻辑证据不足的改动。缺少实机性能数据本身不构成否决，不得将机制不明的猜测视为优化。r21 已原样包含主动回收响应 freezer 的 AOSP 修复 `bee364ffffd30532ef586a10bb42b505ed347988`，不得重复回移。
+内核直接修复仅授权 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节门禁与差异审计；拒绝收益极小、路径无关、来源不清或证据不足的改动。缺少实机性能数据本身不构成否决，但不得把猜测视为优化。已被基线吸收的修复不得重复回移。
 
-另经用户授权，仅接入官方 Kbuild `kbuild-next-speedups` 固定快照中的 kallsyms token 索引及参数探测缓存链，分别由独立清单 `670-kallsyms-token-index.tsv`、`680-kbuild-probe-cache.tsv` 固定。来源与必要 Git 对象独立置于 `sources/linux_kbuild_audit/`，不得将 next 提交标为主线或稳定树。MUST 证明生成结果及现有参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁和早期启动严格对齐；授权不含该快照的其他改动。
+Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索引与参数探测缓存链，由独立清单 670、680 固定，来源对象独立置于 `sources/linux_kbuild_audit/`。不得把 next 标为主线/稳定树或接入清单外改动；须证明生成结果、参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁与早期启动严格对齐。
 
-九月 selected 回移集合有序且不可拆分：19 项逻辑修复、23 个应用提交。已吸收的层及旧 F2FS 上下文适配 MUST 删除。r8 已吸收 XFRM6 设备引用修复，r11 又吸收 Rust Binder epoll 自身工作通知及节点调试指针溢出修复，重复的 600、690、700 清单及 pin 已删除；直接回移为 66 个逻辑项（含宿主构建回移），独立项为 36 个。已删除无目标代码收益的 EAS cpumask 回移及 BBG 遗留空函数，不得把未编译路径计作有效功能。吸收、保留理由及质量证据见 `patches/backports/` 中固定 TSV。
+九月 selected 集合有序且不可拆分（19 个逻辑项、23 个应用提交）；总回移 66 个逻辑项，含 36 个独立项和宿主构建回移。来源、吸收/保留理由和质量证据以 `patches/backports/` 固定 TSV 为准。已吸收层、无用上下文适配和无目标代码收益项不得重复保留，未编译路径不得计作有效功能。
 
-新增高置信回移 MUST 置于 `patches/backports/kmi6-2026-09-independent/`，每份清单仅含一个逻辑项，不可拆的官方前置/补修链同清单，独立 pin SHA-256。必须以临时 Git index 证明从固定基础差异单项应用、撤销及固定顺序完整重放；授权不含清单外提交。配置、UAPI、syscall、ABI 或 KMI 影响逐项说明，不得破坏固定 OTA 模块闭包、关键启动配置或用户态语义。
+新增独立回移置于 `patches/backports/kmi6-2026-09-independent/`：每份清单一个逻辑项，不可拆的官方前置/补修链同清单，独立 SHA-256 pin。用临时 Git index 证明从固定基础差异单项应用、撤销及固定顺序完整重放；授权不含清单外提交。逐项说明配置、UAPI、syscall、ABI/KMI 影响，不得破坏目标闭包、关键启动配置或用户态语义。
 
-r21 对 `struct tegra_mc` 的私有类型重构使固定 OTA 实际消费的 `devm_tegra_memory_controller_get` 与 `tegra_mc_probe_device` 产生 CRC 漂移。`patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch` 只使用 `ANDROID_KABI_TYPE_STRING` 固定这两个不透明指针接口的版本字符串，不改变函数机器 ABI、运行时代码或结构体布局；该窄兼容补丁及其 SHA-256、patch-id MUST 固定并纳入源码差异门禁。
+`patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch` 仅用 `ANDROID_KABI_TYPE_STRING` 固定 OTA 消费的两个 tegra_mc 不透明指针接口版本字符串；不得改变机器 ABI、运行时代码或布局。补丁 SHA-256、patch-id 及源码差异 MUST 固定校验。
 
 ## 3. 小米 17 可启动兼容性硬门禁
 
@@ -58,7 +58,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 目标闭包符号删除、CRC/provider/namespace/相关类型不兼容或关键启动配置破坏均为绝对拒绝项，安全性或性能收益不能豁免。禁止删除验证对象、伪造导出、硬编码跳过、扩大例外或以空模块掩盖失败；唯一固定 `rust_binder.ko` 的内置替代策略见第 5 节。
 
-全量导出、STG 类型图、配置和模块矩阵是参考快照：哈希、项目数或顺序变化本身不是 ABI/KMI 硬失败或补丁拒绝理由。构建 MUST 报告参考值与本次值、生成结构化漂移摘要并保留本次完整快照。九月 r11 / SM8850 LLVM 22 参考为 Module.symvers 18589 项、vmlinux/STG 17991 项导出、QCOM/Xiaomi vendor 参考并集 4740 项；相对 r8 仅 STG 中官方 `dw_pcie_rp` 新增位域发生变化，目标 OTA 的 4083 项接口可达类型图完全一致，漂移已审查。两个 C Binder tracepoint 未导出且无目标 OTA 消费者，参考 CRC 记为 `-`，不得据此伪造导出；各项 SHA-256、配置与模块清单均以 `.env` 为准。
+全量导出、STG、配置和模块矩阵是参考快照，数量和摘要以 `.env` 为准；哈希、数量或顺序变化本身不是 ABI/KMI 硬失败或补丁拒绝理由。构建 MUST 报告参考值与本次值、生成结构化漂移摘要并保留完整快照。没有导出和目标消费者的两个 C Binder tracepoint 的参考 CRC 记为 `-`，不得伪造导出。
 
 差异审计必须分开记录目标闭包硬门禁与全量快照漂移。目标消费者相关变化须证明完全兼容；无目标消费者的变化须用途明确且无回归。必要配置变化、新增项目模块及其必要导出、模块排序变化均须遵守上述要求，不得绕过关键配置和闭包门禁。出现 `DRIFT` 时必须先保留本次快照、完成影响审查，并在同一变更中更新参考摘要；未确认漂移不得进入发布闭包，也不得放宽 UAPI、syscall 或用户态语义审查。
 
@@ -91,7 +91,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 - `bash -n init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh tools/backport_manifest.sh tools/independent_backports.sh` 必须通过。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
-- 参考配置为 8259 行，modules.order 为 103 个活动模块，摘要以 `.env` 为准。相对旧验收仅切换四个 Binder 配置项：Rust 模块改内置、C 实现关闭、两个 C 专用选项不再序列化。配置参考包含 stock Rust Binder 模块黑名单和 12 个序列化工具探测缓存项；缓存项 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
+- 项目配置、modules.order 及摘要以 `.env` 为准；保留 stock Rust Binder 黑名单和工具探测缓存项，后者 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
 - 按用户本轮确认，仅构建和交付 4 KiB 版本；16 KiB 暂不交付。16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
 - 按本轮授权，Rust Binder 必须内置并作为唯一实际 Binder 实现：`ANDROID_BINDER_IPC_RUST=y`、`ANDROID_BINDER_IPC=n`，不启用 C 实现专用的 `ANDROID_BINDERFS`；Binderfs 由 Rust 驱动自带实现提供。不得同时内置 C/Rust 两套同名 tracepoint。保留独立 vendor hooks，固定 OTA 的其余模块继续严格闭包检查。配置使用 `CMDLINE_EXTEND=y`，保留 common 原始参数并追加 `module_blacklist=rust_binder`，仅阻止 stock 同名 `.ko` 的符号解析，不影响内置驱动。模块屏蔽策略独立于最小启动门禁；Rust Binder 本身提供核心 IPC，必须纳入启动配置检查。
@@ -99,12 +99,12 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 - seccomp 内核能力必须启用。KernelSU Manager 或获准 root 进程因官方 `disable_seccomp()` 显示 `Seccomp: 0` 属于预期；普通 Android 应用应为 `2`。
 - 保留 AOSP r21 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。
 - LSM 展开后的 `MAX_LSM_COUNT` 必须与实际启用的 LSM 数量精确一致；当前参考值为 6，BBG 占 1 槽，KernelSU 不得额外注册 LSM。
-- Clang r596125（22.0.2）、Rust 1.97.0-dev（LLVM 22.1.6）与 build-tools 必须来自固定 AOSP Git subtree，同时校验完整上游 Git tree 与明确检出内容的 SHA-256；bindgen 0.72.1 和宿主 bc 必须校验固定 AOSP Git blob 与 SHA-256。Clang 与 Rust 的 LLVM 主版本必须相同，`RUST_INLINE_HELPERS` 必须启用。Rust 必须独立安装，禁止覆盖 Clang 的 LLVM 共享库；完整工具链安装树摘要必须保持 `9ac803933946fd3dff326f8da8853fc5b23ae7da613f6ceb611d8cc5587bf985`，并与 `.env` 固定值一致。
+- Clang r596125（22.0.2）、Rust 1.97.0-dev（LLVM 22.1.6）与 build-tools 来自固定 AOSP Git subtree；完整上游 Git tree、检出内容及安装树均须符合 `.env` pin。bindgen 0.72.1、宿主 bc 校验固定 Git blob 与 SHA-256。Clang/Rust 的 LLVM 主版本必须一致，启用 `RUST_INLINE_HELPERS`；Rust 独立安装，禁止覆盖 Clang 共享库。
 - AutoFDO MUST 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，路径和 SHA-256 由 `.env` 固定；构建前校验 Git blob 身份及固定 LLVM 的读取能力，实际 C/Rust 命令 MUST 包含对应 sample-use 参数。缺失或不匹配必须失败，不得静默退回普通编译；保持 `LTO_NONE`。当前编译策略见 `docs/BUILDING.md`，回移来源与审查见 `patches/backports/`。
 - ExtTSP MUST 显式禁止作用于无 profile 的函数。AutoFDO 的 Profi 固定使用 `-sample-profile-even-flow-distribution=false`，以官方单路径增广规避当前组合中均匀分流 DAG 搜索的异常耗时；LLVM 22 与 LLVM 23 均已复现该路径，保留 sample-use、Profi 最小费用流与 MIR profile loader。该策略可能改变推断权重和代码布局，不得声称性能等价。C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。
-- stock 清单覆盖 HyperOS 4 `OS4.0.0.9.XPCCNXM` 同一 OTA 的 boot/vendor_boot/vendor_dlkm/system_dlkm，可证明 4083 项实际 vmlinux 依赖，v5 清单摘要为 `866afc7ea549ff8aa13a53f28d242396f1a8fa356ead345709cc1b7f7a16136a`；对应五列硬门禁 tuple 摘要为 `d3add92d15233b79b94c354ad6bd74a254c8be94eba2b2c199369dc80f6a6555`。固定 system_dlkm 输入含 103 个 stock 模块，其中 102 个必须严格闭包。唯一被替代的 stock `rust_binder.ko` 必须保持固定镜像身份、234 项原始需求、无导出、无模块依赖及无反向依赖的证据；原先 C Binder 构建中的 167 项匹配、67 项缺失仅为历史参考，不得宣称该 `.ko` 可加载。其本次需求比较必须完整保留；放行必须另行证明本次 `modules.builtin` 包含 Rust Binder、`modules.order` 不包含它、`System.map` 含 Rust 初始化函数及 initcall 且不含 C Binder 初始化函数，并由实际配置证明 stock 同名模块在符号解析前被屏蔽。其余模块不得沿用此替代策略。项目自身新增模块不计入这 103 个 stock 模块，但必须通过第 3 节所述加载与依赖门禁。
-- 同 OTA `evidence/os4/system_dlkm.img` 固定为 17281024 字节、SHA-256 `7918f34b6ae9210b8470abbe1ee52f2fc72da04bfa241627ab0c66f340ab9816`。`build.sh` 必须校验整镜像身份、AVB hashtree 自洽、EROFS 完整性以及与 stock 清单绑定关系；镜像缺失或不匹配时 MUST 在打包前失败。重建 stock 清单还需固定的 Xiaomi 四个分区镜像以及脚本校验过的 `unpack_bootimg`、`bsdtar`、kmod 和 EROFS 工具。
+- stock 清单覆盖 `OS4.0.6.0.XPCCNXM` 同包四分区全部模块，4090 项实际 vmlinux 依赖及五列 tuple 的摘要以 `.env` 为准。system_dlkm 的 103 个模块中，102 个必须严格闭包；唯一 stock `rust_binder.ko` 保留固定镜像身份、240 项原始需求及无导出、无模块依赖、无反向依赖证明，其本次比较完整记录，不得宣称该 `.ko` 可加载。放行另须证明 `modules.builtin` 包含 Rust Binder、`modules.order` 不含它、`System.map` 含 Rust 初始化函数/initcall 且无 C 初始化函数，实际配置在符号解析前屏蔽 stock 同名模块。其余模块不得套用此替代；项目新增模块独立执行第 3 节门禁。
+- 输入固定为 `evidence/os4.0.6.0/system_dlkm.img`，大小与 SHA-256 由 `.env` 固定。`build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
 
 发布产物名称：
 
@@ -117,13 +117,13 @@ AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaom
 
 Manager APK 属于配套交付检查，不是内核启动门禁。`.env` MUST 固定官方 main CI 的提交、run/artifact ID、归档与 APK SHA-256、版本、UAPI 和签名证书；更新 KernelSU 时一并审查兼容性。`init.sh` 优先复用 `work/cache/ksu-manager/` 或已验证的现有 APK；`build.sh` 只离线校验、记录来源并交付，校验签名证书与实际内核编译参数一致。APK MUST 纳入 `.build-artifacts`，由 `release.tsv` 的 `ksu_manager_apk` 指定，导入导出不得遗漏；历史未要求 APK 的发布按原清单验证。缺少兼容官方产物时不得静默省略或宣称交付齐全。
 
-当前 KernelSU 仍为 built-in，本轮不得借门禁重构改变交付边界。若后续经专项审计切换为 LKM，面向用户必须保持单一安装入口，不得要求分别管理或手工刷入两个分区镜像；该专项还必须新增模块交付、逐项依赖与真机加载门禁，不能把 `modules.order` 中存在 `.ko` 当成已完成验证。首次安装后只有在驻留 LKM 与新 `Image` 的完整依赖闭包通过同等硬门禁时，才允许仅更新或直接刷入已组装的 boot 镜像。
+KernelSU 保持 built-in，不得借门禁重构改变交付边界。后续切换 LKM 须专项审计并保持单一安装入口，补齐模块交付、逐项依赖与真机加载检查；不能以 `.ko` 出现在 modules.order 代替验证。驻留 LKM 与新 Image 的完整闭包通过同等门禁后，才允许只更新 Image/已组装 boot。
 
 ## 6. 真机验证
 
-当前验收基准为项目 `586720039e9896d86e4e55dbdfd4bf8f01cd81b6`，release `6.12.92-android16-luna-g58672003-4k`，2026-10-07 完成本地构建、快速实机回归及用户功能确认，状态为 `accepted`；实机为 `pudding` / `OS4.0.0.32.XPCCNXM`，构建闭包仍固定于 `.9` OTA。必要原始证据与验证范围见 `docs/VALIDATION.md`。该验收 MUST NOT 外推到其他设备、OTA 或新项目哈希，也不得视为性能或长期稳定性实测。设备运行时 MGLRU 为关闭状态，其回收路径未触发；新 IPSet 二进制仅经临时执行验证，未替换已安装模块。完整本地构建与闭包证据以对应提交的发布审计为准。
+当前验收基准为项目 `1d3c30f1945ad2c70bbf084886339649b3017123`，release `6.12.92-android16-luna-g1d3c30f1-4k`。用户于 2026-11-08 确认在 `pudding` / `OS4.0.6.0.XPCCNXM` 完成严格实机验收并通过，状态为 `accepted`；本轮只读身份核实一致。原始身份记录、构建审计及范围见 `docs/VALIDATION.md`。不重复要求该产物验收，不补造功能、性能、功耗或长期测试数据，不把旧版本日志视为当前仍存在的问题。
 
-本分支 r8、内置 Rust Binder 及相关回移已在 `eb7aa9ca` 完成本地构建与模块闭包验证，后续 `c0cb0f53` 完成 KernelSU/SUSFS 更新的完整本地构建，均尚未实机验收。本次 r11 与组件更新保留兼容的 LLVM 22 工具链，仍须以对应提交的完整构建与实机证据验明，不继承上述版本的验收状态。
+验收仅属于上述二进制与 OTA，MUST NOT 外推到其他设备、OTA 或后续项目提交。原 `.9` OTA 构建审计保持原始含义；新 OTA 静态闭包单独核对，不以实机验收替代全部潜在模块路径的兼容性证明。文档、Manager 交付和仓库整理提交不得改名旧 Image 或冒充新内核已验收。
 
 公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
 
