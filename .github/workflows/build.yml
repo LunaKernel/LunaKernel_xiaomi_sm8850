@@ -1,0 +1,162 @@
+name: Build Luna Kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: luna-kernel-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      project_commit: ${{ steps.meta.outputs.project_commit }}
+      build_id: ${{ steps.meta.outputs.build_id }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      INIT_FETCH_JOBS: '2'
+      CCACHE_COMPILERCHECK: content
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: false
+          fetch-depth: 1
+      - name: Fix build identity and verify OTA input
+        id: meta
+        run: bash tools/ci/run_build.sh metadata
+      - name: Prepare temporary runner
+        run: bash tools/ci/prepare_runner.sh
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/cache/ccache
+          key: ${{ steps.meta.outputs.ccache_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.meta.outputs.ccache_prefix }}-
+      - name: Restore fixed downloads
+        id: downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/cache/downloads
+          key: ${{ steps.meta.outputs.downloads_key }}
+      - name: Restore official Manager
+        id: manager
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/cache/ksu-manager
+          key: ${{ steps.meta.outputs.manager_key }}
+      - name: Prepare and verify pinned sources and tools
+        id: init
+        run: bash tools/ci/run_build.sh init
+      - name: Save verified downloads
+        if: steps.downloads.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/cache/downloads
+          key: ${{ steps.meta.outputs.downloads_key }}
+      - name: Save verified Manager
+        if: steps.manager.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/cache/ksu-manager
+          key: ${{ steps.meta.outputs.manager_key }}
+      - name: Apply patches and build with existing gates
+        id: compile
+        run: bash tools/ci/run_build.sh compile
+      - name: Verify and export complete delivery
+        id: export
+        run: bash tools/ci/run_build.sh export
+      - name: Upload complete delivery
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ steps.export.outputs.bundle_path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Save compilation cache
+        if: always() && env.CI_CCACHE_USED == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/cache/ccache
+          key: ${{ steps.meta.outputs.ccache_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Preserve failure diagnostics
+        if: failure() && steps.meta.outputs.build_id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: luna-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.CI_RUN_DIR }}/logs
+            work/audit/${{ steps.meta.outputs.build_id }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 1
+      - name: Summarize build and cache use
+        if: always()
+        env:
+          CI_COMPILE_RESULT: ${{ steps.compile.outcome }}
+          CI_UPLOAD_RESULT: ${{ steps.upload.outcome }}
+          CI_CCACHE_HIT: ${{ steps.ccache.outputs.cache-matched-key }}
+          CI_DOWNLOADS_HIT: ${{ steps.downloads.outputs.cache-hit }}
+          CI_MANAGER_HIT: ${{ steps.manager.outputs.cache-hit }}
+          CI_ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: bash tools/ci/run_build.sh summary
+
+  notify:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      BUILD_ID: ${{ needs.build.outputs.build_id }}
+      PROJECT_COMMIT: ${{ needs.build.outputs.project_commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.project_commit }}
+          persist-credentials: false
+          clean: false
+          fetch-depth: 1
+      - name: Download the exact successful build artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: work/tmp/ci-download
+          merge-multiple: true
+      - name: Import and verify complete delivery
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'tools')
+          from release_artifacts import import_archive
+
+          files = list(Path('work/tmp/ci-download').iterdir())
+          if len(files) != 1 or files[0].is_symlink() or not files[0].is_file() or not files[0].name.endswith('.tar.gz'):
+              raise SystemExit('下载附件必须只包含一个完整交付归档')
+          import_archive(files[0], Path.cwd(), os.environ['BUILD_ID'])
+          PY
+      - name: Send AK3 and official Manager to Telegram
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -a
+          . ./.env
+          set +a
+          python3 tools/ci/notify_telegram.py --workspace "$GITHUB_WORKSPACE" \
+            --build-id "$BUILD_ID" --project-commit "$PROJECT_COMMIT" --run-url "$RUN_URL"
