@@ -20,6 +20,6 @@ jobs:
         with:
           persist-credentials: false
           clean: false
-          fetch-depth: 1
+          fetch-depth: 2
       - name: Check scripts, workflows and fixed input
         run: bash tools/ci/check.sh
