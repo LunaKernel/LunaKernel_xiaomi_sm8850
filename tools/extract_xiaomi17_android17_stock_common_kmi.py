@@ -597,7 +597,7 @@ def main() -> None:
     parser.add_argument("--boot-image", type=Path, default=Path("evidence/os4.0.6.0/boot.img"))
     parser.add_argument("--vendor-boot-image", type=Path, default=Path("evidence/os4.0.6.0/vendor_boot.img"))
     parser.add_argument("--vendor-dlkm-image", type=Path, default=Path("evidence/os4.0.6.0/vendor_dlkm.img"))
-    parser.add_argument("--system-dlkm-image", type=Path, default=Path("evidence/os4.0.6.0/system_dlkm.img"))
+    parser.add_argument("--system-dlkm-image", type=Path, default=Path("ci/inputs/os4.0.6.0/system_dlkm.img"))
     parser.add_argument(
         "--common-repo",
         type=Path,
