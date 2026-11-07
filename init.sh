@@ -13,6 +13,16 @@ log_info() { printf '[INFO] %s\n' "$1"; }
 log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
 
+validate_init_fetch_jobs() {
+    INIT_FETCH_JOBS="${INIT_FETCH_JOBS-1}"
+    case "${INIT_FETCH_JOBS}" in
+        1|2) ;;
+        *) die "INIT_FETCH_JOBS 只允许 1 或 2" ;;
+    esac
+    export INIT_FETCH_JOBS
+    readonly INIT_FETCH_JOBS
+}
+
 reject_git_environment_overrides() {
     local name
     while IFS= read -r name; do
@@ -117,7 +127,7 @@ append_orbenv_var() {
 
 prepare_orb_passthrough_env() {
     local var
-    for var in NO_COLOR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
+    for var in INIT_FETCH_JOBS NO_COLOR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
         [ -z "${!var:-}" ] || append_orbenv_var "${var}"
     done
     export ORBENV
@@ -519,7 +529,6 @@ prepare_fixed_git_subtree() {
     actual_leaf="$(tree_sha256 "${payload_dir}")"
     [ "${actual_leaf}" = "${expected_leaf}" ] || \
         die "${label} 已检出文件树 SHA-256 不匹配: ${actual_leaf}"
-    PREPARED_GIT_PAYLOAD_DIR="${payload_dir}"
     log_success "固定 ${label} 对象树完整性校验通过"
 }
 
@@ -539,7 +548,6 @@ prepare_clang_source_tree() {
     prepare_fixed_git_subtree "AOSP Clang 工具链" "${cache_dir}" \
         "${AOSP_CLANG_REPO}" "${AOSP_CLANG_COMMIT}" "${subtree}" \
         "${CI_CLANG_GIT_TREE}" "${CI_CLANG_LEAF_TREE_SHA256}" "${paths[@]}"
-    CI_CLANG_PAYLOAD_DIR="${PREPARED_GIT_PAYLOAD_DIR}"
 }
 
 prepare_rust_source_tree() {
@@ -557,7 +565,6 @@ prepare_rust_source_tree() {
     prepare_fixed_git_subtree "AOSP Rust 工具链" "${cache_dir}" \
         "${AOSP_RUST_REPO}" "${AOSP_RUST_COMMIT}" "${CI_RUST_SUBTREE}" \
         "${CI_RUST_GIT_TREE}" "${CI_RUST_LEAF_TREE_SHA256}" "${paths[@]}"
-    CI_RUST_PAYLOAD_DIR="${PREPARED_GIT_PAYLOAD_DIR}"
 }
 
 prepare_build_tools_source_tree() {
@@ -572,16 +579,80 @@ prepare_build_tools_source_tree() {
         "${AOSP_BUILD_TOOLS_REPO}" "${AOSP_BUILD_TOOLS_COMMIT}" \
         "${CI_BUILD_TOOLS_SUBTREE}" "${CI_BUILD_TOOLS_GIT_TREE}" \
         "${CI_BUILD_TOOLS_LEAF_TREE_SHA256}" "${paths[@]}"
-    CI_BUILD_TOOLS_PAYLOAD_DIR="${PREPARED_GIT_PAYLOAD_DIR}"
+}
+
+stop_toolchain_fetches() {
+    local pid
+    trap '' INT TERM
+    # Include a job interrupted between its launch and PID registration.
+    for pid in $(jobs -pr); do fetch_pids+=("${pid}"); done
+    for pid in "${fetch_pids[@]}"; do
+        kill -TERM -- "-${pid}" 2>/dev/null || true
+    done
+    if [ "${#fetch_pids[@]}" -gt 0 ]; then
+        sleep 0.2
+        for pid in "${fetch_pids[@]}"; do
+            kill -KILL -- "-${pid}" 2>/dev/null || true
+            wait "${pid}" 2>/dev/null || true
+        done
+    fi
+}
+
+prepare_toolchain_source_trees() {
+    local task index completed_pid monitor_enabled=0
+    local -a fetch_pids=()
+    local -a tasks=(prepare_clang_source_tree prepare_rust_source_tree prepare_build_tools_source_tree)
+
+    # Check the Linux worker shell, after any macOS-to-Orb handoff.
+    if [ "${INIT_FETCH_JOBS}" = 2 ] && \
+            (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then
+        die "INIT_FETCH_JOBS=2 需要 Bash 5.1 或更新版本"
+    fi
+
+    # Child shells cannot return variables; derive all paths before launching.
+    CI_CLANG_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}/clang-${CI_CLANG_REVISION}"
+    CI_RUST_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}/${CI_RUST_SUBTREE}"
+    CI_BUILD_TOOLS_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}/${CI_BUILD_TOOLS_SUBTREE}"
+
+    case "$-" in *m*) monitor_enabled=1 ;; esac
+    # Separate process groups let cancellation stop Git and all its helpers.
+    set -m
+    trap stop_toolchain_fetches EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    for task in "${tasks[@]}"; do
+        (trap - EXIT INT TERM; "${task}") &
+        fetch_pids+=("$!")
+        if [ "${#fetch_pids[@]}" -eq "${INIT_FETCH_JOBS}" ] || \
+                [ "${task}" = prepare_build_tools_source_tree ]; then
+            while [ "${#fetch_pids[@]}" -gt 0 ]; do
+                if [ "${INIT_FETCH_JOBS}" = 2 ]; then
+                    # Observe the first completed task, regardless of launch order.
+                    wait -n -p completed_pid "${fetch_pids[@]}" || \
+                        die "固定工具链来源准备失败，停止安装"
+                else
+                    completed_pid="${fetch_pids[0]}"
+                    wait "${completed_pid}" || die "固定工具链来源准备失败，停止安装"
+                fi
+                for index in "${!fetch_pids[@]}"; do
+                    if [ "${fetch_pids[$index]}" = "${completed_pid}" ]; then
+                        unset 'fetch_pids[index]'
+                        break
+                    fi
+                done
+            done
+            fetch_pids=()
+        fi
+    done
+    trap - EXIT INT TERM
+    [ "${monitor_enabled}" = 1 ] || set +m
 }
 
 setup_toolchain() {
     local files=(bindgen gavinhoward-bc stock-fsck.erofs stock-depmod stock-libc++.so)
     local file expected actual marker marker_value staging backup rust_bin compiler blob stock_tools_dir
     mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
-    prepare_clang_source_tree
-    prepare_rust_source_tree
-    prepare_build_tools_source_tree
+    prepare_toolchain_source_trees
     for file in "${files[@]}"; do
         expected="${TC_SHA256[$file]:-}"
         blob="${TC_GIT_BLOB[$file]:-}"
@@ -845,6 +916,7 @@ SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
+validate_init_fetch_jobs
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
 [ "${ENABLE_KERNELSU:-0}" = "1" ] || \
     die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
