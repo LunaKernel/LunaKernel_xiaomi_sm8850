@@ -19,31 +19,13 @@
 
 `init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
-初始化支持 source 与 fixed 两种依赖模式。五项依赖包 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）均未配置时，source 模式沿用官方工具链与已采用补丁必需的提交、父对象及来源关系准备。五项完整且摘要有效时，CI metadata 输出 `dependencies_mode=fixed`；有任一配置但缺项或摘要无效时直接失败，不静默降级。真实依赖包尚未发布时保留 source 模式，不能向主 `.env` 写入占位 URL 或假摘要；发布及切换真实 pin 仍须遵守远端操作授权边界。
+主仓库只消费固定依赖包。`.env` 必须配置回移 manifest 摘要、回移归档 URL/SHA-256、工具链归档 URL/SHA-256，以及工具链安装树摘要。当前依赖版本为 [ci-deps-v1-3fc59ff](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-3fc59ff)。
 
-fixed 模式按固定摘要下载或恢复回移内容包与工具链安装树。回移目录为 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}`；工具链目录为 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，当前实际为 `work/tools/toolchain/ci-sm8850-r596125-rust1.97.0-bc39cdb1dc`。工具链安装树 pin `CI_TOOLCHAIN_TREE_SHA256` 保持相同含义，不以归档摘要替代。归档共存 `work/cache/downloads/ci-dependencies/`。日常校验包 manifest、清单绑定、逐文件摘要、patch-id 和允许路径，执行单项应用、撤销、有序重放及实际源码树验证；工具链仍校验安装树与实际编译器身份。不复用跨构建的审计通过标记，不减免目标 OTA、ABI/KMI、配置、Image/modules 和交付门禁。
+初始化校验包内容、清单绑定与工具链安装树；补丁阶段校验 patch-id、允许路径、实际应用、撤销和有序重放。回移内容缓存位于 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}`，工具链位于 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，下载归档位于 `work/cache/downloads/ci-dependencies/`。
 
-来源证明在固定依赖制作期完成。推荐从仓库根目录运行统一制作入口，主机须有 `zstd`；脚本按现有隐私授权加载项目公开 pins，不发布、不修改主 `.env`：
+依赖制作、官方来源审计与候选调查由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 维护。更新时以固定主项目提交提供 pins 和补丁清单，在依赖仓库完成来源审计、组装及打包，发布新版本后更新主项目的 URL 与摘要。具体制作命令见依赖仓库 README。
 
-```bash
-bash tools/prepare_ci_dependencies.sh
-```
-
-入口先调用 helper 的 `export-toolchain`，由其强制运行 `init.sh --prepare-dependencies`，从官方固定来源准备并完整校验工具链与制作必需对象，再校验完整安装树并导出 zstd 归档。随后 `export-backports` 自动执行 `patch.sh --audit-sources` 的完整来源审计，导出固定提交的补丁、来源/父对象/日期/消息/路径、许可证和逐文件摘要 manifest；`pack-backports --input` 再次校验本次导出目录并打包。`init.sh --prepare-dependencies` 本身只准备来源和工具，不直接导出或应用补丁。制作记录绑定项目提交及相关脚本摘要。
-
-每次制作使用新的 `work/ci-dependencies/prepared.*/` 目录，保留 `backports.tar.gz`、`toolchain.tar.zst`、`backports/manifest.json` 及其来源文件，并生成 `pins.env`，记录真实的 `BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256` 和 `CI_TOOLCHAIN_BUNDLE_SHA256`。该文件不含 URL，不能直接替代完整构建 pin 配置。包发布获授权、实际地址和归档摘要确认后，才在同一变更中切换完整 pin；不得仅凭制作期审计宣称日常构建或发布验证通过。
-
-需要单独制作时，按现有隐私授权将公开 pins 导入环境后使用底层入口；`ROOT` 为工作区，输出路径必须尚不存在。以下 `BACKPORTS_DIR` 是同一份新导出目录，打包前须在制作环境设置其真实 `BACKPORT_BUNDLE_MANIFEST_SHA256`：
-
-```bash
-python3 tools/ci_dependencies.py export-toolchain --workspace ROOT --output TOOLCHAIN_TAR_ZST
-python3 tools/ci_dependencies.py export-backports --workspace ROOT --output BACKPORTS_DIR
-python3 tools/ci_dependencies.py pack-backports --workspace ROOT --input BACKPORTS_DIR --output BACKPORTS_TAR_GZ
-```
-
-省略 `pack-backports --input` 时，helper 使用 manifest 摘要对应的标准内容目录。
-
-调查候选补丁、比较历史 ABI 或重建 stock 清单前，运行 `./init.sh --audit-history` 补齐维护资料，再按需运行 `./patch.sh --audit-sources`；这些资料不参与日常 fixed 模式缓存。source 模式仍保留既有来源检查。来源审计与日常内容校验的分工不改变已采用补丁集合及本次 Image 的 ABI/STG 检查。
+人工重建 stock 清单时，通过依赖仓库准备历史资料，并向 `tools/extract_xiaomi17_android17_stock_common_kmi.py` 的 `--common-repo` 显式传入准备好的 AOSP 历史仓库路径。
 
 `INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2；源码、工具和回移依赖共用槽位，任务完成后立即补位，任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
 
@@ -54,15 +36,15 @@ python3 tools/ci_dependencies.py pack-backports --workspace ROOT --input BACKPOR
 完整流程使用 GitHub 托管 `ubuntu-24.04`，分为 build、notify 两个 job：
 
 - **build**：`tools/ci/prepare_runner.sh` 准备宿主，先检查空间，仅在不足时按固定白名单逐项清理无关 SDK，达到 50 GiB 即停止，安装依赖后再次检查；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
-- **缓存**：保留 5 GiB ccache、固定下载（含 `ci-dependencies/`）、官方 Manager APK 与干净 common 源码。common key 按内容身份与格式生成，不绑定 init 脚本或调度逻辑；存在已跟踪差异、未跟踪或忽略文件时不保存。fixed 模式只额外恢复、统计和保存 backports 内容目录与工具链安装树，使用仅绑定平台、内容身份和格式的精确 key，不缓存四个审计来源目录或 Clang/Rust/build-tools 三个来源目录。source 模式沿用既有来源缓存与 key。依赖缓存只在 init 成功后、patch 前保存，恢复后仍须完成内容、来源及固定摘要校验。ccache 使用 `compiler_check=content`；已打补丁的源码、构建目录、审计结果和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
-- **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为一个保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`；云端构建成功不等同于实机验收。
-- **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明只保留 `SHA256` 与 `Build`；验收状态仍保存在交付清单中。不发送源码、原始证据或凭据。通知失败可单独重跑 notify，下载同一次构建的 artifact 重新校验并发送，无需重新编译；artifact 过期后不能通过重跑通知恢复产物。
+- **缓存**：5 GiB ccache、固定下载、官方 Manager APK、干净 common 源码、回移内容目录和工具链安装树。依赖 key 绑定内容身份与缓存格式，init 验证成功后、patch 前保存。common 缓存要求工作树完全干净；ccache 使用 `compiler_check=content`。
+- **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`。
+- **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明包含 `SHA256` 与 `Build`。通知失败时，可在 artifact 有效期内单独重跑 notify，复用同次构建产物。
 
-两个 Telegram secrets 仅供 notify 使用，不写入 `.env` 或日志。发送成功但响应丢失时，重试可能产生重复文件消息。首次 CI 的实际磁盘占用、缓存命中和耗时以运行记录为准；不得以提速为由引入时间劫持、宽松 ccache 校验或省略 Image/modules 及闭包审计。
+两个 Telegram secrets 仅供 notify 使用。发送成功但响应丢失时，重试可能产生重复文件消息。
 
 ## 编译策略
 
-固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22.1.6）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库。制作期/source 模式验证官方 Git 对象与明确检出树，日常 fixed 模式验证固定内容与安装树摘要；两种模式均须验证实际工具身份。
+固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22.1.6）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库。依赖仓库制作时验证官方 Git 对象和检出树，主仓库构建时验证固定内容、安装树摘要及实际工具身份。
 
 common 使用官方 `android16-6.12-2026-09_r11`（Linux 6.12.92 / KMI generation 6），仅构建和交付 4 KiB 页面版本。
 
@@ -72,7 +54,7 @@ Binder 仅使用内置 Rust 实现及其 Binderfs，关闭 C Binder；`module_bl
 
 实际模块闭包与全量参考快照分开检查：目标依赖的符号、CRC、provider、导出类型、namespace 和相关类型不兼容时拒绝发布；参考漂移须保留快照、完成审查并更新摘要。完整门禁见 [AGENTS.md](../AGENTS.md)。
 
-AutoFDO 使用 common 自带的 `gki/aarch64/afdo/kernel.afdo`，校验摘要、Git blob 和 LLVM 可读性，实际 C/Rust 命令必须带 sample-use。固定 `-sample-profile-even-flow-distribution=false` 使用 Profi 官方单路径增广，规避均匀分流 DAG 搜索的异常耗时；保留最小费用流与 MIR profile loader。该选项可能改变推断权重和布局，且 profile 来自 Pixel 工作负载，不宣称小米实测性能收益。
+AutoFDO 使用 common 自带的 `gki/aarch64/afdo/kernel.afdo`，校验摘要、Git blob 和 LLVM 可读性，实际 C/Rust 命令必须带 sample-use。固定 `-sample-profile-even-flow-distribution=false` 使用 Profi 官方单路径增广，规避均匀分流 DAG 搜索的异常耗时；保留最小费用流与 MIR profile loader。profile 来自 Pixel 工作负载，该参数影响权重推断和代码布局。
 
 KernelSU 内嵌的 preinit runner 保持官方静态 nolibc 用户态参数，不使用内核 AutoFDO/ExtTSP；独立检查实际命令、arm64 ELF 与 Image 嵌入符号。
 
@@ -80,7 +62,7 @@ C/Rust 启用 ExtTSP，并以 `ext-tsp-apply-without-profile=false` 限于有 pr
 
 增量构建树位于 `work/cache/kernel/`；IPSet/libmnl 使用 `work/cache/userspace/ipset-sm8850/`、SM8850 ISA、Oryon-1 与正常用户态 SIMD。配置缓存绑定源码、NDK、API、路径及参数，变化时仅重建受影响缓存；交付校验 ELF、Android linker、依赖、版本和模块 ZIP。
 
-内核与 NDK 共用 `work/cache/ccache/`，压缩开启、上限 5 GiB，NDK 身份包含完整工具树摘要。复用源码、审计仓库和下载缓存，不运行 clean/mrproper 或放宽依赖校验；路径变化导致的失效由必要构建处理，不改写旧编译命令。
+内核与 NDK 共用 `work/cache/ccache/`，压缩开启、上限 5 GiB，NDK 身份包含完整工具树摘要。增量构建保留源码、安装树和下载缓存，输入或路径变化由构建系统处理。
 
 预编译检查本次核心 C/Rust/helper 对象；完整 Image/modules 构建后检查所有活动编译命令、LLVM 属性和发布闭包。
 
@@ -101,4 +83,4 @@ AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/l
 
 Manager 使用 `.env` 固定的官方 main CI。`tools/ksu_manager.py` 校验源码/UAPI、归档与 APK 摘要、证书、包名版本和 arm64 组件，构建后核对实际内核接受的签名。优先复用 `work/cache/ksu-manager/` 或已有匹配 APK，缺失才下载固定 artifact；官方 artifact 过期不影响已保存 APK 的摘要验证。无可用副本时在编译前失败，须恢复同 SHA 官方 APK 或审查后更新 pin，不追随 latest、不本地编译替代。
 
-构建只接受干净项目提交；成功后为 `awaiting-device`，不能继承旧 Image 的验收状态。产物、审计与缓存的保留和清理按 [项目目录规则](../AGENTS.md#4-脚本职责) 执行。
+构建只接受干净项目提交，成功后状态为 `awaiting-device`。产物、审计与缓存的保留和清理按 [项目目录规则](../AGENTS.md#4-脚本职责) 执行。

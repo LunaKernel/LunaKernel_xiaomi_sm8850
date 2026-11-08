@@ -8,14 +8,13 @@ export PYTHONDONTWRITEBYTECODE=1
 
 git diff --check
 git show --format= --check HEAD
-for script in init.sh patch.sh patch_external.sh build.sh tools/backport_audit.sh \
+for script in init.sh patch.sh patch_external.sh build.sh \
     tools/backport_manifest.sh tools/independent_backports.sh tools/ci/*.sh; do
     bash -n "${script}"
 done
 python3 - <<'PY'
 from pathlib import Path
-for path in (*Path('tools/ci').glob('*.py'), Path('tools/release_artifacts.py'),
-             Path('tools/extract_xiaomi17_android17_stock_common_kmi.py')):
+for path in (*Path('tools').glob('*.py'), *Path('tools/ci').glob('*.py')):
     compile(path.read_text(), str(path), 'exec')
 PY
 python3 -m unittest discover -s tools/ci -p 'test_*.py'

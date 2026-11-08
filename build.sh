@@ -771,186 +771,42 @@ verify_bbg_source_state() {
     log_success "Baseband Guard ${BBG_COMMIT:0:12} 保护边界、凭据标记与 overlay 状态检查通过"
 }
 
-verify_aosp_backport_source() {
-    local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
-    local actual_paths patch_file patch_id
-    if backport_bundle_enabled; then
-        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
-        return 0
-    fi
-    env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
-    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常: ${actual_paths}"
-    patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        show --format= "${commit}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
-    rm -f "${patch_file}"
-}
-
-verify_aosp_backport_applied() {
+verify_official_backport_applied() {
     local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
     local patch_file
-    verify_aosp_backport_source "${label}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+    verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
     patch_file="$(mktemp)"
-    if backport_bundle_enabled; then
-        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
-    else
-        env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-            show --format= "${commit}" > "${patch_file}"
-    fi
-    git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
-    rm -f "${patch_file}"
-}
-
-verify_linux_stable_source() {
-    local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
-    local actual_paths patch_file patch_id
-    if backport_bundle_enabled; then
-        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
-        return 0
-    fi
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        merge-base --is-ancestor "${commit}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
-        die "${label} 不属于固定 Linux 6.12.y 审计快照"
-    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常: ${actual_paths}"
-    patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    rm -f "${patch_file}"
-    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
-}
-
-verify_linux_stable_source_exact() {
-    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
-    local expected_paths="$5" upstream_commit="$6"
-    local actual_date commit_message upstream_patch_id upstream_paths
-
-    if backport_bundle_enabled; then
-        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
-        return 0
-    fi
-    [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 固定审计终点"
-    verify_linux_stable_source "${label}" "${commit}" "${expected_patch_id}" \
-        "${expected_paths}"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        merge-base --is-ancestor "${commit}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
-        die "${label} 不属于固定 Linux 6.12.y 审计快照"
-    actual_date="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        -c log.mailmap=false show -s --format=%cs "${commit}")"
-    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
-    commit_message="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        -c log.mailmap=false show -s --format=%B "${commit}")"
-    grep -Fx "[ Upstream commit ${upstream_commit} ]" <<<"${commit_message}" >/dev/null || \
-        die "${label} 未绑定固定 Linux mainline 上游提交"
-    [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 固定审计终点"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        cat-file -e "${upstream_commit}^{commit}" 2>/dev/null || \
-        die "${label} Linux mainline 上游对象缺失"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        merge-base --is-ancestor "${upstream_commit}" "${LINUX_MAINLINE_AUDIT_COMMIT}" || \
-        die "${label} 上游提交不属于固定 Linux mainline 快照"
-    upstream_paths="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${upstream_commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${upstream_paths}" = "${expected_paths}" ] || \
-        die "${label} Linux mainline 上游触及非预期路径: ${upstream_paths}"
-    upstream_patch_id="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        -c log.mailmap=false show --format= "${upstream_commit}" | \
-        git patch-id --stable | awk '{ print $1 }')"
-    [ "${upstream_patch_id}" = "${expected_patch_id}" ] || \
-        die "${label} Linux mainline 上游 patch-id 不匹配"
-}
-
-verify_linux_stable_backport_applied() {
-    local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
-    local patch_file
-    verify_linux_stable_source "${label}" "${commit}" "${expected_patch_id}" "${expected_paths}"
-    patch_file="$(mktemp)"
-    if backport_bundle_enabled; then
-        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
-    else
-        env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-            -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
-    fi
-    git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
-    rm -f "${patch_file}"
-}
-
-verify_linux_mainline_backport_applied() {
-    local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
-    local expected_paths="$5" actual_date actual_paths patch_file patch_id
-
-    if backport_bundle_enabled; then
-        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
-        patch_file="$(mktemp)"
-        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
-        git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
-        rm -f -- "${patch_file}"
-        return 0
-    fi
-    [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 固定审计终点"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        merge-base --is-ancestor "${commit}" "${LINUX_MAINLINE_AUDIT_COMMIT}" || \
-        die "${label}不属于固定 Linux mainline 审计快照"
-    actual_date="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        -c log.mailmap=false show -s --format=%cs "${commit}")"
-    [ "${actual_date}" = "${commit_date}" ] || die "${label}提交日期不匹配: ${actual_date}"
-    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常: ${actual_paths}"
-    patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
-        -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
-    patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
-    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label}patch-id 不匹配"
+    copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
     git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
     rm -f "${patch_file}"
 }
 
 verify_first_batch_linux_backports() {
     if [ "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX}" = "1" ]; then
-        verify_linux_stable_backport_applied "F2FS ACL 条目边界修复" \
+        verify_official_backport_applied "F2FS ACL 条目边界修复" \
             "${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT}" \
             "${F2FS_ACL_ENTRY_BOUNDS_PATCH_ID}" \
             "fs/f2fs/acl.c"
     fi
     if [ "${ENABLE_F2FS_LISTXATTR_BOUNDS_FIX}" = "1" ]; then
-        verify_linux_stable_backport_applied "F2FS listxattr 条目边界修复" \
+        verify_official_backport_applied "F2FS listxattr 条目边界修复" \
             "${F2FS_LISTXATTR_BOUNDS_STABLE_COMMIT}" \
             "${F2FS_LISTXATTR_BOUNDS_PATCH_ID}" \
             "fs/f2fs/xattr.c"
     fi
     if [ "${ENABLE_BLKCG_RSTAT_RELEASE_FIX}" = "1" ]; then
-        verify_linux_stable_backport_applied "blk-cgroup rstat 释放竞态修复" \
+        verify_official_backport_applied "blk-cgroup rstat 释放竞态修复" \
             "${BLKCG_RSTAT_RELEASE_STABLE_COMMIT}" \
             "${BLKCG_RSTAT_RELEASE_PATCH_ID}" \
             "block/blk-cgroup.c"
     fi
     if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX}" = "1" ]; then
-        verify_linux_stable_source "F2FS 前台 GC 写回死锁修复" \
-            "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" \
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" \
             "${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID}" \
             "fs/f2fs/data.c fs/f2fs/f2fs.h fs/f2fs/segment.c"
-        verify_linux_stable_source "F2FS GC_MERGE 写回死锁补充修复" \
-            "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" \
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" \
             "${F2FS_GC_MERGE_DEADLOCK_PATCH_ID}" \
             "fs/f2fs/segment.c"
-        if ! backport_bundle_enabled; then
-            [ "$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" rev-parse \
-                "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}^")" = \
-                "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" ] || \
-                die "F2FS GC 死锁组合提交顺序异常"
-        fi
         verify_project_patch "F2FS GC 死锁 AOSP r21 适配补丁" \
             "${F2FS_FOREGROUND_GC_PATCH_FILE}" \
             "${F2FS_FOREGROUND_GC_PATCH_SHA256}" \
@@ -964,20 +820,19 @@ verify_first_batch_linux_backports() {
 
 verify_second_batch_backports() {
     if [ "${ENABLE_TIMER_BASE_FAST_PATH}" = "1" ]; then
-        verify_linux_mainline_backport_applied "timer base 指针获取快路径优化" \
+        verify_official_backport_applied "timer base 指针获取快路径优化" \
             "${TIMER_BASE_FAST_PATH_COMMIT}" \
-            "${TIMER_BASE_FAST_PATH_COMMIT_DATE}" \
             "${TIMER_BASE_FAST_PATH_PATCH_ID}" \
             "kernel/time/timer.c"
     fi
     if [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" = "1" ]; then
-        verify_aosp_backport_applied "F2FS DIO overwrite 映射检查优化" \
+        verify_official_backport_applied "F2FS DIO overwrite 映射检查优化" \
             "${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT}" \
             "${F2FS_DIO_OVERWRITE_FAST_PATH_PATCH_ID}" \
             "fs/f2fs/data.c"
     fi
     if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" = "1" ]; then
-        verify_aosp_backport_applied "blk-wbt 非节流写完成快路径优化" \
+        verify_official_backport_applied "blk-wbt 非节流写完成快路径优化" \
             "${BLK_WBT_DONE_FAST_PATH_COMMIT}" \
             "${BLK_WBT_DONE_FAST_PATH_PATCH_ID}" \
             "block/blk-wbt.c"
@@ -987,7 +842,7 @@ verify_second_batch_backports() {
 
 verify_memcg_rstat_fast_path() {
     [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ] || return
-    verify_aosp_backport_applied "memcg rstat 快路径优化" \
+    verify_official_backport_applied "memcg rstat 快路径优化" \
         "${MEMCG_RSTAT_FAST_PATH_COMMIT}" \
         "${MEMCG_RSTAT_FAST_PATH_PATCH_ID}" \
         "mm/memcontrol.c"
@@ -999,7 +854,7 @@ verify_memcg_rstat_fast_path() {
 
 verify_tcp_recv_mstamp_fast_path() {
     [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ] || return
-    verify_aosp_backport_applied "TCP recv 时间戳快路径优化" \
+    verify_official_backport_applied "TCP recv 时间戳快路径优化" \
         "${TCP_RECV_MSTAMP_FAST_PATH_COMMIT}" \
         "${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID}" \
         "net/ipv4/tcp.c net/ipv4/tcp_input.c"
@@ -1011,7 +866,7 @@ verify_tcp_recv_mstamp_fast_path() {
 
 verify_ipv6_mld_uaf_fix() {
     [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ] || return
-    verify_aosp_backport_applied "IPv6 MLD 查询释放后访问修复" \
+    verify_official_backport_applied "IPv6 MLD 查询释放后访问修复" \
         "${IPV6_MLD_UAF_FIX_COMMIT}" \
         "${IPV6_MLD_UAF_FIX_PATCH_ID}" \
         "net/ipv6/mcast.c"
@@ -1022,12 +877,9 @@ verify_ipv6_mld_uaf_fix() {
 
 verify_ipv6_mld_delayed_work_uaf_fix() {
     [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX}" = "1" ] || return
-    verify_linux_stable_source_exact "IPv6 MLD delayed-work 生命周期修复" \
-        "${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT}" \
-        "${IPV6_MLD_DELAYED_WORK_COMMIT_DATE}" \
+    verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT}" \
         "${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID}" \
-        "include/net/addrconf.h net/ipv6/mcast.c" \
-        "${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}"
+        "include/net/addrconf.h net/ipv6/mcast.c"
     verify_project_patch "IPv6 MLD delayed-work AOSP r21 适配补丁" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_FILE}" \
         "${IPV6_MLD_DELAYED_WORK_PATCH_SHA256}" \
@@ -1826,11 +1678,6 @@ BBG_KSU_CREDENTIAL_PATCH_SHA256="${BBG_KSU_CREDENTIAL_PATCH_SHA256:-c2a3a8cb62f7
 BBG_KSU_CREDENTIAL_PATCH_ID="${BBG_KSU_CREDENTIAL_PATCH_ID:-2eec8ddd3b3257dd38e7ed342eb83a17191f972b}"
 BBG_TRACKED_DIFF_SHA256="${BBG_TRACKED_DIFF_SHA256:-}"
 ENABLE_STAGE4_FS="${ENABLE_STAGE4_FS:-0}"
-AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
-LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
-LINUX_STABLE_AUDIT_COMMIT="${LINUX_STABLE_AUDIT_COMMIT:-}"
-LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
-LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
 ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX="${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}"
 F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT="${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-aba4f94ac1832c7299c33e1b4fe5f87eef6dc8f1}"
 F2FS_ACL_ENTRY_BOUNDS_PATCH_ID="${F2FS_ACL_ENTRY_BOUNDS_PATCH_ID:-3021795cf81293828302c01bb7d52bb4d52a7259}"
@@ -1894,9 +1741,7 @@ XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
 BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
-if backport_bundle_enabled; then
-    verify_backport_bundle "${HOST_WORKSPACE_DIR}"
-fi
+verify_backport_bundle "${HOST_WORKSPACE_DIR}"
 verify_repo_identity "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_COMMIT}"
 verify_repo_identity "Android 16 GKI common 九月 KMI6" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
 [ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "${COMMON_VERSION:?缺少 COMMON_VERSION}" ] || \

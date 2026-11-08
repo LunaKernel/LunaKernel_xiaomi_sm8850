@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""固定 CI 依赖的制作与内容校验；来源证明只在制作入口执行。"""
+"""固定 CI 依赖的 v1 消费协议与内容校验。"""
 import argparse
-import gzip
 import hashlib
 import json
 import os
@@ -88,6 +87,7 @@ def manifest_files(root):
 
 
 def backport_inputs(root):
+    # v1 内容身份包含来源目录和历史起点 pin；消费端也必须保留这些字段。
     pins = {key: value for key, value in os.environ.items()
             if key.removeprefix('ENABLE_').startswith(BACKPORT_FAMILIES)}
     for key in ('COMMON_REPO', 'COMMON_COMMIT', 'ENABLE_BACKPORT_AUDIT',
@@ -263,106 +263,10 @@ def prepare_toolchain(root):
     return destination
 
 
-def run_git(repo, *args):
-    environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
-                       GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.hooksPath',
-                       GIT_CONFIG_VALUE_0=os.devnull, GIT_NO_LAZY_FETCH='1',
-                       GIT_NO_REPLACE_OBJECTS='1', GIT_PAGER='cat')
-    return subprocess.run(['git', '-c', 'log.mailmap=false', '-C', str(repo), *args], check=True,
-                          capture_output=True, timeout=60, env=environment).stdout
-
-
-def producer_record(root):
-    files = ('init.sh', 'patch.sh', 'tools/backport_manifest.sh', 'tools/independent_backports.sh',
-             'tools/ci_dependencies.py', 'tools/tree_sha256.py')
-    return {'project_commit': run_git(root, 'rev-parse', 'HEAD').decode().strip(),
-            'files': {name: sha256(root / name) for name in files}}
-
-
-def export_backports(root, destination):
-    require(not destination.exists(), '拒绝覆盖已有回移包目录')
-    audit_env = dict(os.environ, BACKPORT_SOURCE_AUDIT='1', PYTHONDONTWRITEBYTECODE='1')
-    subprocess.run(['bash', 'patch.sh', '--audit-sources'], cwd=root, env=audit_env, check=True, timeout=900)
-    destination.mkdir(parents=True)
-    (destination / 'patches').mkdir()
-    sources = {
-        'aosp': ('AOSP_BACKPORT_AUDIT_SOURCE_DIR', 'COMMON_REPO'),
-        'stable': ('LINUX_STABLE_AUDIT_SOURCE_DIR', 'LINUX_STABLE_AUDIT_REPO'),
-        'mainline': ('LINUX_MAINLINE_AUDIT_SOURCE_DIR', 'LINUX_MAINLINE_AUDIT_REPO'),
-        'kbuild': ('KBUILD_AUDIT_SOURCE_DIR', 'KBUILD_AUDIT_REPO'),
-    }
-    records = {}
-    for commit, source in needed_commits(root).items():
-        directory_key, url_key = sources[source]
-        repo = local_path(root, os.environ[directory_key])
-        patch = destination / 'patches' / (commit + '.patch')
-        patch.write_bytes(run_git(repo, 'show', '--format=', commit))
-        records[commit] = {
-            'source': source, 'url': os.environ[url_key], 'sha256': sha256(patch),
-            'parents': run_git(repo, 'rev-list', '--parents', '-n', '1', commit).decode().split()[1:],
-            'date': run_git(repo, 'show', '-s', '--format=%cs', commit).decode().strip(),
-            'subject': run_git(repo, 'show', '-s', '--format=%s', commit).decode().strip(),
-            'message': run_git(repo, 'show', '-s', '--format=%B', commit).decode(),
-            'paths': run_git(repo, 'diff-tree', '--no-commit-id', '--name-only', '-r', commit).decode().splitlines(),
-        }
-    shutil.copyfile(root / 'LICENSE', destination / 'LICENSE')
-    data = {'format': FORMAT, 'kind': 'backports', 'inputs': backport_inputs(root), 'commits': records,
-            'producer': producer_record(root),
-            'files': {path.relative_to(destination).as_posix(): sha256(path)
-                      for path in sorted(destination.rglob('*')) if path.is_file()}}
-    (destination / 'manifest.json').write_bytes(json_bytes(data))
-    print('BACKPORT_BUNDLE_MANIFEST_SHA256=' + sha256(destination / 'manifest.json'))
-
-
-def write_archive(source, output, *, zstd=False):
-    require(not output.exists(), '拒绝覆盖已有依赖归档')
-    with output.open('xb') as raw:
-        process = subprocess.Popen(['zstd', '-q', '-T2', '-3', '-c'], stdin=subprocess.PIPE, stdout=raw) if zstd else None
-        zipped = process.stdin if zstd else gzip.GzipFile(fileobj=raw, mode='wb', filename='', mtime=0, compresslevel=6)
-        try:
-            with tarfile.open(fileobj=zipped, mode='w|') as bundle:
-                for path in sorted(source.rglob('*')):
-                    bundle.inodes.clear()
-                    member = bundle.gettarinfo(path, path.relative_to(source).as_posix())
-                    member.uid = member.gid = member.mtime = 0
-                    member.uname = member.gname = ''
-                    if member.isfile():
-                        with path.open('rb') as stream:
-                            bundle.addfile(member, stream)
-                    else:
-                        bundle.addfile(member)
-        finally:
-            zipped.close()
-            if process is not None:
-                require(process.wait(timeout=60) == 0, '固定依赖压缩失败')
-    return sha256(output)
-
-
-def export_toolchain(root, output):
-    require(not output.exists(), '拒绝覆盖已有工具链归档')
-    subprocess.run(['bash', 'init.sh', '--prepare-dependencies'], cwd=root, check=True,
-                   env=dict(os.environ, BACKPORT_SOURCE_AUDIT='1', PYTHONDONTWRITEBYTECODE='1'), timeout=1800)
-    payload = toolchain_path(root)
-    require(tree_sha256(payload) == digest_pin('CI_TOOLCHAIN_TREE_SHA256'), '制作前工具链安装树不匹配')
-    staging = Path(tempfile.mkdtemp(prefix='toolchain-package-', dir=output.parent))
-    try:
-        provenance = {'format': FORMAT, 'kind': 'toolchain', 'producer': producer_record(root),
-                      'inputs': {key: os.environ[key] for key in TOOLCHAIN_KEYS}}
-        (staging / 'provenance.json').write_bytes(json_bytes(provenance))
-        # 制作目录与安装树同文件系统；硬链接仅减少本次打包副本，不改变内容摘要。
-        shutil.copytree(payload, staging / 'payload', symlinks=True, copy_function=os.link)
-        print('CI_TOOLCHAIN_BUNDLE_SHA256=' + write_archive(staging, output, zstd=True))
-    finally:
-        shutil.rmtree(staging)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('backports-check', 'prepare-backports', 'prepare-toolchain',
-                                            'export-backports', 'pack-backports', 'export-toolchain'))
+    parser.add_argument('command', choices=('backports-check', 'prepare-backports', 'prepare-toolchain'))
     parser.add_argument('--workspace', required=True, type=Path)
-    parser.add_argument('--output', type=Path)
-    parser.add_argument('--input', type=Path)
     args = parser.parse_args()
     root = args.workspace.resolve()
     if args.command == 'backports-check':
@@ -371,18 +275,6 @@ def main():
         print(prepare_backports(root))
     elif args.command == 'prepare-toolchain':
         print(prepare_toolchain(root))
-    else:
-        require(args.output is not None, '制作依赖需要 --output')
-        output = args.output.resolve()
-        if args.command == 'export-backports':
-            export_backports(root, output)
-        elif args.command == 'pack-backports':
-            directory = args.input.resolve() if args.input else local_path(
-                root, 'work/cache/dependencies/backports-' + digest_pin('BACKPORT_BUNDLE_MANIFEST_SHA256'))
-            checked_backports(root, directory)
-            print('BACKPORT_BUNDLE_SHA256=' + write_archive(directory, output))
-        else:
-            export_toolchain(root, output)
 
 
 if __name__ == '__main__':

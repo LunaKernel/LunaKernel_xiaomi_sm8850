@@ -43,16 +43,6 @@ class BackportBatchTests(unittest.TestCase):
             (self.source / f"{name}.txt").write_text(f"{name} after\n")
             self.commit(name)
             self.commits[name] = self.git(self.source, "rev-parse", "HEAD")
-        audits = self.root / "audits"
-        audits.mkdir()
-        for name in ("aosp", "stable", "mainline"):
-            repo = audits / (name + ".git")
-            if name == "mainline":
-                self.git(self.root, "clone", "--quiet", "--bare", "--no-hardlinks", str(self.source), str(repo))
-                self.git(repo, "remote", "set-url", "origin", f"https://example.invalid/{name}")
-            else:
-                self.git(self.root, "init", "--quiet", "--bare", str(repo))
-                self.git(repo, "remote", "add", "origin", f"https://example.invalid/{name}")
         self.target = self.root / "target"
         self.git(self.root, "clone", "--quiet", "--no-hardlinks", str(self.source), str(self.target))
         self.git(self.target, "checkout", "--quiet", self.base)
@@ -102,6 +92,7 @@ class BackportBatchTests(unittest.TestCase):
         self.env["MOCK_GIT_TRACE"] = str(self.trace)
         # 脚本自行建立固定 Git 隔离环境；测试不能携带额外覆盖项。
         self.env.pop("GIT_TERMINAL_PROMPT")
+        self.enable_bundle()
 
     def git(self, repo, *arguments, input=None):
         result = subprocess.run([GIT, "-C", str(repo), *arguments], env=self.env,
@@ -154,8 +145,6 @@ class BackportBatchTests(unittest.TestCase):
         self.write_pins()
 
     def test_bundle_combined_verification_reuses_helper_without_sources(self):
-        self.enable_bundle()
-        shutil.rmtree(self.root / "audits")
         self.assert_success(self.run_tool("apply", self.target))
         original = self.target_diff()
         self.bundle_trace.write_text("")
@@ -173,7 +162,6 @@ class BackportBatchTests(unittest.TestCase):
         self.assertEqual(self.target_diff(), original)
 
     def test_bundle_wrong_raw_patch_id_is_rejected_before_mutation(self):
-        self.enable_bundle()
         commits = list(self.commits.values())
         shutil.copyfile(self.bundle / "patches" / (commits[0] + ".patch"),
                         self.bundle / "patches" / (commits[1] + ".patch"))
@@ -182,18 +170,18 @@ class BackportBatchTests(unittest.TestCase):
         self.assertIn("patch-id 不匹配", result.stderr)
         self.assertEqual(self.target_diff(), "")
 
-    def test_source_audit_flag_forces_original_source_checks(self):
-        self.enable_bundle()
-        self.env["BACKPORT_SOURCE_AUDIT"] = "1"
-        self.git(self.root / "audits/mainline.git", "remote", "set-url", "origin", "https://example.invalid/other")
+    def test_environment_cannot_bypass_bundle_verification(self):
+        self.env.update(BACKPORT_SOURCE_AUDIT="1", BACKPORT_MANIFEST_LIBRARY="1",
+                        BACKPORT_BUNDLE_LIBRARY="1",
+                        VERIFIED_BACKPORT_BUNDLE_WORKSPACE=str(self.root),
+                        VERIFIED_BACKPORT_BUNDLE_DIR=str(self.bundle))
+        (self.root / "tools/ci_dependencies.py").write_text("raise SystemExit(1)\n")
         result = self.run_tool("apply", self.target)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("remote 不匹配", result.stderr)
-        self.assertFalse(self.bundle_trace.exists())
+        self.assertIn("固定回移补丁包校验失败", result.stderr)
         self.assertEqual(self.target_diff(), "")
 
     def test_bundle_adapt_still_checks_project_patch_sha(self):
-        self.enable_bundle()
         manifest = self.manifests[0]
         header, row = manifest.read_text().splitlines()
         fields = row.split("\t")
@@ -211,7 +199,7 @@ class BackportBatchTests(unittest.TestCase):
 
     def run_legacy_build_checks(self):
         source = (ROOT / "build.sh").read_text()
-        functions = source[source.index("verify_aosp_backport_source() {"):source.index("verify_first_batch_linux_backports() {")]
+        functions = source[source.index("verify_official_backport_applied() {"):source.index("verify_first_batch_linux_backports() {")]
         commit = self.commits["alpha"]
         fields = self.manifests[0].read_text().splitlines()[1].split("\t")
         script = "\n".join((
@@ -221,14 +209,10 @@ class BackportBatchTests(unittest.TestCase):
             "BACKPORT_BUNDLE_MANIFEST_SHA256=" + "a" * 64,
             'BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"',
             functions,
-            *(f"{function} fixture {commit} {fields[7]} alpha.txt" for function in (
-                "verify_aosp_backport_applied", "verify_linux_stable_backport_applied")),
-            f"verify_linux_mainline_backport_applied fixture {commit} {fields[6]} {fields[7]} alpha.txt"))
+            f"verify_official_backport_applied fixture {commit} {fields[7]} alpha.txt"))
         return subprocess.run([BASH, "-c", script], env=self.env, capture_output=True, text=True, timeout=20)
 
     def test_legacy_build_bundle_keeps_reverse_checks_without_audits(self):
-        self.enable_bundle()
-        shutil.rmtree(self.root / "audits")
         self.assert_success(self.run_tool("apply", self.target))
         self.bundle_trace.write_text("")
         self.assert_success(self.run_legacy_build_checks())
@@ -236,18 +220,55 @@ class BackportBatchTests(unittest.TestCase):
         self.git(self.target, "restore", "--", "alpha.txt")
         self.assertNotEqual(self.run_legacy_build_checks().returncode, 0)
 
-    def test_audit_entry_requires_no_common_and_never_uses_bundle(self):
-        self.enable_bundle()
+    def test_timer_and_dio_build_checks_follow_independent_switches(self):
+        source = (ROOT / "build.sh").read_text()
+        function = source[source.index("verify_second_batch_backports() {"):
+                          source.index("verify_memcg_rstat_fast_path() {")]
+        script = r'''
+set -euo pipefail
+log_success() { :; }
+verify_official_backport_applied() { printf '%s\n' "$2"; }
+ENABLE_TIMER_BASE_FAST_PATH="$1"
+ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH="$2"
+ENABLE_BLK_WBT_DONE_FAST_PATH=0
+TIMER_BASE_FAST_PATH_COMMIT=timer TIMER_BASE_FAST_PATH_PATCH_ID=timer-id
+F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT=dio F2FS_DIO_OVERWRITE_FAST_PATH_PATCH_ID=dio-id
+''' + function + '\nverify_second_batch_backports\n'
+        for timer, dio, expected in (("1", "0", "timer\n"), ("0", "1", "dio\n")):
+            with self.subTest(timer=timer, dio=dio):
+                result = subprocess.run([BASH, "-c", script, "test", timer, dio],
+                                        env=self.env, capture_output=True, text=True, timeout=10)
+                self.assert_success(result)
+                self.assertEqual(result.stdout, expected)
+
+    def test_manifest_library_preserves_caller_state(self):
+        script = r'''
+set -euo pipefail
+WORKSPACE_DIR=caller MANIFEST=caller-manifest
+VERIFIED_BACKPORT_BUNDLE_WORKSPACE=caller-bundle
+before="$(set +o)"
+BACKPORT_MANIFEST_LIBRARY=1 . "$1"
+[ "$WORKSPACE_DIR" = caller ]
+[ "$MANIFEST" = caller-manifest ]
+[ "$VERIFIED_BACKPORT_BUNDLE_WORKSPACE" = caller-bundle ]
+[ "$(set +o)" = "$before" ]
+declare -F validate_manifest verify_project_patch manifest_group_sequence >/dev/null
+'''
+        result = subprocess.run([BASH, "-c", script, "test",
+                                 str(self.root / "tools/backport_manifest.sh")],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assert_success(result)
+
+    def test_patch_rejects_producer_entry(self):
         shutil.copyfile(ROOT / "patch.sh", self.root / "patch.sh")
         result = subprocess.run([BASH, str(self.root / "patch.sh"), "--audit-sources"],
                                 env=self.env, capture_output=True, text=True, timeout=20)
-        self.assert_success(result)
-        self.assertIn("未修改 common", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("用法", result.stderr)
         self.assertFalse(self.bundle_trace.exists())
         self.assertEqual(self.target_diff(), "")
 
     def test_bundle_helper_failure_is_rejected_before_mutation(self):
-        self.enable_bundle()
         (self.root / "tools/ci_dependencies.py").write_text("raise SystemExit(1)\n")
         result = self.run_tool("apply", self.target)
         self.assertNotEqual(result.returncode, 0)
@@ -263,11 +284,7 @@ class BackportBatchTests(unittest.TestCase):
         self.assert_success(self.run_tool("verify-base-diff", self.target, hashlib.sha256(b"").hexdigest()))
         self.assertEqual(self.target_diff(), original)
         calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
-        for commit in self.commits.values():
-            # patch-id 校验读取一次，实际补丁导出一次；不在每轮 index 操作重做。
-            self.assertEqual(sum(call[-3:] == ["show", "--format=", commit] for call in calls), 2)
-            self.assertEqual(sum("--is-ancestor" in call and
-                                 call[call.index("--is-ancestor") + 1] == commit for call in calls), 1)
+        self.assertFalse(any("--is-ancestor" in call or "show" in call for call in calls))
         index_calls = [call for call in calls if "apply" in call and "--cached" in call]
         self.assertEqual(len(index_calls), 9)  # 当前差异导入一次；两份补丁各四次。
         self.assertEqual(sum("--reverse" in call for call in index_calls), 4)
@@ -304,7 +321,7 @@ class BackportBatchTests(unittest.TestCase):
             with self.subTest(standalone=standalone):
                 result = self.run_tool("apply", self.target, standalone=standalone)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("官方提交 patch-id 不匹配", result.stderr)
+                self.assertIn("固定回移补丁 patch-id 不匹配", result.stderr)
                 self.assertEqual(self.target_diff(), "")
 
     def test_duplicate_commits_and_selected_overlap_are_rejected(self):
@@ -324,11 +341,16 @@ class BackportBatchTests(unittest.TestCase):
                 self.assertIn("重复", result.stderr)
                 self.assertEqual(self.target_diff(), "")
 
-    def test_wrong_origin_is_rejected_before_mutation(self):
-        self.git(self.root / "audits/mainline.git", "remote", "set-url", "origin", "https://example.invalid/other")
+    def test_wrong_raw_patch_paths_are_rejected_before_mutation(self):
+        manifest = self.manifests[-1]
+        header, row = manifest.read_text().splitlines()
+        fields = row.split("\t")
+        fields[8] = "other.txt"
+        manifest.write_text(header + "\n" + "\t".join(fields) + "\n")
+        self.write_pins()
         result = self.run_tool("apply", self.target)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("remote 不匹配", result.stderr)
+        self.assertIn("路径不匹配", result.stderr)
         self.assertEqual(self.target_diff(), "")
 
 

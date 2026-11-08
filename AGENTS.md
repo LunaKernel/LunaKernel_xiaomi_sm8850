@@ -36,7 +36,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 内核直接修复仅授权 `patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节门禁与差异审计；拒绝收益极小、路径无关、来源不清或证据不足的改动。缺少实机性能数据本身不构成否决，但不得把猜测视为优化。已被基线吸收的修复不得重复回移。
 
-Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索引与参数探测缓存链，由独立清单 670、680 固定，来源对象独立置于 `sources/linux_kbuild_audit/`。不得把 next 标为主线/稳定树或接入清单外改动；须证明生成结果、参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁与早期启动严格对齐。
+Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索引与参数探测缓存链，由独立清单 670、680 固定，来源对象由依赖仓库审计。须证明生成结果、参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁与早期启动严格对齐。
 
 九月 selected 集合有序且不可拆分（19 个逻辑项、23 个应用提交）；总回移 66 个逻辑项，含 36 个独立项和宿主构建回移。来源、吸收/保留理由和质量证据以 `patches/backports/` 固定 TSV 为准。已吸收层、无用上下文适配和无目标代码收益项不得重复保留，未编译路径不得计作有效功能。
 
@@ -74,18 +74,22 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 ```
 
 - `.env`：唯一受版本控制的 pin、构建身份和验证快照来源。
-- `init.sh`：准备并校验固定源码、工具、NDK 与配套官方 CI Manager APK。无依赖包 pin 时沿用官方工具链与构建必需只读来源准备；固定依赖模式按摘要准备回移内容包和 AOSP 工具链安装树，不准备来源审计仓库。`--prepare-dependencies` 强制准备制作所需官方来源和工具，不直接导出；`--audit-history` 额外准备候选调查历史、历史 ABI 与 stock 清单重建资料。不应用补丁、不编译。
-- `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。固定依赖模式校验内容包、patch-id、路径、单项应用/撤销和有序重放；`--audit-sources` 执行完整来源审计，供依赖制作与人工调查使用。
-- `patch_external.sh`：仅接入已准备的外部组件；不得下载。
-- `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计；仅在发布闭包齐全且无未确认漂移后打包，不得准备源码。
-- `tools/ci/`：CI 宿主准备、标准流程调度与交付通知；不得绕过上述脚本和门禁。`.github/workflows/check.yml` 在 main 的 push/PR 执行轻量检查，`build.yml` 仅手动在 main 执行完整构建，分为 build、notify 两个 job，不创建 Release。
-- `ci/inputs/os4.0.6.0/system_dlkm.img`：用户批准随仓库保存的唯一分区镜像，作为本地与 CI 共用的固定运行输入；大小和摘要仍由 `.env` 校验。其他 ROM、分区镜像及设备证据不得提交。
+- `init.sh`：准备并校验固定源码、依赖包、NDK、stock 工具与官方 CI Manager APK。
+- `patch.sh`：应用项目维护的官方内核及宿主构建回移，校验内容包、patch-id、路径、幂等、单项应用/撤销和有序重放。
+- `patch_external.sh`：接入已准备的外部组件。
+- `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计，闭包齐全且漂移审查完成后打包。
+- `tools/ci/`：宿主准备、标准流程调度与交付通知。`check.yml` 在 main 的 push/PR 执行轻量检查；`build.yml` 手动执行完整构建，分为 build、notify 两个 job。
+- `ci/inputs/os4.0.6.0/system_dlkm.img`：本地与 CI 共用的固定模块闭包输入，大小和摘要由 `.env` 校验。其他分区镜像与设备证据放在 `evidence/`。
 
-`INIT_FETCH_JOBS` 是 `init.sh` 的运行时并发参数，本地默认 1、CI 使用 2；源码、工具和回移依赖共用槽位，任务完成后立即补位，不属于 `.env` pin。CI 保留内容校验的 ccache、固定下载、官方 Manager 与干净 common 缓存；common key 只绑定内容身份与缓存格式，不绑定 init 调度。依赖包五项 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）全未配置时采用 source 模式；任一已配置则须完整有效，缺项必须失败，不得静默降级。真实包发布并取得相应远端授权前保留 source 模式，不得填占位 URL 或假摘要。
+`INIT_FETCH_JOBS` 控制初始化并发，本地默认 1、CI 为 2；独立任务共用槽位，完成后立即补位。
 
-fixed 模式仅按平台、内容身份和格式精确缓存 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}` 与 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，不恢复、统计或保存四个审计来源目录及 Clang/Rust/build-tools 三个来源目录；source 模式沿用这些来源缓存。归档共存 `work/cache/downloads/ci-dependencies/`，由固定下载缓存覆盖。依赖缓存恢复后仍须校验内容和摘要，init 成功后、patch 前才保存；common 有已跟踪差异、未跟踪或忽略文件时不保存。不得缓存已打补丁的源码工作树，或通过伪造时间、宽松文件状态匹配、关闭编译器身份校验换取命中。完整 CI 的宿主、缓存、产物和通知流程见 `docs/BUILDING.md`。
+主仓库仅消费 fixed 依赖。五项包 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）必须完整有效。归档、manifest、实际内容和工具链安装树分别按固定摘要验证。现有 v1 包绑定的来源输入字段保持兼容。
 
-固定依赖优先通过 `bash tools/prepare_ci_dependencies.sh` 制作：先调用 helper `export-toolchain`，内部强制 `init.sh --prepare-dependencies` 以准备并校验官方来源和工具，再调用 `export-backports`、`pack-backports --input`。底层入口为 `tools/ci_dependencies.py export-backports/pack-backports/export-toolchain --workspace ROOT --output PATH`。结果写入新的 `work/ci-dependencies/prepared.*/`，保留回移/工具链归档、回移 manifest 与来源文件及只含真实摘要、不含 URL 的 `pins.env`；不发布、不修改主 `.env`，不得以不完整的制作 pin 配置启用日常 fixed 模式。制作阶段必须证明官方 Git 来源、固定提交及关系，保留来源、许可证和逐文件摘要；回移导出必须通过 `patch.sh --audit-sources`。日常 fixed 模式按固定 manifest、归档和安装树摘要校验内容，不重复依赖来源仓库；仍须验证补丁实际应用与重放、工具身份、实际源码树及第 3、5 节全部目标 OTA、ABI/KMI、快照与产物门禁，不得把制作期来源证明当作本次构建通过证据。
+CI 缓存 ccache、固定下载、Manager APK、干净 common、回移内容目录和工具链安装树；key 绑定内容身份与格式。依赖在 init 校验成功后、patch 前保存；common 必须无已跟踪差异、未跟踪或忽略文件，ccache 使用 `compiler_check=content`。目录与完整流程见 `docs/BUILDING.md`。
+
+依赖制作、官方来源审计与候选调查维护于 [LunaKernel/ci-dependencies](https://github.com/LunaKernel/ci-dependencies)。制作以固定主项目提交提供 pins、清单和适配补丁，验证官方 Git 来源与提交关系，记录制作提交、来源、许可证和内容摘要，输出版本化归档。主仓库保留本次源码、补丁应用、工具身份与目标 OTA 构建检查。
+
+维护遵循 KISS：按制作、消费、构建职责放置代码；删除失去用途的分支和重复校验。文档记录操作、约束和已验证事实，避免重复告诫与防御性表述。
 
 固定源码仓库必须保持干净，或其差异能被补丁脚本用允许路径和 reverse-apply 精确证明。`sources/`、`work/`、`evidence/`、`kernel_out/`、日志、转储和测试包不得提交。不得在输出目录手工修改 `.config`、`Module.symvers` 或包内容绕过守卫。
 
@@ -97,7 +101,7 @@ fixed 模式仅按平台、内容身份和格式精确缓存 `work/cache/depende
 
 ## 5. 构建与发布门槛
 
-- `init.sh`、`patch.sh`、`patch_external.sh`、`build.sh`、`tools/backport_audit.sh`、`tools/backport_manifest.sh`、`tools/independent_backports.sh` 和 `tools/ci/*.sh` 必须逐个通过 `bash -n`；`bash tools/ci/check.sh` 统一执行轻量检查。
+- `bash tools/ci/check.sh` 统一执行 Shell/Python 语法检查、单元测试、构建输入检查和 actionlint。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
 - 项目配置、modules.order 及摘要以 `.env` 为准；保留 stock Rust Binder 黑名单和工具探测缓存项，后者 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
@@ -107,7 +111,7 @@ fixed 模式仅按平台、内容身份和格式精确缓存 `work/cache/depende
 - seccomp 内核能力必须启用。KernelSU Manager 或获准 root 进程因官方 `disable_seccomp()` 显示 `Seccomp: 0` 属于预期；普通 Android 应用应为 `2`。
 - 保留 AOSP r21 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。
 - LSM 展开后的 `MAX_LSM_COUNT` 必须与实际启用的 LSM 数量精确一致；当前参考值为 6，BBG 占 1 槽，KernelSU 不得额外注册 LSM。
-- Clang r596125（22.0.2）、Rust 1.97.0-dev（LLVM 22.1.6）与 build-tools 来自固定 AOSP Git subtree；制作期/source 模式校验完整上游 Git tree 与检出内容，日常 fixed 模式校验固定归档、来源记录与安装树，`CI_TOOLCHAIN_TREE_SHA256` 含义不变。bindgen 0.72.1、宿主 bc 的固定 Git blob 与 SHA-256 不变。两种模式均须符合 `.env` pin 并校验实际工具身份；Clang/Rust 的 LLVM 主版本必须一致，启用 `RUST_INLINE_HELPERS`；Rust 独立安装，禁止覆盖 Clang 共享库。
+- Clang r596125（22.0.2）、Rust 1.97.0-dev（LLVM 22.1.6）与 build-tools 来自固定 AOSP Git subtree。依赖仓库制作时验证上游 Git tree、检出内容及 bindgen/bc 的 Git blob 与 SHA-256；主仓库验证归档、来源记录、安装树和实际工具身份。Clang/Rust 的 LLVM 主版本必须一致，启用 `RUST_INLINE_HELPERS`；Rust 独立安装。
 - AutoFDO MUST 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，路径和 SHA-256 由 `.env` 固定；构建前校验 Git blob 身份及固定 LLVM 的读取能力，实际 C/Rust 命令 MUST 包含对应 sample-use 参数。缺失或不匹配必须失败，不得静默退回普通编译；保持 `LTO_NONE`。当前编译策略见 `docs/BUILDING.md`，回移来源与审查见 `patches/backports/`。
 - ExtTSP MUST 显式禁止作用于无 profile 的函数。AutoFDO 的 Profi 固定使用 `-sample-profile-even-flow-distribution=false`，以官方单路径增广规避当前组合中均匀分流 DAG 搜索的异常耗时；LLVM 22 与 LLVM 23 均已复现该路径，保留 sample-use、Profi 最小费用流与 MIR profile loader。该策略可能改变推断权重和代码布局，不得声称性能等价。C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。
@@ -129,11 +133,9 @@ KernelSU 保持 built-in，不得借门禁重构改变交付边界。后续切�
 
 ## 6. 真机验证
 
-当前验收基准为项目 `1d3c30f1945ad2c70bbf084886339649b3017123`，release `6.12.92-android16-luna-g1d3c30f1-4k`。用户于 2026-11-08 确认在 `pudding` / `OS4.0.6.0.XPCCNXM` 完成严格实机验收并通过，状态为 `accepted`；本轮只读身份核实一致。原始身份记录、构建审计及范围见 `docs/VALIDATION.md`。不重复要求该产物验收，不补造功能、性能、功耗或长期测试数据，不把旧版本日志视为当前仍存在的问题。
+当前验收基准为项目 `1d3c30f1945ad2c70bbf084886339649b3017123`，release `6.12.92-android16-luna-g1d3c30f1-4k`。用户于 2026-11-08 确认在 `pudding` / `OS4.0.6.0.XPCCNXM` 完成严格实机验收并通过，状态为 `accepted`。身份、构建审计与范围见 `docs/VALIDATION.md`。
 
-验收仅属于上述二进制与 OTA，MUST NOT 外推到其他设备、OTA 或后续项目提交。原 `.9` OTA 构建审计保持原始含义；新 OTA 静态闭包单独核对，不以实机验收替代全部潜在模块路径的兼容性证明。文档、Manager 交付和仓库整理提交不得改名旧 Image 或冒充新内核已验收。
-
-公开主分支最终提交在发布前仍 MUST 完成同一 OTA 的完整构建、`system_dlkm` 闭包证明和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。目录迁移不改变二进制内容，也不能把旧 Image 改名为新提交产物。
+每个新 Image 的验收绑定项目提交、二进制摘要和 OTA。发布前完成完整构建、目标模块闭包和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。
 
 必须分别验证 KernelSU/SUSFS/BBG、SELinux/LSM 和 IPSet。环境隐藏可使属性显示为 green/locked；验收时必须结合 bootconfig 和测试环境说明，不能把预期隐藏行为误判为内核失败。
 

@@ -14,18 +14,7 @@ log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
 
 parse_init_args() {
-    INIT_AUDIT_HISTORY=0
-    INIT_PREPARE_DEPENDENCIES=0
-    case "$#:${1:-}" in
-        0:) ;;
-        1:--audit-history) INIT_AUDIT_HISTORY=1 ;;
-        1:--prepare-dependencies) INIT_PREPARE_DEPENDENCIES=1 ;;
-        *) die "用法: ./init.sh [--audit-history|--prepare-dependencies]" ;;
-    esac
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ] || [ "${INIT_PREPARE_DEPENDENCIES}" = 1 ]; then
-        export BACKPORT_SOURCE_AUDIT=1
-    fi
-    readonly INIT_AUDIT_HISTORY INIT_PREPARE_DEPENDENCIES
+    [ "$#" = 0 ] || die "用法: ./init.sh"
 }
 
 validate_init_fetch_jobs() {
@@ -229,304 +218,6 @@ ensure_repo() {
     log_success "${label} 已固定: $(git -C "${target_dir}" rev-parse --short=12 HEAD)"
 }
 
-ensure_audit_repo() {
-    local label="$1" target_dir="$2" repo_url="$3"
-    local actual_url
-    if ! git -C "${target_dir}" rev-parse --git-dir >/dev/null 2>&1; then
-        [ ! -e "${target_dir}" ] || die "${label} 路径存在但不是 Git 仓库: ${target_dir}"
-        mkdir -p "$(dirname "${target_dir}")"
-        log_step "初始化只读审计仓库 ${label}: ${repo_url}"
-        git init --bare "${target_dir}" >/dev/null
-        git -C "${target_dir}" remote add origin "${repo_url}"
-        git -C "${target_dir}" config remote.origin.promisor true
-        git -C "${target_dir}" config remote.origin.partialclonefilter blob:none
-    fi
-    reject_git_object_overrides "${label}" "${target_dir}"
-    [ "$(git -C "${target_dir}" rev-parse --is-bare-repository)" = "true" ] || \
-        die "${label} 必须是无工作树的 bare 审计仓库"
-    actual_url="$(git -C "${target_dir}" remote get-url origin 2>/dev/null || true)"
-    [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${repo_url}")" ] || \
-        die "${label} remote 不匹配: ${actual_url}"
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        # Never export expanded maintenance history as a daily CI cache.
-        git -C "${target_dir}" config backport.auditHistoryExpanded true
-    fi
-}
-
-fetch_audit_ref() {
-    local label="$1" repo_dir="$2" ref_name="$3" commit="$4" shallow_since="$5"
-    local target_ref="refs/backport-audit/${ref_name}"
-    if ! env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
-        log_step "获取 ${label} 固定审计对象: ${commit}"
-        git_network -C "${repo_dir}" fetch --filter=blob:none --no-tags \
-            --shallow-since="${shallow_since}" origin "${commit}"
-    fi
-    env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null || \
-        die "${label} 固定审计对象缺失: ${commit}"
-    git -C "${repo_dir}" update-ref "${target_ref}" "${commit}"
-    [ "$(git -C "${repo_dir}" rev-parse "${target_ref}")" = "${commit}" ] || \
-        die "${label} 审计 ref 固定失败: ${ref_name}"
-}
-
-hydrate_audit_history() {
-    local label="$1" repo_dir="$2" snapshot="$3" shallow_since="$4"
-    local identity
-    shift 4
-    identity="$(
-        {
-            printf '%s\n' "${snapshot}" "${shallow_since}"
-            printf '%s\n' "$@"
-        } | sha256sum | awk '{ print $1 }'
-    )"
-    [ "$(git -C "${repo_dir}" config --get backport.auditHydratedIdentity 2>/dev/null || true)" = "${identity}" ] && return
-    log_step "水合 ${label} 固定浅历史，确保审计阶段完全离线"
-    git_network -C "${repo_dir}" fetch --no-tags --filter=blob:none \
-        --shallow-since="${shallow_since}" origin "$@"
-    git -C "${repo_dir}" config backport.auditHydratedIdentity "${identity}"
-    git -C "${repo_dir}" config --unset-all backport.auditHydratedSnapshot 2>/dev/null || true
-}
-
-hydrate_audit_patches() {
-    local label="$1" repo_dir="$2" commit
-    shift 2
-    [ "$#" -gt 0 ] || return
-    log_step "水合 ${label} 已选补丁对象，确保 patch/build 阶段不联网"
-    for commit in "$@"; do
-        if env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" -c log.mailmap=false \
-            show --format= "${commit}" >/dev/null 2>&1; then
-            continue
-        fi
-        git_network -C "${repo_dir}" -c log.mailmap=false show --format= "${commit}" >/dev/null
-        env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" -c log.mailmap=false \
-            show --format= "${commit}" >/dev/null || \
-            die "${label} 补丁对象未完整水合: ${commit}"
-    done
-}
-
-# Reuse authenticated objects without alternates or lazy network access.
-hydrate_kbuild_objects() {
-    local oid cache type actual reused=0
-    local -a missing=()
-    for oid in "$@"; do
-        if env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file -e "${oid}" 2>/dev/null; then
-            continue
-        fi
-        for cache in "${LINUX_MAINLINE_AUDIT_DIR}" "${AOSP_BACKPORT_AUDIT_DIR}" "${LINUX_STABLE_AUDIT_DIR}" "${COMMON_DIR}"; do
-            if ! env GIT_NO_LAZY_FETCH=1 git -C "${cache}" cat-file -e "${oid}" 2>/dev/null; then
-                continue
-            fi
-            type="$(env GIT_NO_LAZY_FETCH=1 git -C "${cache}" cat-file -t "${oid}")"
-            actual="$(env GIT_NO_LAZY_FETCH=1 git -C "${cache}" cat-file "${type}" "${oid}" |
-                git -C "${KBUILD_AUDIT_DIR}" hash-object -w -t "${type}" --stdin)"
-            [ "${actual}" = "${oid}" ] || die "Kbuild 本地对象复用摘要不匹配"
-            reused=$((reused + 1))
-            break
-        done
-        if ! env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file -e "${oid}" 2>/dev/null; then
-            missing+=("${oid}")
-        fi
-    done
-    [ "${reused}" = 0 ] || log_info "Kbuild 复用 ${reused} 个已有 Git 对象"
-    if [ "${#missing[@]}" -gt 0 ]; then
-        # Depth 1 retains explicitly requested trees but omits their children.
-        git_network -C "${KBUILD_AUDIT_DIR}" fetch --no-tags --filter=tree:1 origin "${missing[@]}"
-    fi
-    for oid in "$@"; do
-        env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file -e "${oid}" 2>/dev/null || \
-            die "Kbuild 必要对象缺失: ${oid}"
-    done
-}
-
-prepare_kbuild_audit() {
-    local commit parent tree paths path state component entry mode type oid filename
-    local -a commits=() states=() next=() objects=() blobs=() commit_paths=()
-    mapfile -t commits < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list kbuild)
-    [ "${#commits[@]}" -gt 0 ] || return 0
-    ensure_audit_repo "Kbuild 官方构建工具历史" "${KBUILD_AUDIT_DIR}" "${KBUILD_AUDIT_REPO}"
-    git -C "${KBUILD_AUDIT_DIR}" config remote.origin.partialclonefilter tree:0
-    if ! env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" merge-base --is-ancestor \
-        "${KBUILD_AUDIT_BASE_COMMIT}" "${KBUILD_AUDIT_COMMIT}" 2>/dev/null; then
-        git_network -C "${KBUILD_AUDIT_DIR}" fetch --no-tags --filter=tree:0 --depth=17 origin "${KBUILD_AUDIT_COMMIT}"
-    fi
-    env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" merge-base --is-ancestor \
-        "${KBUILD_AUDIT_BASE_COMMIT}" "${KBUILD_AUDIT_COMMIT}" || die "Kbuild 固定祖先链不完整"
-    git -C "${KBUILD_AUDIT_DIR}" update-ref refs/backport-audit/kbuild/base "${KBUILD_AUDIT_BASE_COMMIT}"
-    git -C "${KBUILD_AUDIT_DIR}" update-ref "refs/backport-audit/kbuild/${KBUILD_AUDIT_REF}" "${KBUILD_AUDIT_COMMIT}"
-    for commit in "${commits[@]}"; do
-        env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" merge-base --is-ancestor \
-            "${commit}" "${KBUILD_AUDIT_COMMIT}" || die "Kbuild 所选提交不属于固定终点"
-        paths="$(awk -F '\t' -v commit="${commit}" '!/^#/ && $6 == commit { print $9 }' \
-            "${HOST_WORKSPACE_DIR}"/patches/backports/kmi6-2026-09-independent/*.tsv)"
-        for parent in "${commit}" "${commit}^"; do
-            tree="$(env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" cat-file commit "${parent}" |
-                awk 'NR == 1 { print $2 }')"
-            IFS=, read -ra commit_paths <<<"${paths}"
-            for path in "${commit_paths[@]}"; do states+=("${tree} ${path}"); done
-        done
-    done
-    # Walk only the paths declared by pinned manifests; never fetch a whole tree.
-    while [ "${#states[@]}" -gt 0 ]; do
-        objects=()
-        for state in "${states[@]}"; do objects+=("${state%% *}"); done
-        mapfile -t objects < <(printf '%s\n' "${objects[@]}" | LC_ALL=C sort -u)
-        hydrate_kbuild_objects "${objects[@]}"
-        next=()
-        for state in "${states[@]}"; do
-            tree="${state%% *}" path="${state#* }" component="${state#* }"
-            component="${component%%/*}"
-            entry="$(env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" ls-tree "${tree}" -- "${component}")"
-            read -r mode type oid filename <<<"${entry}"
-            [[ "${oid}" =~ ^[0-9a-f]{40}$ ]] || die "Kbuild 来源路径缺失: ${path}"
-            if [[ "${path}" = */* ]]; then
-                [ "${type}" = tree ] || die "Kbuild 来源目录类型异常: ${path}"
-                next+=("${oid} ${path#*/}")
-            else
-                [ "${type}" = blob ] || die "Kbuild 来源文件类型异常: ${path}"
-                blobs+=("${oid}")
-            fi
-        done
-        states=("${next[@]}")
-    done
-    mapfile -t blobs < <(printf '%s\n' "${blobs[@]}" | LC_ALL=C sort -u)
-    hydrate_kbuild_objects "${blobs[@]}"
-    for commit in "${commits[@]}"; do
-        env GIT_NO_LAZY_FETCH=1 git -C "${KBUILD_AUDIT_DIR}" show --format= "${commit}" >/dev/null || \
-            die "Kbuild 补丁仍缺少离线审计对象: ${commit}"
-    done
-    log_success "Kbuild 固定提交及必要差异对象已准备，可完全离线审计"
-}
-
-hydrate_audit_blob() {
-    local label="$1" repo_dir="$2" commit="$3" path="$4" expected_sha256="$5"
-    local actual_sha256
-    if ! actual_sha256="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" \
-        show "${commit}:${path}" 2>/dev/null | sha256sum | awk '{ print $1 }')"; then
-        git_network -C "${repo_dir}" show "${commit}:${path}" >/dev/null
-        actual_sha256="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" \
-            show "${commit}:${path}" | sha256sum | awk '{ print $1 }')"
-    fi
-    [ "${actual_sha256}" = "${expected_sha256}" ] || \
-        die "${label} SHA-256 不匹配: ${actual_sha256}"
-    log_success "${label} 已固定并可离线读取"
-}
-
-hydrate_audit_commit_history() {
-    local label="$1" repo_dir="$2" snapshot="$3" shallow_since="$4"
-    local identity
-    shift 4
-    identity="$(
-        {
-            printf '%s\n' "${snapshot}" "${shallow_since}"
-            printf '%s\n' "$@"
-        } | sha256sum | awk '{ print $1 }'
-    )"
-    [ "$(git -C "${repo_dir}" config --get backport.auditCommitHistoryIdentity 2>/dev/null || true)" = "${identity}" ] && return
-    log_step "水合 ${label} 固定提交与 tree 历史，确保离线漏斗完整"
-    git_network -C "${repo_dir}" fetch --no-tags --filter=blob:none \
-        --shallow-since="${shallow_since}" origin "$@"
-    git -C "${repo_dir}" config backport.auditCommitHistoryIdentity "${identity}"
-}
-
-# Manifests are verified by the caller before their source refs are read.
-required_aosp_refs() {
-    local feature enabled ref manifest
-    for feature in F2FS_DIO_OVERWRITE_FAST_PATH BLK_WBT_DONE_FAST_PATH \
-        MEMCG_RSTAT_FAST_PATH TCP_RECV_MSTAMP_FAST_PATH IPV6_MLD_UAF_FIX; do
-        enabled="ENABLE_${feature}" ref="${feature}_AOSP_REF"
-        [ "${!enabled:-0}" = 1 ] || continue
-        [ -n "${!ref:-}" ] || die "${feature} 缺少 AOSP 来源 ref"
-        printf '%s\n' "${!ref}"
-    done
-    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = 1 ]; then
-        manifest="$(resolve_workspace_path "${SELECTED_BACKPORT_MANIFEST:-patches/backports/kmi6-2026-09-selected-backports.tsv}")"
-        awk -F '\t' '!/^#/ && $4 == "aosp" { print $5 }' "${manifest}"
-    fi
-    for manifest in "${HOST_WORKSPACE_DIR}"/patches/backports/kmi6-2026-09-independent/[0-9][0-9][0-9]-*.tsv; do
-        [ -f "${manifest}" ] || continue
-        awk -F '\t' '!/^#/ && $4 == "aosp" { print $5 }' "${manifest}"
-    done
-}
-
-prepare_aosp_audit_sources() {
-    local requested name pair commit
-    local -a commits=()
-    ensure_audit_repo "AOSP common 回移来源" "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_REPO}"
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        requested="$(printf '%s\n' ${AOSP_BACKPORT_AUDIT_REFS} | cut -d: -f1)"
-        commits=("${AOSP_BACKPORT_AUDIT_BASE_COMMIT:?缺少回移审计快照基线}" "${ABI_BASELINE_COMMIT}")
-        fetch_audit_ref "AOSP common September KMI6 构建基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
-            "aosp/build-base-kmi6-2026-09" "${COMMON_COMMIT}" "${AOSP_BACKPORT_AUDIT_SHALLOW_SINCE}"
-        fetch_audit_ref "AOSP generation-6 ABI 历史基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
-            "aosp/abi-generation-6-base" "${ABI_BASELINE_COMMIT}" "2025-01-01"
-    else
-        requested="$(required_aosp_refs | LC_ALL=C sort -u)"
-    fi
-    while IFS= read -r name; do
-        [ -n "${name}" ] || continue
-        commit=""
-        for pair in ${AOSP_BACKPORT_AUDIT_REFS}; do
-            [ "${pair%%:*}" = "${name}" ] || continue
-            [ -z "${commit}" ] || die "AOSP ref 重复: ${name}"
-            commit="${pair#*:}"
-        done
-        [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP ref 未固定: ${name}"
-        commits+=("${commit}")
-        fetch_audit_ref "AOSP ${name}" "${AOSP_BACKPORT_AUDIT_DIR}" \
-            "aosp/${name}" "${commit}" "2025-01-01"
-    done <<<"${requested}"
-    if [ "${#commits[@]}" -gt 0 ]; then
-        hydrate_audit_history "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
-            "${BACKPORT_AUDIT_SNAPSHOT}" "2025-01-01" "${commits[@]}"
-    fi
-    [ "${INIT_AUDIT_HISTORY}" = 1 ] || return 0
-    hydrate_audit_blob "AOSP generation-6 历史 ABI STG" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${ABI_BASELINE_COMMIT}" \
-        "gki/aarch64/abi.stg" "${ABI_BASELINE_STG_SHA256}"
-    hydrate_audit_blob "AOSP 九月 ABI STG" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_COMMIT}" \
-        "gki/aarch64/abi.stg" "${COMMON_ABI_STG_SHA256}"
-    [ "$(git -C "${AOSP_BACKPORT_AUDIT_DIR}" rev-parse \
-        "refs/backport-audit/aosp/${ANDROID17_ABI_CLASSIFICATION_REF}^{commit}")" = \
-        "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" ] || \
-        die "Android 17 ABI 分类 ref 与固定提交不匹配"
-    hydrate_audit_blob "Android 17 ABI 分类 QCOM symbol list" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
-        "gki/aarch64/symbols/qcom" "${ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256}"
-    hydrate_audit_blob "Android 17 ABI 分类 Xiaomi symbol list" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
-        "gki/aarch64/symbols/xiaomi" "${ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256}"
-}
-
-verify_aosp_backport_source() {
-    local label="$1" source_ref="$2" commit="$3" commit_date="$4" patch_id="$5" expected_paths="$6"
-    local actual_date actual_patch_id actual_paths pair source_ref_commit=""
-    [ "${ENABLE_BACKPORT_AUDIT}" = "1" ] || die "${label} 需要启用固定 AOSP 审计源"
-    for pair in ${AOSP_BACKPORT_AUDIT_REFS}; do
-        if [ "${pair%%:*}" = "${source_ref}" ]; then
-            source_ref_commit="${pair#*:}"
-            break
-        fi
-    done
-    [ -n "${source_ref_commit}" ] || die "${label} 来源 ref 未固定: ${source_ref}"
-    env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        merge-base --is-ancestor "${commit}" "${source_ref_commit}" || \
-        die "${label} 不属于固定 AOSP 来源 ref"
-    actual_date="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
-        -C "${AOSP_BACKPORT_AUDIT_DIR}" show -s --format=%cs "${commit}")"
-    [ "${actual_date}" = "${commit_date}" ] || die "${label} 提交日期不匹配: ${actual_date}"
-    [[ "${commit_date}" < "${BACKPORT_AUDIT_SNAPSHOT}" ||
-       "${commit_date}" = "${BACKPORT_AUDIT_SNAPSHOT}" ]] || \
-        die "${label} 晚于固定审计快照"
-    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        diff-tree --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
-    [ "${actual_paths}" = "${expected_paths}" ] || die "${label} 触及非预期路径: ${actual_paths}"
-    actual_patch_id="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false \
-        -C "${AOSP_BACKPORT_AUDIT_DIR}" show --format= "${commit}" |
-        git patch-id --stable | awk '{ print $1 }')"
-    [ "${actual_patch_id}" = "${patch_id}" ] || die "${label} patch-id 不匹配"
-    log_success "${label} 官方来源已固定"
-}
-
 verify_source_baseline() {
     local branch kmi_generation version tracked_files xiaomi_ack_commit xiaomi_ack_tag
     version="$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")"
@@ -563,116 +254,6 @@ verify_toolchain_identity() {
         die "Rust 工具链构建标识不匹配"
     [ "$("${CI_TOOLCHAIN_DIR}/bin/bindgen" --version)" = "bindgen ${CI_BINDGEN_VERSION}" ] || \
         die "bindgen 版本不匹配"
-}
-
-prepare_fixed_git_subtree() {
-    local label="$1" cache_dir="$2" repo="$3" commit="$4" subtree="$5"
-    local expected_tree="$6" expected_leaf="$7"
-    shift 7
-    local sparse_paths=("$@")
-    local payload_dir actual_url actual_commit actual_tree actual_leaf path
-
-    [ "${#sparse_paths[@]}" -gt 0 ] || die "${label} 缺少稀疏检出路径"
-    payload_dir="${cache_dir}/${subtree}"
-    mkdir -p "${cache_dir}"
-    if [ ! -d "${cache_dir}/.git" ]; then
-        [ -z "$(find "${cache_dir}" -mindepth 1 -print -quit)" ] || \
-            die "${label} Git 缓存目录不是空目录: ${cache_dir}"
-        git -c core.hooksPath=/dev/null init -q "${cache_dir}" || \
-            die "初始化 ${label} Git 缓存失败"
-        git -C "${cache_dir}" remote add origin "${repo}"
-    fi
-    reject_git_object_overrides "${label}" "${cache_dir}"
-    actual_url="$(git -C "${cache_dir}" remote get-url origin 2>/dev/null || true)"
-    [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${repo}")" ] || \
-        die "${label} remote 不匹配: ${actual_url}"
-    git -C "${cache_dir}" config core.hooksPath /dev/null
-    git -C "${cache_dir}" config fetch.fsckObjects true
-    git -C "${cache_dir}" config transfer.fsckObjects true
-    git -C "${cache_dir}" config remote.origin.promisor true
-    git -C "${cache_dir}" config remote.origin.partialclonefilter blob:none
-
-    if ! git -C "${cache_dir}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
-        log_step "获取固定 ${label} 提交与对象树"
-        git_network -c fetch.fsckObjects=true \
-            -C "${cache_dir}" fetch --depth=1 --no-tags --filter=blob:none origin "${commit}" || \
-            die "获取固定 ${label} 提交失败"
-    else
-        log_success "复用固定 ${label} 本地提交"
-    fi
-    actual_commit="$(git -C "${cache_dir}" rev-parse "${commit}^{commit}")"
-    [ "${actual_commit}" = "${commit}" ] || die "${label} commit 不匹配: ${actual_commit}"
-    actual_tree="$(git -C "${cache_dir}" rev-parse "${commit}:${subtree}")"
-    [ "${actual_tree}" = "${expected_tree}" ] || \
-        die "${label} 目标 Git tree 不匹配: ${actual_tree}"
-    if git -C "${cache_dir}" rev-parse --verify HEAD >/dev/null 2>&1; then
-        [ "$(git -C "${cache_dir}" rev-parse HEAD)" = "${commit}" ] || \
-            die "${label} checkout commit 不匹配"
-        [ -z "$(git -C "${cache_dir}" status --porcelain --untracked-files=all)" ] || \
-            die "${label} checkout 存在本地修改"
-    fi
-
-    git_network -C "${cache_dir}" sparse-checkout init --cone
-    git_network -C "${cache_dir}" sparse-checkout set "${sparse_paths[@]}"
-    git_network -C "${cache_dir}" checkout -q --detach "${commit}" || \
-        die "检出固定 ${label} 提交失败"
-    [ "$(git -C "${cache_dir}" rev-parse HEAD)" = "${commit}" ] || \
-        die "${label} checkout commit 发生变化"
-    [ -z "$(git -C "${cache_dir}" status --porcelain --untracked-files=all)" ] || \
-        die "${label} checkout 存在本地修改"
-    actual_leaf="$(tree_sha256 "${payload_dir}")"
-    [ "${actual_leaf}" = "${expected_leaf}" ] || \
-        die "${label} 已检出文件树 SHA-256 不匹配: ${actual_leaf}"
-    log_success "固定 ${label} 对象树完整性校验通过"
-}
-
-prepare_clang_source_tree() {
-    local cache_dir="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}"
-    local subtree="clang-${CI_CLANG_REVISION}"
-    local paths=(
-        "${subtree}/bin"
-        "${subtree}/include"
-        "${subtree}/lib/clang/22/include"
-        "${subtree}/lib/clang/22/share"
-        "${subtree}/lib/x86_64-unknown-linux-gnu"
-        "${subtree}/libexec"
-        "${subtree}/prebuilt_include"
-        "${subtree}/share"
-    )
-    prepare_fixed_git_subtree "AOSP Clang 工具链" "${cache_dir}" \
-        "${AOSP_CLANG_REPO}" "${AOSP_CLANG_COMMIT}" "${subtree}" \
-        "${CI_CLANG_GIT_TREE}" "${CI_CLANG_LEAF_TREE_SHA256}" "${paths[@]}"
-}
-
-prepare_rust_source_tree() {
-    local cache_dir="${WORK_DIR}/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}"
-    local paths=(
-        "${CI_RUST_SUBTREE}/bin"
-        "${CI_RUST_SUBTREE}/etc"
-        "${CI_RUST_SUBTREE}/lib64"
-        "${CI_RUST_SUBTREE}/libexec"
-        "${CI_RUST_SUBTREE}/share/doc/rustc/licenses"
-        "${CI_RUST_SUBTREE}/lib/rustlib/etc"
-        "${CI_RUST_SUBTREE}/lib/rustlib/src"
-        "${CI_RUST_SUBTREE}/lib/rustlib/x86_64-unknown-linux-gnu"
-    )
-    prepare_fixed_git_subtree "AOSP Rust 工具链" "${cache_dir}" \
-        "${AOSP_RUST_REPO}" "${AOSP_RUST_COMMIT}" "${CI_RUST_SUBTREE}" \
-        "${CI_RUST_GIT_TREE}" "${CI_RUST_LEAF_TREE_SHA256}" "${paths[@]}"
-}
-
-prepare_build_tools_source_tree() {
-    local cache_dir="${WORK_DIR}/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}"
-    local paths=(
-        "${CI_BUILD_TOOLS_SUBTREE}/bin"
-        "${CI_BUILD_TOOLS_SUBTREE}/include"
-        "${CI_BUILD_TOOLS_SUBTREE}/lib64"
-        "${CI_BUILD_TOOLS_SUBTREE}/share"
-    )
-    prepare_fixed_git_subtree "AOSP kernel build-tools" "${cache_dir}" \
-        "${AOSP_BUILD_TOOLS_REPO}" "${AOSP_BUILD_TOOLS_COMMIT}" \
-        "${CI_BUILD_TOOLS_SUBTREE}" "${CI_BUILD_TOOLS_GIT_TREE}" \
-        "${CI_BUILD_TOOLS_LEAF_TREE_SHA256}" "${paths[@]}"
 }
 
 stop_toolchain_fetches() {
@@ -723,14 +304,6 @@ run_init_tasks() {
     done
     trap - EXIT INT TERM
     [ "${monitor_enabled}" = 1 ] || set +m
-}
-
-prepare_toolchain_source_trees() {
-    # Child shells cannot return variables; derive all paths before launching.
-    CI_CLANG_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}/clang-${CI_CLANG_REVISION}"
-    CI_RUST_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}/${CI_RUST_SUBTREE}"
-    CI_BUILD_TOOLS_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}/${CI_BUILD_TOOLS_SUBTREE}"
-    run_init_tasks prepare_clang_source_tree prepare_rust_source_tree prepare_build_tools_source_tree
 }
 
 prepare_toolchain_assets() {
@@ -787,34 +360,19 @@ prepare_stock_tools() {
 }
 
 verify_installed_toolchain() {
-    local actual marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256" marker_value
-    if [ -d "${CI_TOOLCHAIN_DIR}" ]; then
-        actual="$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" || die "无法校验固定工具链安装树"
-        if [ "${actual}" = "${CI_TOOLCHAIN_TREE_SHA256}" ]; then
-            verify_toolchain_identity
-            printf '%s\n' "${CI_TOOLCHAIN_TREE_SHA256}" > "${marker}" || die "无法保存固定工具链树指纹"
-            log_success "固定工具链安装树完整性校验通过"
-            return 0
-        fi
-        marker_value="$(sed -n '1p' "${marker}" 2>/dev/null || true)"
-        [ "${marker_value}" != "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
-            die "固定工具链安装树在初始化后被修改: ${actual}"
-        log_step "工具链 pin 已变化或缺少旧树指纹，使用已校验来源重建"
-    fi
-    return 1
+    [ -e "${CI_TOOLCHAIN_DIR}" ] || return 1
+    [ -d "${CI_TOOLCHAIN_DIR}" ] && [ ! -L "${CI_TOOLCHAIN_DIR}" ] || die "固定工具链安装路径异常"
+    local actual
+    actual="$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" || die "无法校验固定工具链安装树"
+    [ "${actual}" = "${CI_TOOLCHAIN_TREE_SHA256}" ] || die "固定工具链安装树摘要不匹配，拒绝覆盖: ${actual}"
+    verify_toolchain_identity
+    log_success "固定工具链安装树完整性校验通过"
 }
 
 validate_dependency_pins() {
-    local key configured=false
+    local key
     local pins=(BACKPORT_BUNDLE_MANIFEST_SHA256 BACKPORT_BUNDLE_SHA256 BACKPORT_BUNDLE_URL
         CI_TOOLCHAIN_BUNDLE_SHA256 CI_TOOLCHAIN_BUNDLE_URL)
-    if [ "${INIT_PREPARE_DEPENDENCIES}" = 1 ] || [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        return
-    fi
-    for key in "${pins[@]}"; do
-        [[ -z "${!key:-}" ]] || configured=true
-    done
-    [[ "${configured}" == true ]] || return 0
     for key in "${pins[@]}"; do
         [[ -n "${!key:-}" ]] || die "固定依赖 pin 不完整: ${key}"
     done
@@ -828,78 +386,15 @@ validate_dependency_pins() {
     done
 }
 
-backport_bundle_enabled() {
-    [ "${INIT_PREPARE_DEPENDENCIES}" = 0 ] && [ "${INIT_AUDIT_HISTORY}" = 0 ] && \
-        [ -n "${BACKPORT_BUNDLE_MANIFEST_SHA256:-}" ]
-}
-
-toolchain_bundle_enabled() {
-    [ "${INIT_PREPARE_DEPENDENCIES}" = 0 ] && [ "${INIT_AUDIT_HISTORY}" = 0 ] && \
-        { [ -n "${CI_TOOLCHAIN_BUNDLE_SHA256:-}" ] || [ -n "${CI_TOOLCHAIN_BUNDLE_URL:-}" ]; }
-}
-
 setup_toolchain() {
-    local actual marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256" staging backup rust_bin compiler prepared
+    local prepared
     mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
     prepare_stock_tools
-    if [ "${INIT_PREPARE_DEPENDENCIES}" = 0 ] && [ "${INIT_AUDIT_HISTORY}" = 0 ]; then
-        if verify_installed_toolchain; then return; fi
-        if toolchain_bundle_enabled; then
-            prepared="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-toolchain \
-                --workspace "${HOST_WORKSPACE_DIR}")" || die "固定工具链包准备失败"
-            [ "${prepared}" = "${CI_TOOLCHAIN_DIR}" ] || die "固定工具链包安装目录不匹配: ${prepared}"
-            verify_installed_toolchain || die "固定工具链包安装树不匹配"
-            return
-        fi
-    fi
-    prepare_toolchain_source_trees
-    prepare_toolchain_assets bindgen gavinhoward-bc
     if verify_installed_toolchain; then return; fi
-
-    staging="$(mktemp -d "$(dirname "${CI_TOOLCHAIN_DIR}")/.ci-toolchain-install.XXXXXX")"
-    if ! {
-        cp -a "${CI_CLANG_PAYLOAD_DIR}/." "${staging}/" &&
-        mkdir -p "${staging}/rust" "${staging}/build-tools" "${staging}/host-bin" &&
-        cp -a "${CI_RUST_PAYLOAD_DIR}/." "${staging}/rust/" &&
-        cp -a "${CI_BUILD_TOOLS_PAYLOAD_DIR}/." "${staging}/build-tools/" &&
-        find "${staging}" -type d -exec chmod 0775 {} + &&
-        find "${staging}" -type f -perm /111 -exec chmod 0775 {} + &&
-        find "${staging}" -type f ! -perm /111 -exec chmod 0664 {} + &&
-        cp -f "${DL_DIR}/bindgen" "${staging}/bin/bindgen" &&
-        cp -f "${DL_DIR}/gavinhoward-bc" "${staging}/host-bin/bc" &&
-        chmod 0755 "${staging}/bin/bindgen" "${staging}/host-bin/bc";
-    }; then
-        rm -rf -- "${staging}"
-        die "固定工具链安装失败"
-    fi
-    { printf '#!/usr/bin/env sh\n'; printf 'for arg do\n'; printf '  case "$arg" in\n'; printf '    -m64) exec /usr/bin/x86_64-linux-gnu-gcc "$@" ;;\n'; printf '  esac\n'; printf 'done\n'; printf 'exec /usr/bin/cc "$@"\n'; } > "${staging}/host-bin/cc"
-    chmod 0755 "${staging}/host-bin/cc"
-    rust_bin="${staging}/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin"
-    mkdir -p "${rust_bin}"
-    for compiler in cc gcc; do
-        { printf '#!/usr/bin/env sh\n'; printf 'exec /usr/bin/x86_64-linux-gnu-gcc "$@"\n'; } > "${rust_bin}/${compiler}"
-        chmod 0755 "${rust_bin}/${compiler}"
-    done
-    actual="$(tree_sha256 "${staging}")"
-    if [ "${actual}" != "${CI_TOOLCHAIN_TREE_SHA256}" ]; then
-        rm -rf -- "${staging}"
-        die "固定工具链安装树指纹不匹配: ${actual}"
-    fi
-    case "${CI_TOOLCHAIN_DIR}" in
-        "${ENVIRONMENT_DIR}"/toolchain/"${CI_TOOLCHAIN_NAME}") ;;
-        *) rm -rf -- "${staging}"; die "拒绝替换异常工具链目录: ${CI_TOOLCHAIN_DIR}" ;;
-    esac
-    backup="${CI_TOOLCHAIN_DIR}.replace.$$"
-    [ ! -e "${backup}" ] || die "工具链备份路径已存在: ${backup}"
-    [ ! -d "${CI_TOOLCHAIN_DIR}" ] || mv "${CI_TOOLCHAIN_DIR}" "${backup}"
-    if ! mv "${staging}" "${CI_TOOLCHAIN_DIR}"; then
-        [ ! -d "${backup}" ] || mv "${backup}" "${CI_TOOLCHAIN_DIR}"
-        die "固定工具链安装失败"
-    fi
-    [ ! -d "${backup}" ] || rm -rf -- "${backup}"
-    printf '%s\n' "${CI_TOOLCHAIN_TREE_SHA256}" > "${marker}"
-    verify_toolchain_identity
-    log_success "固定工具链准备完成: $("${CI_TOOLCHAIN_DIR}/bin/clang" --version | sed -n '1p')"
+    prepared="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-toolchain \
+        --workspace "${HOST_WORKSPACE_DIR}")" || die "固定工具链包准备失败"
+    [ "${prepared}" = "${CI_TOOLCHAIN_DIR}" ] || die "固定工具链包安装目录不匹配: ${prepared}"
+    verify_installed_toolchain || die "固定工具链包安装树不匹配"
 }
 
 prepare_magiskboot() {
@@ -1065,13 +560,7 @@ prepare_userspace_sources() {
 }
 
 prepare_build_dependencies() {
-    if toolchain_bundle_enabled; then
-        # The bundle branch never starts the three-source scheduler inside it.
-        run_init_tasks setup_toolchain prepare_userspace_sources
-    else
-        prepare_userspace_sources
-        setup_toolchain
-    fi
+    run_init_tasks setup_toolchain prepare_userspace_sources
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
@@ -1103,8 +592,6 @@ COMMON_BRANCH="${COMMON_BRANCH:-android16-6.12-2026-09_r11}"
 COMMON_COMMIT="${COMMON_COMMIT:-aa556307b679df7ced0cc644068a529280dbc412}"
 COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 COMMON_ABI_STG_SHA256="${COMMON_ABI_STG_SHA256:-7b73ac72ecf2ff1c7d36d01902a7e34c3c5a993d3126058ee4eb0dd53417e581}"
-ABI_BASELINE_COMMIT="${ABI_BASELINE_COMMIT:-160343479eb972500e11fe76957fdb41b1772f97}"
-ABI_BASELINE_STG_SHA256="${ABI_BASELINE_STG_SHA256:-f9802b066d9ffd4a0363ee57615e9af34360a84b3427549d9398de3eadb54691}"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-main}"
@@ -1132,54 +619,6 @@ BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
 BBG_COMMIT="${BBG_COMMIT:-028ff7fd509e2104596da7cc1ef8e6ce2a0c9082}"
 BBG_DIR="$(resolve_workspace_path "${BBG_SOURCE_DIR:-sources/baseband_guard}")"
-ENABLE_BACKPORT_AUDIT="${ENABLE_BACKPORT_AUDIT:-0}"
-BACKPORT_AUDIT_SNAPSHOT="${BACKPORT_AUDIT_SNAPSHOT:-}"
-AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
-AOSP_BACKPORT_AUDIT_REFS="${AOSP_BACKPORT_AUDIT_REFS:-}"
-ANDROID17_ABI_CLASSIFICATION_REF="${ANDROID17_ABI_CLASSIFICATION_REF:-}"
-ANDROID17_ABI_CLASSIFICATION_COMMIT="${ANDROID17_ABI_CLASSIFICATION_COMMIT:-}"
-ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256="${ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256:-}"
-ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256="${ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256:-}"
-LINUX_STABLE_AUDIT_REPO="${LINUX_STABLE_AUDIT_REPO:-https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git}"
-LINUX_STABLE_AUDIT_REF="${LINUX_STABLE_AUDIT_REF:-linux-6.12.y}"
-LINUX_STABLE_AUDIT_BASE_COMMIT="${LINUX_STABLE_AUDIT_BASE_COMMIT:-}"
-LINUX_STABLE_AUDIT_COMMIT="${LINUX_STABLE_AUDIT_COMMIT:-}"
-LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
-LINUX_MAINLINE_AUDIT_REPO="${LINUX_MAINLINE_AUDIT_REPO:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git}"
-LINUX_MAINLINE_AUDIT_BASE_COMMIT="${LINUX_MAINLINE_AUDIT_BASE_COMMIT:-}"
-LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
-LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
-KBUILD_AUDIT_DIR="$(resolve_workspace_path "${KBUILD_AUDIT_SOURCE_DIR:-sources/linux_kbuild_audit}")"
-BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
-INDEPENDENT_BACKPORT_TOOL="${HOST_WORKSPACE_DIR}/tools/independent_backports.sh"
-ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH="${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH:-0}"
-F2FS_DIO_OVERWRITE_FAST_PATH_AOSP_REF="${F2FS_DIO_OVERWRITE_FAST_PATH_AOSP_REF:-android-mainline}"
-F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT="${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT:-d860974a7e38d35e9e2c4dc8a9f4223b38b6ad99}"
-F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT_DATE="${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT_DATE:-2026-01-31}"
-F2FS_DIO_OVERWRITE_FAST_PATH_PATCH_ID="${F2FS_DIO_OVERWRITE_FAST_PATH_PATCH_ID:-fec231f96375f0622cf9bd9427ef2baf5614ac03}"
-ENABLE_BLK_WBT_DONE_FAST_PATH="${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}"
-BLK_WBT_DONE_FAST_PATH_AOSP_REF="${BLK_WBT_DONE_FAST_PATH_AOSP_REF:-android-mainline}"
-BLK_WBT_DONE_FAST_PATH_COMMIT="${BLK_WBT_DONE_FAST_PATH_COMMIT:-d8b96a79622e03813c221450498ca9742704ebf2}"
-BLK_WBT_DONE_FAST_PATH_COMMIT_DATE="${BLK_WBT_DONE_FAST_PATH_COMMIT_DATE:-2025-08-11}"
-BLK_WBT_DONE_FAST_PATH_PATCH_ID="${BLK_WBT_DONE_FAST_PATH_PATCH_ID:-097d27325d53feb894b26bb0c7e152fca314e7b9}"
-ENABLE_MEMCG_RSTAT_FAST_PATH="${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}"
-MEMCG_RSTAT_FAST_PATH_AOSP_REF="${MEMCG_RSTAT_FAST_PATH_AOSP_REF:-android-mainline}"
-MEMCG_RSTAT_FAST_PATH_COMMIT="${MEMCG_RSTAT_FAST_PATH_COMMIT:-60cada258dfe3694e15c4539259173c37bd5f1fe}"
-MEMCG_RSTAT_FAST_PATH_COMMIT_DATE="${MEMCG_RSTAT_FAST_PATH_COMMIT_DATE:-2025-05-11}"
-MEMCG_RSTAT_FAST_PATH_PATCH_ID="${MEMCG_RSTAT_FAST_PATH_PATCH_ID:-5b12701394b4f6a128f5456e3bd8fed4f8740c27}"
-ENABLE_TCP_RECV_MSTAMP_FAST_PATH="${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}"
-TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF="${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF:-android-mainline}"
-TCP_RECV_MSTAMP_FAST_PATH_COMMIT="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9}"
-TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE="${TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE:-2025-10-27}"
-TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID="${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID:-66387ee17b01507a8f2a2b6537c9f7e22c86b509}"
-ENABLE_IPV6_MLD_UAF_FIX="${ENABLE_IPV6_MLD_UAF_FIX:-0}"
-IPV6_MLD_UAF_FIX_AOSP_REF="${IPV6_MLD_UAF_FIX_AOSP_REF:-android-mainline}"
-IPV6_MLD_UAF_FIX_COMMIT="${IPV6_MLD_UAF_FIX_COMMIT:-791c91dc7a9dfb2457d5e29b8216a6484b9c4b40}"
-IPV6_MLD_UAF_FIX_COMMIT_DATE="${IPV6_MLD_UAF_FIX_COMMIT_DATE:-2026-06-04}"
-IPV6_MLD_UAF_FIX_PATCH_ID="${IPV6_MLD_UAF_FIX_PATCH_ID:-1358ebc3d619657f50c2f0f50f5408f60ea5b732}"
-ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX="${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}"
-IPV6_MLD_DELAYED_WORK_STABLE_COMMIT="${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-ebbebf6cee950d7f1c81990256c0eae9e62572ae}"
-IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT="${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT:-9b26518b6896a16b809b1e42986f4ebac7bccc1e}"
 ENABLE_IPSET="${ENABLE_IPSET:-0}"
 IPSET_VERSION="${IPSET_VERSION:-7.24}"
 IPSET_URL="${IPSET_URL:-https://ipset.netfilter.org/ipset-7.24.tar.bz2}"
@@ -1237,8 +676,6 @@ AOSP_HOST_BC_COMMIT="${AOSP_HOST_BC_COMMIT:?缺少 bc commit pin}"
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
 [[ "${COMMON_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "GKI common commit 格式错误"
 [[ "${COMMON_ABI_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "GKI common abi.stg SHA-256 格式错误"
-[[ "${ABI_BASELINE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "ABI 基线 commit 格式错误"
-[[ "${ABI_BASELINE_STG_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "ABI 基线 abi.stg SHA-256 格式错误"
 [[ "${AOSP_CLANG_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP clang commit 格式错误"
 [[ "${MAGISK_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Magisk commit 格式错误"
 [[ "${AK3_UPSTREAM_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "AnyKernel3 脚本 commit 格式错误"
@@ -1281,22 +718,16 @@ AOSP_HOST_BC_COMMIT="${AOSP_HOST_BC_COMMIT:?缺少 bc commit pin}"
 [ "${CI_HOST_BC_URL}" = "https://android.googlesource.com/platform/prebuilts/build-tools/+/${AOSP_HOST_BC_COMMIT}/linux-x86/bin/gavinhoward-bc?format=TEXT" ] || \
     die "bc 必须来自固定 AOSP Gitiles 提交"
 declare -A TC_PKGS=(
-    [bindgen]="${CI_BINDGEN_URL}"
-    [gavinhoward-bc]="${CI_HOST_BC_URL}"
     [stock-fsck.erofs]="${AOSP_BUILD_TOOLS_REPO}/+/${STOCK_AUDIT_TOOLS_COMMIT}/linux-x86/bin/fsck.erofs?format=TEXT"
     [stock-depmod]="${AOSP_BUILD_TOOLS_REPO}/+/${STOCK_AUDIT_TOOLS_COMMIT}/linux-x86/bin/depmod?format=TEXT"
     [stock-libc++.so]="${AOSP_BUILD_TOOLS_REPO}/+/${STOCK_AUDIT_TOOLS_COMMIT}/linux-x86/lib64/libc++.so?format=TEXT"
 )
 declare -A TC_SHA256=(
-    [bindgen]="${CI_BINDGEN_SHA256}"
-    [gavinhoward-bc]="${CI_HOST_BC_SHA256}"
     [stock-fsck.erofs]="${STOCK_FSCK_EROFS_SHA256:?缺少 stock fsck.erofs SHA-256 pin}"
     [stock-depmod]="${STOCK_KMOD_SHA256:?缺少 stock kmod SHA-256 pin}"
     [stock-libc++.so]="${STOCK_LIBCXX_SHA256:?缺少 stock libc++ SHA-256 pin}"
 )
 declare -A TC_GIT_BLOB=(
-    [bindgen]="${CI_BINDGEN_GIT_BLOB}"
-    [gavinhoward-bc]="${CI_HOST_BC_GIT_BLOB}"
     [stock-fsck.erofs]="${STOCK_FSCK_EROFS_GIT_BLOB}"
     [stock-depmod]="${STOCK_KMOD_GIT_BLOB}"
     [stock-libc++.so]="${STOCK_LIBCXX_GIT_BLOB}"
@@ -1349,163 +780,11 @@ if [ "${ENABLE_BBG}" = "1" ]; then
         git_network -C "${BBG_DIR}" fetch --unshallow origin
     fi
 fi
-if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ] && backport_bundle_enabled; then
-    BACKPORT_BUNDLE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-backports \
-        --workspace "${HOST_WORKSPACE_DIR}")" || die "固定回移包准备失败"
-    [ -d "${BACKPORT_BUNDLE_DIR}" ] || die "固定回移包目录缺失: ${BACKPORT_BUNDLE_DIR}"
-    log_success "固定回移包已准备并通过验证: ${BACKPORT_BUNDLE_DIR}"
-elif [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
-    [ -n "${BACKPORT_AUDIT_SNAPSHOT}" ] || die "缺少后续改进审计快照日期"
-    [ -n "${AOSP_BACKPORT_AUDIT_REFS}" ] || die "缺少 AOSP 后续审计 refs"
-    [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 审计终点"
-    [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 审计终点"
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        [ -n "${LINUX_STABLE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux stable 审计起点"
-        [ -n "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux mainline 审计起点"
-    fi
-    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        bash "${BACKPORT_TOOL}" verify-manifest
-    fi
-    bash "${INDEPENDENT_BACKPORT_TOOL}" verify-manifests
+BACKPORT_BUNDLE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-backports \
+    --workspace "${HOST_WORKSPACE_DIR}")" || die "固定回移包准备失败"
+[ -d "${BACKPORT_BUNDLE_DIR}" ] || die "固定回移包目录缺失: ${BACKPORT_BUNDLE_DIR}"
+log_success "固定回移包已准备并通过验证: ${BACKPORT_BUNDLE_DIR}"
 
-    prepare_aosp_audit_sources
-
-    selected_aosp_patches=()
-    for selected_aosp_entry in \
-        "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH:-0}:${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT:-}" \
-        "${ENABLE_BLK_WBT_DONE_FAST_PATH:-0}:${BLK_WBT_DONE_FAST_PATH_COMMIT:-}" \
-        "${ENABLE_MEMCG_RSTAT_FAST_PATH:-0}:${MEMCG_RSTAT_FAST_PATH_COMMIT:-}" \
-        "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH:-0}:${TCP_RECV_MSTAMP_FAST_PATH_COMMIT:-}" \
-        "${ENABLE_IPV6_MLD_UAF_FIX:-0}:${IPV6_MLD_UAF_FIX_COMMIT:-}"; do
-        [ "${selected_aosp_entry%%:*}" = "1" ] || continue
-        selected_aosp_patches+=("${selected_aosp_entry#*:}")
-    done
-    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        while IFS= read -r audit_commit; do
-            selected_aosp_patches+=("${audit_commit}")
-        done < <(bash "${BACKPORT_TOOL}" list aosp)
-    fi
-    while IFS= read -r audit_commit; do
-        [ -n "${audit_commit}" ] && selected_aosp_patches+=("${audit_commit}")
-    done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list aosp)
-    hydrate_audit_patches "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
-        "${selected_aosp_patches[@]}"
-
-    ensure_audit_repo "Linux 6.12 stable 历史" "${LINUX_STABLE_AUDIT_DIR}" "${LINUX_STABLE_AUDIT_REPO}"
-    stable_audit_commits=("${LINUX_STABLE_AUDIT_COMMIT}")
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        fetch_audit_ref "Linux stable v6.12.69" "${LINUX_STABLE_AUDIT_DIR}" \
-            "linux-stable/base-v6.12.69" "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "2026-01-01"
-        stable_audit_commits=("${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${stable_audit_commits[@]}")
-    fi
-    fetch_audit_ref "Linux stable ${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_DIR}" \
-        "linux-stable/${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_COMMIT}" "2026-02-01"
-    hydrate_audit_commit_history "Linux 6.12 stable" "${LINUX_STABLE_AUDIT_DIR}" \
-        "${BACKPORT_AUDIT_SNAPSHOT}" "2026-02-01" \
-        "${stable_audit_commits[@]}"
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        env GIT_NO_LAZY_FETCH=1 git -C "${LINUX_STABLE_AUDIT_DIR}" merge-base --is-ancestor \
-            "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
-            die "Linux stable 审计历史未形成 v6.12.69 到固定终点的完整祖先链"
-    fi
-    selected_stable_patches=()
-    for selected_stable_entry in \
-        "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}:${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-}" \
-        "${ENABLE_F2FS_LISTXATTR_BOUNDS_FIX:-0}:${F2FS_LISTXATTR_BOUNDS_STABLE_COMMIT:-}" \
-        "${ENABLE_BLKCG_RSTAT_RELEASE_FIX:-0}:${BLKCG_RSTAT_RELEASE_STABLE_COMMIT:-}" \
-        "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}:${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT:-}" \
-        "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX:-0}:${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT:-}" \
-        "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}:${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT:-}"; do
-        [ "${selected_stable_entry%%:*}" = "1" ] || continue
-        selected_stable_patches+=("${selected_stable_entry#*:}")
-    done
-    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        while IFS= read -r audit_commit; do
-            selected_stable_patches+=("${audit_commit}")
-        done < <(bash "${BACKPORT_TOOL}" list stable)
-    fi
-    while IFS= read -r audit_commit; do
-        [ -n "${audit_commit}" ] && selected_stable_patches+=("${audit_commit}")
-    done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list stable)
-    hydrate_audit_patches "Linux 6.12 stable" "${LINUX_STABLE_AUDIT_DIR}" \
-        "${selected_stable_patches[@]}"
-
-    ensure_audit_repo "Linux mainline 历史" "${LINUX_MAINLINE_AUDIT_DIR}" "${LINUX_MAINLINE_AUDIT_REPO}"
-    mainline_audit_commits=("${LINUX_MAINLINE_AUDIT_COMMIT}")
-    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
-        fetch_audit_ref "Linux mainline v6.12" "${LINUX_MAINLINE_AUDIT_DIR}" \
-            "linux-mainline/base-v6.12" "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "2024-11-01"
-        mainline_audit_commits=("${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "${mainline_audit_commits[@]}")
-    fi
-    fetch_audit_ref "Linux mainline 快照" "${LINUX_MAINLINE_AUDIT_DIR}" \
-        "linux-mainline/snapshot-${BACKPORT_AUDIT_SNAPSHOT}" "${LINUX_MAINLINE_AUDIT_COMMIT}" "2024-11-01"
-    hydrate_audit_commit_history "Linux mainline" "${LINUX_MAINLINE_AUDIT_DIR}" \
-        "${BACKPORT_AUDIT_SNAPSHOT}" "2024-11-01" \
-        "${mainline_audit_commits[@]}"
-    selected_mainline_patches=()
-    if [ "${ENABLE_TIMER_BASE_FAST_PATH:-0}" = "1" ]; then
-        selected_mainline_patches+=("${TIMER_BASE_FAST_PATH_COMMIT}")
-    fi
-    if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX:-0}" = "1" ]; then
-        selected_mainline_patches+=("${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}")
-    fi
-    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        while IFS= read -r audit_commit; do
-            selected_mainline_patches+=("${audit_commit}")
-        done < <(bash "${BACKPORT_TOOL}" list mainline)
-    fi
-    while IFS= read -r audit_commit; do
-        [ -n "${audit_commit}" ] && selected_mainline_patches+=("${audit_commit}")
-    done < <(bash "${INDEPENDENT_BACKPORT_TOOL}" list mainline)
-    hydrate_audit_patches "Linux mainline 已选补丁" "${LINUX_MAINLINE_AUDIT_DIR}" \
-        "${selected_mainline_patches[@]}"
-    prepare_kbuild_audit
-    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-        bash "${BACKPORT_TOOL}" verify-sources
-    fi
-    bash "${INDEPENDENT_BACKPORT_TOOL}" verify-sources
-    log_success "已选回移来源已固定并通过离线审计"
-fi
-if ! backport_bundle_enabled && [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" = "1" ]; then
-    verify_aosp_backport_source "F2FS DIO overwrite 映射检查优化" \
-        "${F2FS_DIO_OVERWRITE_FAST_PATH_AOSP_REF}" \
-        "${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT}" \
-        "${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT_DATE}" \
-        "${F2FS_DIO_OVERWRITE_FAST_PATH_PATCH_ID}" \
-        "fs/f2fs/data.c"
-fi
-if ! backport_bundle_enabled && [ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" = "1" ]; then
-    verify_aosp_backport_source "blk-wbt 非节流写完成快路径优化" \
-        "${BLK_WBT_DONE_FAST_PATH_AOSP_REF}" \
-        "${BLK_WBT_DONE_FAST_PATH_COMMIT}" \
-        "${BLK_WBT_DONE_FAST_PATH_COMMIT_DATE}" \
-        "${BLK_WBT_DONE_FAST_PATH_PATCH_ID}" \
-        "block/blk-wbt.c"
-fi
-if ! backport_bundle_enabled && [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then
-    verify_aosp_backport_source "memcg rstat 快路径优化" \
-        "${MEMCG_RSTAT_FAST_PATH_AOSP_REF}" \
-        "${MEMCG_RSTAT_FAST_PATH_COMMIT}" \
-        "${MEMCG_RSTAT_FAST_PATH_COMMIT_DATE}" \
-        "${MEMCG_RSTAT_FAST_PATH_PATCH_ID}" \
-        "mm/memcontrol.c"
-fi
-if ! backport_bundle_enabled && [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
-    verify_aosp_backport_source "TCP recv 时间戳快路径优化" \
-        "${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF}" \
-        "${TCP_RECV_MSTAMP_FAST_PATH_COMMIT}" \
-        "${TCP_RECV_MSTAMP_FAST_PATH_COMMIT_DATE}" \
-        "${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID}" \
-        "net/ipv4/tcp.c net/ipv4/tcp_input.c"
-fi
-if ! backport_bundle_enabled && [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
-    verify_aosp_backport_source "IPv6 MLD 查询释放后访问修复" \
-        "${IPV6_MLD_UAF_FIX_AOSP_REF}" \
-        "${IPV6_MLD_UAF_FIX_COMMIT}" \
-        "${IPV6_MLD_UAF_FIX_COMMIT_DATE}" \
-        "${IPV6_MLD_UAF_FIX_PATCH_ID}" \
-        "net/ipv6/mcast.c"
-fi
 verify_source_baseline
 prepare_build_dependencies
 prepare_magiskboot
@@ -1517,12 +796,6 @@ log_info "GKI common: ${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || log_info "KernelSU: ${KSU_DIR} (${KSU_REF} @ ${KSU_COMMIT})"
 [ "${ENABLE_SUSFS}" != "1" ] || log_info "SUSFS: ${SUSFS_DIR} (${SUSFS_REF} @ ${SUSFS_COMMIT})"
 [ "${ENABLE_BBG}" != "1" ] || log_info "Baseband Guard: ${BBG_DIR} (${BBG_REF} @ ${BBG_COMMIT})"
-[ "${ENABLE_BACKPORT_AUDIT}" != "1" ] || log_info "Backport audit snapshot: ${BACKPORT_AUDIT_SNAPSHOT} (no age cutoff)"
-[ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" != "1" ] || log_info "AOSP F2FS DIO overwrite fast path: ${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT} (${F2FS_DIO_OVERWRITE_FAST_PATH_AOSP_REF})"
-[ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" != "1" ] || log_info "AOSP blk-wbt completion fast path: ${BLK_WBT_DONE_FAST_PATH_COMMIT} (${BLK_WBT_DONE_FAST_PATH_AOSP_REF})"
-[ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" != "1" ] || log_info "Linux memcg rstat fast path: ${MEMCG_RSTAT_FAST_PATH_COMMIT} (${MEMCG_RSTAT_FAST_PATH_AOSP_REF})"
-[ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" != "1" ] || log_info "Linux TCP recv timestamp fast path: ${TCP_RECV_MSTAMP_FAST_PATH_COMMIT} (${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF})"
-[ "${ENABLE_IPV6_MLD_UAF_FIX}" != "1" ] || log_info "AOSP IPv6 MLD UAF fix: ${IPV6_MLD_UAF_FIX_COMMIT} (${IPV6_MLD_UAF_FIX_AOSP_REF})"
 [ "${ENABLE_IPSET}" != "1" ] || log_info "IPSet userspace: ${IPSET_DIR} + libmnl ${LIBMNL_DIR} (NDK ${ANDROID_NDK_VERSION})"
 log_info "toolchain: ${CI_TOOLCHAIN_DIR}"
 log_info "MagiskBoot: v${MAGISK_VERSION} (${MAGISK_COMMIT})"

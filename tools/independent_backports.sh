@@ -50,11 +50,11 @@ MANIFEST_TOOL="${WORKSPACE_DIR}/tools/backport_manifest.sh"
 MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/kmi6-2026-09-independent"
 AUDIT_TMP_ROOT=""
 [ -f "${MANIFEST_TOOL}" ] && [ ! -L "${MANIFEST_TOOL}" ] || die "缺少九月回移清单工具"
-. "${MANIFEST_TOOL}"
+BACKPORT_MANIFEST_LIBRARY=0 BACKPORT_BUNDLE_LIBRARY=0 . "${MANIFEST_TOOL}"
 declare -a MANIFESTS=()
 declare -A BATCH_ROWS=() BATCH_GROUPS=() BATCH_PINS=() BATCH_TMP=()
 MANIFESTS_READY=0
-SOURCES_READY=0
+CONTENTS_READY=0
 PATCHES_READY=0
 
 manifest_pin_name() {
@@ -171,21 +171,21 @@ list_paths() {
 	done | LC_ALL=C sort -u
 }
 
-verify_all_sources() {
+verify_all_patches() {
 	local manifest
-	[ "${SOURCES_READY}" != 1 ] || return 0
+	[ "${CONTENTS_READY}" != 1 ] || return 0
 	verify_manifests
 	for manifest in "${MANIFESTS[@]}"; do
 		select_manifest "${manifest}"
-		verify_sources
+		verify_patches
 	done
-	SOURCES_READY=1
+	CONTENTS_READY=1
 }
 
 prepare_all_patches() {
 	local manifest
 	[ "${PATCHES_READY}" != 1 ] || return 0
-	verify_all_sources
+	verify_all_patches
 	AUDIT_TMP_ROOT="${AUDIT_TMP_ROOT:-$(mktemp -d)}"
 	for manifest in "${MANIFESTS[@]}"; do
 		select_manifest "${manifest}"
@@ -284,7 +284,7 @@ verify_applied() {
 }
 
 usage() {
-	printf '用法: %s {verify-manifests|list SOURCE|list-paths|verify-sources|apply TREE|verify-applied TREE|verify-base-diff TREE SHA256|verify-applied-base-diff TREE SHA256}\n' "$0" >&2
+	printf '用法: %s {verify-manifests|list SOURCE|list-paths|verify-patches|apply TREE|verify-applied TREE|verify-base-diff TREE SHA256|verify-applied-base-diff TREE SHA256}\n' "$0" >&2
 	exit 2
 }
 
@@ -303,10 +303,10 @@ case "${1:-}" in
 		[ "$#" = 1 ] || usage
 		list_paths
 		;;
-	verify-sources)
+	verify-patches)
 		[ "$#" = 1 ] || usage
-		verify_all_sources
-		log_success "九月独立回移全部官方来源检查通过"
+		verify_all_patches
+		log_success "九月独立回移全部固定补丁内容检查通过"
 		;;
 	apply)
 		[ "$#" = 2 ] || usage

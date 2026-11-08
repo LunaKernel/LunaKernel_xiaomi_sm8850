@@ -45,14 +45,7 @@ CI_HOST_BC_URL CI_HOST_BC_SHA256 AOSP_BUILD_TOOLS_REPO STOCK_AUDIT_TOOLS_COMMIT
 STOCK_FSCK_EROFS_SHA256 STOCK_KMOD_SHA256 STOCK_LIBCXX_SHA256 ANDROID_NDK_URL
 ANDROID_NDK_SHA256 IPSET_URL IPSET_SHA512 LIBMNL_URL LIBMNL_SHA256 MAGISK_APK_URL
 MAGISK_APK_SHA256 AK3_BUSYBOX_URL AK3_BUSYBOX_SHA256 KSU_MANAGER_APK_SHA256
-COMMON_REPO COMMON_BRANCH AOSP_BACKPORT_AUDIT_REFS ENABLE_BACKPORT_AUDIT ENABLE_SELECTED_BACKPORTS
-BACKPORT_AUDIT_SNAPSHOT SELECTED_BACKPORT_MANIFEST_SHA256
-LINUX_STABLE_AUDIT_REPO LINUX_STABLE_AUDIT_REF LINUX_STABLE_AUDIT_COMMIT
-LINUX_STABLE_STANDALONE_COMMITS LINUX_MAINLINE_AUDIT_REPO LINUX_MAINLINE_AUDIT_COMMIT
-KBUILD_AUDIT_REPO KBUILD_AUDIT_REF KBUILD_AUDIT_BASE_COMMIT KBUILD_AUDIT_COMMIT
-AOSP_CLANG_REPO CI_CLANG_GIT_TREE CI_CLANG_LEAF_TREE_SHA256 AOSP_RUST_REPO
-CI_RUST_SUBTREE CI_RUST_GIT_TREE CI_RUST_LEAF_TREE_SHA256 CI_BUILD_TOOLS_SUBTREE
-CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
+COMMON_REPO
 """.split()
         pins = dict.fromkeys(keys, "fixture")
         pins.update({
@@ -65,23 +58,9 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
             "CI_TOOLCHAIN_TREE_SHA256": "e" * 64,
             "COMMON_SOURCE_DIR": COMMON_SOURCE,
             "COMMON_COMMIT": "d" * 40,
-            "AOSP_BACKPORT_AUDIT_SOURCE_DIR": "sources/aosp_common_backport_audit",
-            "LINUX_STABLE_AUDIT_SOURCE_DIR": "sources/linux_stable_6.12_audit",
-            "LINUX_MAINLINE_AUDIT_SOURCE_DIR": "sources/linux_mainline_audit",
-            "KBUILD_AUDIT_SOURCE_DIR": "sources/linux_kbuild_audit",
-            "AOSP_CLANG_COMMIT": "a" * 40,
-            "AOSP_RUST_COMMIT": "b" * 40,
-            "AOSP_BUILD_TOOLS_COMMIT": "c" * 40,
-            "SELECTED_BACKPORT_MANIFEST": "patches/backports/selected.tsv",
         })
         (self.root / ".env").write_text("".join(f"{key}={value}\n" for key, value in pins.items()))
         (self.root / ".gitignore").write_text("work/\nsources/\n")
-        for name in ("tools/backport_manifest.sh", "tools/independent_backports.sh",
-                     "patches/backports/selected.tsv",
-                     "patches/backports/kmi6-2026-09-independent/670-fixture.tsv"):
-            path = self.root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# fixed preparation fixture\n")
         for phase in PHASES:
             (self.root / f"{phase}.sh").write_text(
                 "set -euo pipefail\n"
@@ -113,6 +92,7 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         (self.root / "work/cache/kernel/scripts/kallsyms").chmod(0o755)
         # 不继承宿主 Git 配置、凭据入口或 shell 启动脚本。
         self.env = {
+            **FIXED_PINS,
             "PATH": str(binary.parent) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
             "LC_ALL": "C.UTF-8",
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -135,11 +115,11 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.git("-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid",
                  "-c", "core.hooksPath=/dev/null", "commit", "-qm", "test fixture", "--no-gpg-sign")
         self.env["GITHUB_SHA"] = self.git("rev-parse", "HEAD").stdout.strip()
-        for key in ("AOSP_BACKPORT_AUDIT_SOURCE_DIR", "LINUX_STABLE_AUDIT_SOURCE_DIR",
-                    "LINUX_MAINLINE_AUDIT_SOURCE_DIR", "KBUILD_AUDIT_SOURCE_DIR"):
-            self.git("init", "-q", "--bare", pins[key])
-        for prefix, commit in (("aosp-clang-git", "a"), ("aosp-rust", "b"), ("aosp-build-tools", "c")):
-            (self.root / "work/cache/toolchains" / (prefix + "-" + commit * 40)).mkdir(parents=True)
+        backports = "work/cache/dependencies/backports-" + FIXED_PINS["BACKPORT_BUNDLE_MANIFEST_SHA256"]
+        for path in (backports, TOOLCHAIN_PATH):
+            directory = self.root / path
+            directory.mkdir(parents=True)
+            (directory / "fixture.txt").write_text("verified by init stub\n")
         self.git("-C", COMMON_SOURCE, "init", "-q")
         self.git("-C", COMMON_SOURCE, "add", ".")
         self.git("-C", COMMON_SOURCE, "-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid",
@@ -186,7 +166,7 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.assert_success(self.run_step("metadata"))
         output = self.read_assignments("github.output")
         env = self.read_assignments("github.env")
-        self.assertEqual(output["dependencies_mode"], "source")
+        self.assertNotIn("dependencies_mode", output)
         self.assertEqual(output["project_commit"], self.env["GITHUB_SHA"])
         self.assertEqual(env["LUNA_PROJECT_COMMIT"], self.env["GITHUB_SHA"])
         self.assertRegex(output["build_id"], "^luna-xiaomi17-g" + self.env["GITHUB_SHA"][:8] + r"-\d{8}-\d{4}$")
@@ -201,57 +181,11 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.assertNotIn("gc.auto=", config)
         self.assertIn("core.filemode=false", config)
 
-    def test_source_cache_keys_bind_algorithm_and_manifest_without_changing_existing_keys(self):
-        self.assert_success(self.run_step("metadata"))
-        original = self.read_assignments("github.output")
-        self.assert_success(self.run_step("metadata", GITHUB_RUN_ID="456", GITHUB_RUN_ATTEMPT="2"))
-        rerun = self.read_assignments("github.output")
-        names = ("aosp", "stable", "mainline", "kbuild", "clang", "rust", "build_tools", "common")
-        for name in names:
-            self.assertEqual(original[name + "_key"], rerun[name + "_key"])
-        self.commit_fixture_change("patches/backports/selected.tsv", "# changed requirement\n")
-        self.assert_success(self.run_step("metadata"))
-        manifest = self.read_assignments("github.output")
-        for name in names[:4]:
-            self.assertNotEqual(original[name + "_key"], manifest[name + "_key"])
-        for name in names[4:]:
-            self.assertEqual(original[name + "_key"], manifest[name + "_key"])
-        self.commit_fixture_change("init.sh", "# preparation algorithm changed\n")
-        self.assert_success(self.run_step("metadata"))
-        algorithm = self.read_assignments("github.output")
-        for name in SOURCE_CACHES:
-            self.assertNotEqual(manifest[name + "_key"], algorithm[name + "_key"])
-        for key in ("common_key", "ccache_prefix", "downloads_key", "manager_key"):
-            self.assertEqual(original[key], algorithm[key])
-
-    def test_source_cache_keys_bind_pins_and_reject_broad_paths(self):
-        self.assert_success(self.run_step("metadata"))
-        original = self.read_assignments("github.output")
-        self.commit_fixture_change(".env", "\nAOSP_CLANG_COMMIT=" + "d" * 40 + "\n")
-        self.assert_success(self.run_step("metadata"))
-        changed = self.read_assignments("github.output")
-        self.assertNotEqual(original["clang_key"], changed["clang_key"])
-        self.assertEqual(changed["clang_path"], "work/cache/toolchains/aosp-clang-git-" + "d" * 40)
-        self.assertEqual(original["rust_key"], changed["rust_key"])
-        self.commit_fixture_change(".env", "\nAOSP_BACKPORT_AUDIT_SOURCE_DIR=work\n")
-        result = self.run_step("metadata")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("审计缓存路径不在固定范围", result.stderr)
-
     def test_fixed_cache_paths_and_sizes_do_not_require_source_caches(self):
-        # 移除的目录全部来自本测试的临时 fixture，fixed 模式不能依赖它们。
-        for path in ("sources/aosp_common_backport_audit", "sources/linux_stable_6.12_audit",
-                     "sources/linux_mainline_audit", "sources/linux_kbuild_audit",
-                     "work/cache/toolchains"):
-            shutil.rmtree(self.root / path)
+        # fixture 不创建来源目录；fixed 缓存不能依赖它们。
         backports = "work/cache/dependencies/backports-" + FIXED_PINS["BACKPORT_BUNDLE_MANIFEST_SHA256"]
-        for path in (backports, TOOLCHAIN_PATH):
-            directory = self.root / path
-            directory.mkdir(parents=True)
-            (directory / "fixture.txt").write_text("verified by init stub\n")
-        self.assert_success(self.run_step("metadata", **FIXED_PINS))
+        self.assert_success(self.run_step("metadata"))
         output = self.read_assignments("github.output")
-        self.assertEqual(output["dependencies_mode"], "fixed")
         self.assertEqual({key: value for key, value in output.items() if key.endswith("_path")}, {
             "common_path": COMMON_SOURCE, "backports_path": backports, "toolchain_path": TOOLCHAIN_PATH,
         })
@@ -273,7 +207,6 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.assert_success(self.run_step("metadata", **FIXED_PINS))
         original = self.read_assignments("github.output")
         self.commit_fixture_change("init.sh", "# scheduling changed\n")
-        self.commit_fixture_change("patches/backports/selected.tsv", "# preparation changed\n")
         relocated = {**FIXED_PINS, "BACKPORT_BUNDLE_URL": "https://example.invalid/moved.tar.gz",
                      "CI_TOOLCHAIN_BUNDLE_URL": "https://example.invalid/moved.tar.zst"}
         self.assert_success(self.run_step("metadata", **relocated, GITHUB_RUN_ID="456"))
@@ -301,10 +234,15 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.assertEqual(original["backports_key"], changed["backports_key"])
         self.assertEqual(original["common_key"], changed["common_key"])
 
-    def test_partial_fixed_pins_fail_before_init_without_falling_back(self):
-        cases = [{key: value for key, value in FIXED_PINS.items() if key != missing}
-                 for missing in FIXED_PINS]
-        cases += [{key: value} for key, value in FIXED_PINS.items()]
+    def test_missing_or_partial_fixed_pins_fail_before_init_without_falling_back(self):
+        empty = dict.fromkeys(FIXED_PINS, "")
+        cases = [empty]
+        cases += [{**FIXED_PINS, missing: ""} for missing in FIXED_PINS]
+        cases += [{**empty, key: value} for key, value in FIXED_PINS.items()]
+        # 未设置与显式空值都必须失败。
+        for key in FIXED_PINS:
+            self.env.pop(key)
+        cases.append({})
         for pins in cases:
             for command in ("metadata", "init"):
                 with self.subTest(pins=tuple(pins), command=command):
@@ -349,17 +287,6 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         result = self.run_step("metadata")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("common 缓存路径不在固定范围", result.stderr)
-
-    def test_init_reports_cache_sizes_and_does_not_save_expanded_history(self):
-        self.git("-C", "sources/aosp_common_backport_audit", "config", "backport.auditHistoryExpanded", "true")
-        result = self.run_step("init")
-        self.assert_success(result)
-        output = self.read_assignments("github.output")
-        self.assertEqual(output["aosp_save"], "false")
-        for name in ("common", "stable", "mainline", "kbuild", "clang", "rust", "build_tools"):
-            self.assertEqual(output[name + "_save"], "true")
-        self.assertEqual(result.stdout.count("[CACHE]"), 8)
-        self.assertIn("[TIME] init status=0", result.stdout)
 
     def test_common_cache_excludes_patched_staged_untracked_and_ignored_files(self):
         for relative, staged in (("scripts/kallsyms.c", False), ("scripts/kallsyms.c", True),

@@ -25,8 +25,7 @@ def function(name):
 
 
 FUNCTIONS = "\n".join(function(name) for name in (
-    "validate_init_fetch_jobs", "stop_toolchain_fetches", "run_init_tasks",
-    "prepare_toolchain_source_trees"
+    "validate_init_fetch_jobs", "stop_toolchain_fetches", "run_init_tasks"
 ))
 MOCK = r'''
 import json, os, pathlib, subprocess, sys, time
@@ -52,21 +51,17 @@ set -euo pipefail
 die() { printf '%s\n' "$1" >&2; exit 1; }
 ''' + FUNCTIONS + r'''
 validate_init_fetch_jobs
-WORK_DIR="$MOCK_ROOT/work"
-AOSP_CLANG_COMMIT=clang-pin CI_CLANG_REVISION=r123
-AOSP_RUST_COMMIT=rust-pin CI_RUST_SUBTREE=rust-subtree
-AOSP_BUILD_TOOLS_COMMIT=tools-pin CI_BUILD_TOOLS_SUBTREE=tools-subtree
-prepare_clang_source_tree() {
-    python3 "$MOCK_ROOT/mock.py" clang
-    touch "$MOCK_ROOT/clang.continued"
+prepare_toolchain() {
+    python3 "$MOCK_ROOT/mock.py" toolchain
+    touch "$MOCK_ROOT/toolchain.continued"
 }
-prepare_rust_source_tree() {
-    python3 "$MOCK_ROOT/mock.py" rust
-    touch "$MOCK_ROOT/rust.continued"
+prepare_userspace() {
+    python3 "$MOCK_ROOT/mock.py" userspace
+    touch "$MOCK_ROOT/userspace.continued"
 }
-prepare_build_tools_source_tree() {
-    python3 "$MOCK_ROOT/mock.py" tools
-    touch "$MOCK_ROOT/tools.continued"
+prepare_backports() {
+    python3 "$MOCK_ROOT/mock.py" backports
+    touch "$MOCK_ROOT/backports.continued"
 }
 wait() {
     # Deterministically exercise statuses Bash already collected before wait.
@@ -79,8 +74,7 @@ wait() {
     fi
     builtin wait "$@"
 }
-prepare_toolchain_source_trees
-printf '%s\n' "$CI_CLANG_PAYLOAD_DIR" "$CI_RUST_PAYLOAD_DIR" "$CI_BUILD_TOOLS_PAYLOAD_DIR" > "$MOCK_ROOT/paths"
+run_init_tasks prepare_toolchain prepare_userspace prepare_backports
 touch "$MOCK_ROOT/installed"
 '''
 
@@ -139,7 +133,7 @@ class InitParallelTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertTrue((self.root / "installed").exists())
         events = []
-        for name in ("clang", "rust", "tools"):
+        for name in ("toolchain", "userspace", "backports"):
             events.append((json.loads((self.root / (name + ".start")).read_text())["time"], 1))
             events.append((float((self.root / (name + ".end")).read_text()), -1))
         active = peak = 0
@@ -147,11 +141,6 @@ class InitParallelTests(unittest.TestCase):
             active += change
             peak = max(peak, active)
         self.assertEqual(peak, limit)
-        self.assertEqual((self.root / "paths").read_text().splitlines(), [
-            str(self.root / "work/cache/toolchains/aosp-clang-git-clang-pin/clang-r123"),
-            str(self.root / "work/cache/toolchains/aosp-rust-rust-pin/rust-subtree"),
-            str(self.root / "work/cache/toolchains/aosp-build-tools-tools-pin/tools-subtree"),
-        ])
 
     def test_default_is_serial(self):
         self.check_success(None, 1)
@@ -160,9 +149,9 @@ class InitParallelTests(unittest.TestCase):
         self.check_success("2", 2)
 
     def test_completed_slot_is_refilled_before_slow_worker_finishes(self):
-        self.check_success("2", 2, MOCK_LONG="clang")
-        started = json.loads((self.root / "tools.start").read_text())["time"]
-        self.assertLess(started, float((self.root / "clang.end").read_text()))
+        self.check_success("2", 2, MOCK_LONG="toolchain")
+        started = json.loads((self.root / "backports.start").read_text())["time"]
+        self.assertLess(started, float((self.root / "toolchain.end").read_text()))
 
     def test_completed_tasks_are_reaped_successfully(self):
         self.check_success("2", 2, MOCK_WAIT_COMPLETED="1")
@@ -170,12 +159,12 @@ class InitParallelTests(unittest.TestCase):
     def test_completed_failure_status_is_not_ignored(self):
         for status in ("7", "127"):
             with self.subTest(status=status):
-                code, _ = self.finish(self.start("2", MOCK_FAIL="rust", MOCK_EXIT=status,
+                code, _ = self.finish(self.start("2", MOCK_FAIL="userspace", MOCK_EXIT=status,
                                                  MOCK_WAIT_COMPLETED="1"))
                 self.assertNotEqual(code, 0)
-                self.assertFalse((self.root / "tools.start").exists())
+                self.assertFalse((self.root / "backports.start").exists())
                 self.assertFalse((self.root / "installed").exists())
-                self.assertFalse((self.root / "rust.continued").exists())
+                self.assertFalse((self.root / "userspace.continued").exists())
                 for entry in self.root.iterdir():
                     if entry.name != "mock.py":
                         entry.unlink()
@@ -189,14 +178,14 @@ class InitParallelTests(unittest.TestCase):
                 self.assertFalse((self.root / "installed").exists())
 
     def test_each_failure_blocks_later_tasks_and_install(self):
-        for failed in ("clang", "rust", "tools"):
+        for failed in ("toolchain", "userspace", "backports"):
             with self.subTest(failed=failed):
-                slow = {"clang": "rust", "rust": "clang", "tools": ""}[failed]
+                slow = {"toolchain": "userspace", "userspace": "toolchain", "backports": ""}[failed]
                 started = time.monotonic()
                 code, _ = self.finish(self.start("2", MOCK_FAIL=failed, MOCK_SLOW=slow))
                 self.assertNotEqual(code, 0)
                 self.assertLess(time.monotonic() - started, 2)
-                self.assertEqual((self.root / "tools.start").exists(), failed == "tools")
+                self.assertEqual((self.root / "backports.start").exists(), failed == "backports")
                 self.assertFalse((self.root / "installed").exists())
                 self.assertFalse((self.root / (failed + ".continued")).exists())
                 for entry in self.root.glob("*.start"):
@@ -217,7 +206,7 @@ class InitParallelTests(unittest.TestCase):
                 code, output = self.finish(process)
                 self.assertEqual(code, 128 + sig, output)
                 self.assertFalse((self.root / "installed").exists())
-                self.assertFalse((self.root / "tools.start").exists())
+                self.assertFalse((self.root / "backports.start").exists())
                 for entry in self.root.glob("*.start"):
                     state = json.loads(entry.read_text())
                     self.assertFalse(self.running(state["pid"]))

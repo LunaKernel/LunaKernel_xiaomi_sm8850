@@ -16,6 +16,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ci_dependencies as dependencies
 
 
+def fixture_archive(source, output, *, zstd=False):
+    # 测试输入只需标准 tar；制作端的可重现打包不属于消费端职责。
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode='w') as bundle:
+        for path in sorted(source.rglob('*')):
+            bundle.add(path, arcname=path.relative_to(source).as_posix(), recursive=False)
+    data = raw.getvalue()
+    if zstd:
+        data = subprocess.run(['zstd', '-q', '-c'], input=data, capture_output=True,
+                              check=True, timeout=10).stdout
+    output.write_bytes(data)
+
+
 class DependencyTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='luna-dependency-test-')
@@ -26,6 +39,11 @@ class DependencyTests(unittest.TestCase):
             'COMMON_REPO': 'https://official.invalid/common', 'COMMON_COMMIT': 'b' * 40,
             'ENABLE_BACKPORT_AUDIT': '1', 'ENABLE_SELECTED_BACKPORTS': '1',
             'BACKPORT_AUDIT_SNAPSHOT': '2026-08-28',
+            'AOSP_BACKPORT_AUDIT_SOURCE_DIR': 'sources/aosp-audit',
+            'AOSP_BACKPORT_AUDIT_BASE_COMMIT': 'd' * 40,
+            'LINUX_STABLE_AUDIT_BASE_COMMIT': 'e' * 40,
+            'LINUX_MAINLINE_AUDIT_BASE_COMMIT': 'f' * 40,
+            'KBUILD_AUDIT_SOURCE_DIR': 'sources/kbuild-audit',
             'SELECTED_BACKPORT_MANIFEST': 'patches/selected.tsv',
             'BUILD_ENVIRONMENT_DIR': 'work/tools', 'CI_TOOLCHAIN_NAME': 'fixed-test',
         }
@@ -104,11 +122,9 @@ class DependencyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '提交集合'):
             dependencies.checked_backports(self.root, self.package)
 
-    def test_backport_archive_is_reproducible_and_prepares_offline(self):
+    def test_backport_archive_prepares_and_reuses_offline(self):
         first = self.root / 'one.tar.gz'
-        second = self.root / 'two.tar.gz'
-        self.assertEqual(dependencies.write_archive(self.package, first),
-                         dependencies.write_archive(self.package, second))
+        fixture_archive(self.package, first)
         with mock.patch.object(dependencies, 'archive_file', return_value=first) as fetch:
             directory = dependencies.prepare_backports(self.root)
             self.assertEqual(dependencies.checked_backports(self.root), directory)
@@ -123,7 +139,7 @@ class DependencyTests(unittest.TestCase):
         (self.package / 'dir').mkdir()
         (self.package / 'nested-alias').symlink_to('dir/../executable')
         archive = self.root / 'mode.tar.gz'
-        dependencies.write_archive(self.package, archive)
+        fixture_archive(self.package, archive)
         target = self.root / 'extracted'
         target.mkdir()
         dependencies.extract_archive(archive, target)
@@ -132,14 +148,23 @@ class DependencyTests(unittest.TestCase):
         self.assertEqual(os.readlink(target / 'nested-alias'), 'dir/../executable')
         self.assertEqual(dependencies.tree_sha256(target), dependencies.tree_sha256(self.package))
 
-    def test_toolchain_export_requires_official_audit_before_provenance(self):
-        failure = subprocess.CalledProcessError(7, ['bash', 'init.sh', '--prepare-dependencies'])
-        with mock.patch.object(dependencies.subprocess, 'run', side_effect=failure) as audit:
-            with self.assertRaises(subprocess.CalledProcessError):
-                dependencies.export_toolchain(self.root, self.root / 'export.tar.zst')
-        self.assertEqual(audit.call_args.args[0], ['bash', 'init.sh', '--prepare-dependencies'])
-        self.assertEqual(audit.call_args.kwargs['env']['BACKPORT_SOURCE_AUDIT'], '1')
-        self.assertFalse((self.root / 'export.tar.zst').exists())
+    def test_v1_inputs_keep_audit_directories_and_historical_pins(self):
+        for key in ('AOSP_BACKPORT_AUDIT_SOURCE_DIR', 'AOSP_BACKPORT_AUDIT_BASE_COMMIT',
+                    'LINUX_STABLE_AUDIT_BASE_COMMIT', 'LINUX_MAINLINE_AUDIT_BASE_COMMIT',
+                    'KBUILD_AUDIT_SOURCE_DIR'):
+            with self.subTest(key=key):
+                self.assertEqual(self.data['inputs']['pins'][key], self.env[key])
+                with mock.patch.dict(os.environ, {key: 'changed'}):
+                    with self.assertRaisesRegex(ValueError, '当前来源'):
+                        dependencies.checked_backports(self.root, self.package)
+
+    def test_consumer_cli_rejects_producer_commands(self):
+        for command in ('export-backports', 'pack-backports', 'export-toolchain'):
+            result = subprocess.run([sys.executable, dependencies.__file__, command,
+                                     '--workspace', str(self.root)], capture_output=True,
+                                    text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('invalid choice', result.stderr)
 
     def test_unsafe_archive_members_fail_without_writing_outside(self):
         for name, link in (('../escaped', None), ('/absolute', None), ('link', '../escaped')):
@@ -184,7 +209,7 @@ class DependencyTests(unittest.TestCase):
             'inputs': {key: os.environ[key] for key in dependencies.TOOLCHAIN_KEYS},
         }))
         archive = self.root / 'toolchain.tar.zst'
-        dependencies.write_archive(source, archive, zstd=True)
+        fixture_archive(source, archive, zstd=True)
         with mock.patch.object(dependencies, 'archive_file', return_value=archive) as fetch:
             installed = dependencies.prepare_toolchain(self.root)
             self.assertEqual(dependencies.tree_sha256(installed), digest)

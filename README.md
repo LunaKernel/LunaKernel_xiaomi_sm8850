@@ -15,7 +15,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 | AOSP 基线 | `android16-6.12-2026-09_r11` / KMI generation 6 |
 | 安装方式 | AnyKernel3，仅替换 boot 中的 `Image` |
 
-实机验收仅覆盖对应 Image 与系统版本，不能外推至其他设备或 OTA。刷写前请备份当前 boot，并确保能够进入 Fastboot 或 Recovery 恢复。
+已验收 Image 与系统版本见[验证记录](docs/VALIDATION.md)。刷写前请备份当前 boot，并确保能够进入 Fastboot 或 Recovery 恢复。
 
 ## 上游
 
@@ -38,7 +38,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 
 ## 构建
 
-按 [构建说明](docs/BUILDING.md) 准备输入，依次执行 `init.sh`、`patch.sh`、`patch_external.sh`、`build.sh`。通过来源、模块闭包与发布检查后，交付 Image、AnyKernel3 ZIP、官方 Manager APK、IPSet 组件和完整构建审计。
+按 [构建说明](docs/BUILDING.md) 依次执行 `init.sh`、`patch.sh`、`patch_external.sh`、`build.sh`。固定依赖由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 制作与托管。通过内容、模块闭包与发布检查后，交付 Image、AnyKernel3 ZIP、官方 Manager APK、IPSet 组件和构建审计。
 
 ## 验证状态
 
