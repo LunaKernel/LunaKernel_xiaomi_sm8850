@@ -69,7 +69,6 @@ bpf_linked_reg_delta	570-bpf-linked-reg-delta.tsv	stable	1509c1ae9185ec710389996
 bpf_linked_reg_delta	570-bpf-linked-reg-delta.tsv	stable	6321ebf2a1052306e778410ed1e0229611a69500	a4209c7a089be2f5c02e5e2187bcc2d32cd3ca9b	-	retained	missing-final-effect+ordered-replay-verified	kernel/bpf/verifier.c
 xfrm_state_mtu	580-xfrm-state-mtu.tsv	stable	820e501be8aee4b365d218d83227b314309c5fda	32e686ea89a0901ea10eeda05fc2c2fa9b36b1ed	-	retained	missing-final-effect+ordered-replay-verified	net/xfrm/xfrm_state.c
 xfrm_state_cache	590-xfrm-state-cache.tsv	stable	6dab4dec9a49121d079981ac913569f232c06b06	8c6c9dd3b26ef9ffa29a01ffb19270191e5a4a8e	-	retained	missing-final-effect+ordered-replay-verified	net/xfrm/xfrm_state.c
-xfrm6_device_ref	600-xfrm6-device-ref.tsv	stable	43de8a49335e611adb271bbd52e84dfbc11fc185	2071a76c1febb2e1f4078f0a996b83219a9be77a	-	retained	missing-final-effect+ordered-replay-verified	net/ipv6/xfrm6_policy.c
 bridge_ipv6_fragment	610-bridge-ipv6-fragment.tsv	stable	f2e6596d10783557aeb9668da2a3b4d19deb2001	78c927347cd040fefe04046c1fd22a41ace19d5b	-	retained	missing-final-effect+ordered-replay-verified	net/ipv6/netfilter.c
 conntrack_ipv6_mac_header	620-conntrack-ipv6-mac-header.tsv	stable	53ef70a315420ed31581d38343684b3bf9a3c76d	8c98176159eb3f17175d95267321351e4a906458	-	retained	missing-final-effect+ordered-replay-verified	net/ipv6/netfilter/nf_conntrack_reasm.c
 ipv4_raw_ihl	630-ipv4-raw-ihl.tsv	stable	145e9afa5b905229b4788bb72c3255f5a5f77508	45e872ea43aff83f5f9269b0a471643485700113	145e9afa5b905229b4788bb72c3255f5a5f77508	absorbed	official-ancestor+final-reverse-check	net/ipv4/raw.c
@@ -80,7 +79,7 @@ f2fs_listxattr_bounds	patch.sh	stable	7dd01f7d0291583e3e5420c95c7d584e114899bd	d
 blkcg_rstat_release	patch.sh	stable	bbebd9425cad3573d1527441753899b926525a0f	5149120b23c377e425b11bfdcb1933e39245a1c7	-	retained	missing-final-effect+ordered-replay-verified	block/blk-cgroup.c
 timer_base_fast_path	patch.sh	mainline	3ec955713d9617059d2fc8f2816d0b95ace72256	68dca003ed5b13fb40d3b777155c6568438563ef	-	retained	missing-final-effect+ordered-replay-verified	kernel/time/timer.c
 f2fs_dio_overwrite_fast_path	patch.sh	aosp	d860974a7e38d35e9e2c4dc8a9f4223b38b6ad99	fec231f96375f0622cf9bd9427ef2baf5614ac03	-	retained	missing-final-effect+ordered-replay-verified	fs/f2fs/data.c
-eas_cpumask_fast_path	patch.sh	aosp	ff1de90dd7a69ef43586683535ad87ab899a1214	26fce9484b896c6e1c89b30faf18e6790b2a005d	-	retained	missing-final-effect+ordered-replay-verified	kernel/sched/fair.c
+eas_cpumask_fast_path	patch.sh	aosp	ff1de90dd7a69ef43586683535ad87ab899a1214	26fce9484b896c6e1c89b30faf18e6790b2a005d	-	dropped	r536225-identical-generated-code+no-project-delta	kernel/sched/fair.c
 blk_wbt_done_fast_path	patch.sh	aosp	d8b96a79622e03813c221450498ca9742704ebf2	097d27325d53feb894b26bb0c7e152fca314e7b9	-	retained	missing-final-effect+ordered-replay-verified	block/blk-wbt.c
 memcg_rstat_fast_path	patch.sh	aosp	60cada258dfe3694e15c4539259173c37bd5f1fe	5b12701394b4f6a128f5456e3bd8fed4f8740c27	-	retained	missing-final-effect+ordered-replay-verified	mm/memcontrol.c
 tcp_recv_mstamp_fast_path	patch.sh	aosp	0ae1ac7335ca2328c42fbbe2b71bc9c3fc8e65d9	66387ee17b01507a8f2a2b6537c9f7e22c86b509	-	retained	missing-final-effect+ordered-replay-verified	net/ipv4/tcp.c,net/ipv4/tcp_input.c
