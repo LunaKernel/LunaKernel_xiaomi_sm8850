@@ -52,6 +52,8 @@ normalize_git_url() {
 verify_audit_repo() {
 	local label="$1" repo="$2" expected_url="$3"
 	local actual_url git_dir replace_refs unexpected_config
+	# 同次调用的审计仓库不被修改；清单共用的仓库只验证一次。
+	[ "${VERIFIED_AUDIT_REPOS["${repo}|${expected_url}"]:-}" != 1 ] || return 0
 	[ "$(git -C "${repo}" rev-parse --is-bare-repository 2>/dev/null)" = true ] || \
 		die "${label} 不是 bare 审计仓库，请先运行 ./init.sh"
 	git_dir="$(git -C "${repo}" rev-parse --absolute-git-dir)"
@@ -70,12 +72,12 @@ verify_audit_repo() {
 		{ print }
 	')"
 	[ -z "${unexpected_config}" ] || die "${label} 存在非白名单 Git 配置:\n${unexpected_config}"
+	VERIFIED_AUDIT_REPOS["${repo}|${expected_url}"]=1
 }
 
 cleanup() {
 	[ -z "${TMP_ROOT:-}" ] || rm -rf -- "${TMP_ROOT}"
 }
-trap cleanup EXIT
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
@@ -99,6 +101,7 @@ MAINLINE_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sourc
 KBUILD_DIR="$(resolve_workspace_path "${KBUILD_AUDIT_SOURCE_DIR:-sources/linux_kbuild_audit}")"
 TMP_ROOT=""
 declare -a MANIFEST_ROWS=()
+declare -A VERIFIED_AUDIT_REPOS=()
 GROUP_COUNT=0
 
 manifest_group_sequence() {
@@ -356,16 +359,27 @@ verify_sources() {
 }
 
 prepare_patch_cache() {
-	local row order group action source ref commit rest patch_file
+	local row order group action source ref commit date patch_id paths
+	local project_patch project_sha project_patch_id patch_file
 	[ -n "${TMP_ROOT}" ] || TMP_ROOT="$(mktemp -d)"
 	mkdir -p "${TMP_ROOT}/patches"
 	for row in "${MANIFEST_ROWS[@]}"; do
-		IFS=$'\t' read -r order group action source ref commit rest <<<"${row}"
-		[ "${action}" = direct ] || continue
-		source_repo_and_tip "${source}" "${ref}"
+		IFS=$'\t' read -r order group action source ref commit date patch_id paths \
+			project_patch project_sha project_patch_id <<<"${row}"
 		patch_file="${TMP_ROOT}/patches/${order}.patch"
-		env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${SOURCE_REPO}" \
-			show --format= "${commit}" > "${patch_file}"
+		case "${action}" in
+			direct)
+				source_repo_and_tip "${source}" "${ref}"
+				env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${SOURCE_REPO}" \
+					show --format= "${commit}" > "${patch_file}"
+				;;
+			adapt)
+				# 后续各轮使用同一份已固定内容，不重复读取可变的项目文件。
+				cp -- "$(resolve_workspace_path "${project_patch}")" "${patch_file}"
+				[ "$(sha256sum "${patch_file}" | awk '{ print $1 }')" = "${project_sha}" ] || \
+					die "${group} 项目适配补丁准备期间发生变化"
+				;;
+		esac
 	done
 }
 
@@ -375,8 +389,7 @@ row_patch_file() {
 	IFS=$'\t' read -r order group action source ref commit date patch_id paths \
 		project_patch project_sha project_patch_id <<<"${row}"
 	case "${action}" in
-		direct) ROW_PATCH_FILE="${TMP_ROOT}/patches/${order}.patch" ;;
-		adapt) ROW_PATCH_FILE="$(resolve_workspace_path "${project_patch}")" ;;
+		direct|adapt) ROW_PATCH_FILE="${TMP_ROOT}/patches/${order}.patch" ;;
 		proof) ROW_PATCH_FILE="" ;;
 	esac
 }
@@ -532,6 +545,12 @@ usage() {
 	printf '用法: %s {verify-manifest|list SOURCE|list-paths|verify-sources|apply TREE|verify-applied TREE|apply-index TREE INDEX|reverse-index TREE INDEX}\n' "$0" >&2
 	exit 2
 }
+
+# 导入方仍须先验证清单和来源；复用的只是本进程函数，不接受外部跳过标记。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+	return 0
+fi
+trap cleanup EXIT
 
 validate_manifest
 case "${1:-}" in

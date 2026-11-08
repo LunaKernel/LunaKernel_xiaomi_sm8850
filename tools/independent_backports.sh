@@ -37,10 +37,10 @@ load_env_file() {
 	reject_git_environment_overrides
 }
 
-cleanup() {
-	[ -z "${TMP_ROOT:-}" ] || rm -rf -- "${TMP_ROOT}"
+cleanup_independent() {
+	[ -z "${AUDIT_TMP_ROOT:-}" ] || rm -rf -- "${AUDIT_TMP_ROOT}"
 }
-trap cleanup EXIT
+trap cleanup_independent EXIT
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
@@ -48,8 +48,14 @@ load_env_file "${WORKSPACE_DIR}/.env"
 
 MANIFEST_TOOL="${WORKSPACE_DIR}/tools/backport_manifest.sh"
 MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/kmi6-2026-09-independent"
-TMP_ROOT=""
+AUDIT_TMP_ROOT=""
+[ -f "${MANIFEST_TOOL}" ] && [ ! -L "${MANIFEST_TOOL}" ] || die "缺少九月回移清单工具"
+. "${MANIFEST_TOOL}"
 declare -a MANIFESTS=()
+declare -A BATCH_ROWS=() BATCH_GROUPS=() BATCH_PINS=() BATCH_TMP=()
+MANIFESTS_READY=0
+SOURCES_READY=0
+PATCHES_READY=0
 
 manifest_pin_name() {
 	local base key
@@ -90,67 +96,105 @@ discover_manifests() {
 	done < <(compgen -A variable | LC_ALL=C sort)
 }
 
-run_manifest() {
-	local manifest="$1" pin_name pin_value
-	shift
-	pin_name="$(manifest_pin_name "${manifest}")"
-	pin_value="${!pin_name:-}"
-	BACKPORT_INDEPENDENT=1 \
-	BACKPORT_MANIFEST_OVERRIDE="${manifest}" \
-	BACKPORT_MANIFEST_SHA256_OVERRIDE="${pin_value}" \
-		bash "${MANIFEST_TOOL}" "$@"
+select_manifest() {
+	local manifest="$1"
+	[ "${MANIFESTS_READY}" = 1 ] && [ -n "${BATCH_PINS[${manifest}]:-}" ] || \
+		die "清单尚未由本次调用验证"
+	MANIFEST="${manifest}"
+	MANIFEST_SHA256="${BATCH_PINS[${manifest}]}"
+	INDEPENDENT_MANIFEST=1
+	mapfile -t MANIFEST_ROWS <<<"${BATCH_ROWS[${manifest}]}"
+	GROUP_COUNT="${BATCH_GROUPS[${manifest}]}"
+	TMP_ROOT="${BATCH_TMP[${manifest}]:-}"
 }
 
 verify_manifests() {
-	local manifest source duplicates overlap new_commits old_commits
-	[ -f "${MANIFEST_TOOL}" ] && [ ! -L "${MANIFEST_TOOL}" ] || \
-		die "缺少 九月回移清单工具"
+	local manifest pin_name row duplicates overlap
+	local order group action source ref commit rest
+	local -a new_commits=() old_commits=()
+	[ "${MANIFESTS_READY}" != 1 ] || return 0
 	discover_manifests
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" verify-manifest >/dev/null
-	done
-	[ "${#MANIFESTS[@]}" -gt 0 ] || return 0
-	TMP_ROOT="${TMP_ROOT:-$(mktemp -d)}"
-	new_commits="${TMP_ROOT}/new-commits"
-	old_commits="${TMP_ROOT}/old-commits"
-	: > "${new_commits}"
-	: > "${old_commits}"
-	for manifest in "${MANIFESTS[@]}"; do
-		for source in aosp stable mainline kbuild; do
-			run_manifest "${manifest}" list "${source}" >> "${new_commits}"
+		MANIFEST="${manifest}"
+		pin_name="$(manifest_pin_name "${manifest}")"
+		MANIFEST_SHA256="${!pin_name}"
+		INDEPENDENT_MANIFEST=1
+		validate_manifest
+		BATCH_ROWS["${manifest}"]="$(printf '%s\n' "${MANIFEST_ROWS[@]}")"
+		BATCH_GROUPS["${manifest}"]="${GROUP_COUNT}"
+		BATCH_PINS["${manifest}"]="${MANIFEST_SHA256}"
+		for row in "${MANIFEST_ROWS[@]}"; do
+			IFS=$'\t' read -r order group action source ref commit rest <<<"${row}"
+			new_commits+=("${commit}")
 		done
 	done
-	duplicates="$(LC_ALL=C sort "${new_commits}" | uniq -d)"
+	if [ "${#MANIFESTS[@]}" = 0 ]; then
+		MANIFESTS_READY=1
+		return 0
+	fi
+	duplicates="$(printf '%s\n' "${new_commits[@]}" | LC_ALL=C sort | uniq -d)"
 	[ -z "${duplicates}" ] || die "独立回移清单存在重复官方提交:\n${duplicates}"
-	for source in aosp stable mainline kbuild; do
-		bash "${MANIFEST_TOOL}" list "${source}" >> "${old_commits}"
+	MANIFEST="$(resolve_workspace_path "${SELECTED_BACKPORT_MANIFEST:-patches/backports/kmi6-2026-09-selected-backports.tsv}")"
+	MANIFEST_SHA256="${SELECTED_BACKPORT_MANIFEST_SHA256:-}"
+	INDEPENDENT_MANIFEST=0
+	validate_manifest
+	for row in "${MANIFEST_ROWS[@]}"; do
+		IFS=$'\t' read -r order group action source ref commit rest <<<"${row}"
+		old_commits+=("${commit}")
 	done
-	overlap="$(LC_ALL=C sort "${new_commits}" "${old_commits}" | uniq -d)"
+	overlap="$(printf '%s\n' "${new_commits[@]}" "${old_commits[@]}" | LC_ALL=C sort | uniq -d)"
 	[ -z "${overlap}" ] || die "独立回移与现有固定集合重复:\n${overlap}"
+	MANIFESTS_READY=1
 }
 
 list_commits() {
-	local source="$1" manifest
+	local requested_source="$1" manifest row order group action source ref commit rest
 	verify_manifests
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" list "${source}"
+		select_manifest "${manifest}"
+		for row in "${MANIFEST_ROWS[@]}"; do
+			IFS=$'\t' read -r order group action source ref commit rest <<<"${row}"
+			[ "${source}" != "${requested_source}" ] || printf '%s\n' "${commit}"
+		done
 	done
 }
 
 list_paths() {
 	local manifest
 	verify_manifests
+	AUDIT_TMP_ROOT="${AUDIT_TMP_ROOT:-$(mktemp -d)}"
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" list-paths
+		select_manifest "${manifest}"
+		TMP_ROOT="${AUDIT_TMP_ROOT}"
+		write_path_list
+		cat "${TMP_ROOT}/paths"
 	done | LC_ALL=C sort -u
 }
 
-verify_sources() {
+verify_all_sources() {
 	local manifest
+	[ "${SOURCES_READY}" != 1 ] || return 0
 	verify_manifests
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" verify-sources >/dev/null
+		select_manifest "${manifest}"
+		verify_sources
 	done
+	SOURCES_READY=1
+}
+
+prepare_all_patches() {
+	local manifest
+	[ "${PATCHES_READY}" != 1 ] || return 0
+	verify_all_sources
+	AUDIT_TMP_ROOT="${AUDIT_TMP_ROOT:-$(mktemp -d)}"
+	for manifest in "${MANIFESTS[@]}"; do
+		select_manifest "${manifest}"
+		TMP_ROOT="$(mktemp -d "${AUDIT_TMP_ROOT}/manifest.XXXXXX")"
+		BATCH_TMP["${manifest}"]="${TMP_ROOT}"
+		prepare_patch_cache
+		write_path_list
+	done
+	PATCHES_READY=1
 }
 
 tracked_diff() {
@@ -177,11 +221,10 @@ verify_base_diff() {
 	[[ "${expected_base}" =~ ^[0-9a-f]{64}$ ]] || die "GKI common 基础差异 SHA-256 格式错误"
 	[ "$(git -C "${tree}" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || \
 		die "独立回移目标不是 Git 工作树"
-	verify_sources
-	TMP_ROOT="${TMP_ROOT:-$(mktemp -d)}"
-	index_file="${TMP_ROOT}/layered.index"
-	current_patch="${TMP_ROOT}/current.patch"
-	replay_patch="${TMP_ROOT}/replay.patch"
+	prepare_all_patches
+	index_file="${AUDIT_TMP_ROOT}/layered.index"
+	current_patch="${AUDIT_TMP_ROOT}/current.patch"
+	replay_patch="${AUDIT_TMP_ROOT}/replay.patch"
 	env GIT_INDEX_FILE="${index_file}" git -C "${tree}" read-tree HEAD
 	tracked_diff "${tree}" > "${current_patch}"
 	actual_final="$(sha256sum "${current_patch}" | awk '{ print $1 }')"
@@ -190,17 +233,19 @@ verify_base_diff() {
 			apply --cached "${current_patch}"
 	fi
 	for ((i=${#MANIFESTS[@]} - 1; i >= 0; i--)); do
-		run_manifest "${MANIFESTS[i]}" reverse-index "${tree}" "${index_file}"
+		select_manifest "${MANIFESTS[i]}"
+		apply_sequence_to_index "${tree}" "${index_file}" reverse
 	done
 	actual_base="$(tracked_index_diff "${tree}" "${index_file}" | sha256sum | awk '{ print $1 }')"
 	[ "${actual_base}" = "${expected_base}" ] || \
 		die "剥离独立回移后的 GKI common 基础差异不匹配: ${actual_base}"
 
 	for manifest in "${MANIFESTS[@]}"; do
-		one_index="$(mktemp "${TMP_ROOT}/independent.XXXXXX")"
+		select_manifest "${manifest}"
+		one_index="$(mktemp "${AUDIT_TMP_ROOT}/independent.XXXXXX")"
 		cp -- "${index_file}" "${one_index}"
-		run_manifest "${manifest}" apply-index "${tree}" "${one_index}"
-		run_manifest "${manifest}" reverse-index "${tree}" "${one_index}"
+		apply_sequence_to_index "${tree}" "${one_index}" forward
+		apply_sequence_to_index "${tree}" "${one_index}" reverse
 		one_base="$(tracked_index_diff "${tree}" "${one_index}" | sha256sum | awk '{ print $1 }')"
 		[ "${one_base}" = "${expected_base}" ] || \
 			die "独立回移无法单独撤销: $(basename "${manifest}")"
@@ -208,7 +253,8 @@ verify_base_diff() {
 	done
 
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" apply-index "${tree}" "${index_file}"
+		select_manifest "${manifest}"
+		apply_sequence_to_index "${tree}" "${index_file}" forward
 	done
 	tracked_index_diff "${tree}" "${index_file}" > "${replay_patch}"
 	replay_final="$(sha256sum "${replay_patch}" | awk '{ print $1 }')"
@@ -221,17 +267,19 @@ verify_base_diff() {
 
 apply_all() {
 	local tree="$1" manifest
-	verify_sources
+	prepare_all_patches
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" apply "${tree}" >/dev/null
+		select_manifest "${manifest}"
+		apply_set "${tree}" >/dev/null
 	done
 }
 
 verify_applied() {
 	local tree="$1" manifest
-	verify_sources
+	prepare_all_patches
 	for manifest in "${MANIFESTS[@]}"; do
-		run_manifest "${manifest}" verify-applied "${tree}" >/dev/null
+		select_manifest "${manifest}"
+		verify_applied_set "${tree}" >/dev/null
 	done
 }
 
@@ -257,7 +305,7 @@ case "${1:-}" in
 		;;
 	verify-sources)
 		[ "$#" = 1 ] || usage
-		verify_sources
+		verify_all_sources
 		log_success "九月独立回移全部官方来源检查通过"
 		;;
 	apply)
