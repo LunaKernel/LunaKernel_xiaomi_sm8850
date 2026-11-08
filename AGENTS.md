@@ -4,5 +4,6 @@
 
 - [CI 构建方法](docs/BUILDING.md)
 - [贡献与回移维护](docs/CONTRIBUTING.md)
+- 常规维护与更新（GKI 基线、回移清理、外部组件及固定依赖）须查阅并遵循 [常规维护流程](docs/MAINTENANCE.md)。
 - [验证记录](docs/VALIDATION.md)
 - [安全问题](docs/SECURITY.md)
