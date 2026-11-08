@@ -220,7 +220,7 @@ def extract_archive(archive, target, *, zstd=False):
             unpack(bundle)
 
 
-STOCK_IMAGE = 'work/cache/downloads/ota/system_dlkm-os4.0.6.0.img'
+STOCK_IMAGE = 'work/cache/downloads/ota/os4.0.6.0/system_dlkm.img'
 
 
 def check_input_pins():

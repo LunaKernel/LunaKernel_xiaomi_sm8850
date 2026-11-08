@@ -1662,7 +1662,7 @@ ANDROID17_STOCK_RUST_BINDER_MISSING_SHA256="${ANDROID17_STOCK_RUST_BINDER_MISSIN
 ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX="${ANDROID17_STOCK_MODULE_VERMAGIC_SUFFIX:-}"
 ANDROID17_STOCK_MODULE_COUNT="${ANDROID17_STOCK_MODULE_COUNT:-}"
 ANDROID17_STOCK_MODULES_ORDER_SHA256="${ANDROID17_STOCK_MODULES_ORDER_SHA256:-}"
-ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-work/cache/downloads/ota/system_dlkm-os4.0.6.0.img}")"
+ANDROID17_STOCK_SYSTEM_DLKM_FILE="$(resolve_workspace_path "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-work/cache/downloads/ota/os4.0.6.0/system_dlkm.img}")"
 ANDROID17_STOCK_SYSTEM_DLKM_SHA256="${ANDROID17_STOCK_SYSTEM_DLKM_SHA256:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_SIZE="${ANDROID17_STOCK_SYSTEM_DLKM_SIZE:-}"
 ANDROID17_STOCK_SYSTEM_DLKM_RELEASE="${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE:-}"
@@ -1740,8 +1740,8 @@ done
 [[ "${ANDROID17_STOCK_MODULES_ORDER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "固定 OTA modules.order SHA-256 格式错误"
 [[ "${ANDROID17_STOCK_SYSTEM_DLKM_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "system_dlkm.img SHA-256 快照格式错误"
 [[ "${ANDROID17_STOCK_SYSTEM_DLKM_SIZE}" =~ ^[1-9][0-9]*$ ]] || die "system_dlkm.img 大小快照格式错误"
-[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "work/cache/downloads/ota/system_dlkm-os4.0.6.0.img" ] || \
-    die "system_dlkm 兼容性输入路径必须固定为 work/cache/downloads/ota/system_dlkm-os4.0.6.0.img"
+[ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "work/cache/downloads/ota/os4.0.6.0/system_dlkm.img" ] || \
+    die "system_dlkm 兼容性输入路径必须固定为 work/cache/downloads/ota/os4.0.6.0/system_dlkm.img"
 [ -n "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" ] && \
     [[ "${ANDROID17_STOCK_SYSTEM_DLKM_RELEASE}" =~ ^[A-Za-z0-9._+-]+$ ]] || \
     die "system_dlkm stock release 快照格式错误"

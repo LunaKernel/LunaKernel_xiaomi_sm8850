@@ -38,7 +38,7 @@ class RunBuildTests(unittest.TestCase):
         shutil.copyfile(PROJECT / "tools/release_artifacts.py", self.root / "tools/release_artifacts.py")
         for name in ('ci_dependencies.py', 'tree_sha256.py'):
             shutil.copyfile(PROJECT / 'tools' / name, self.root / 'tools' / name)
-        image = self.root / "work/cache/downloads/ota/system_dlkm-os4.0.6.0.img"
+        image = self.root / "work/cache/downloads/ota/os4.0.6.0/system_dlkm.img"
         image.parent.mkdir(parents=True)
         image.write_bytes(b"public CI input fixture\n")
         # 只生成公开测试 pin，不读取项目真实 .env 或实际镜像。
@@ -189,7 +189,7 @@ COMMON_REPO
         self.assertIn("core.filemode=false", config)
 
     def test_input_checks_do_not_require_image_until_after_init(self):
-        image = self.root / 'work/cache/downloads/ota/system_dlkm-os4.0.6.0.img'
+        image = self.root / 'work/cache/downloads/ota/os4.0.6.0/system_dlkm.img'
         original = image.read_bytes()
         for content, message in ((None, '固定镜像缺失'), (b'short', '固定镜像大小'),
                                  (b'x' * len(original), '固定镜像 SHA-256')):

@@ -8,7 +8,7 @@
 
 以下代码路径均相对于 runner 中的仓库根目录，脚本说明用于维护 CI 内部流程。
 
-`patches/init.sh` 从依赖仓固定 Release 下载原样发布的 `system_dlkm-os4.0.6.0.img`，校验后缓存至 `work/cache/downloads/ota/system_dlkm-os4.0.6.0.img`，共 17,281,024 字节。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。正常构建不重新提取 stock 清单，不需要完整 OTA 或其余分区镜像；人工重建清单才需要 `evidence/os4.0.6.0/` 中同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。原始外部证据仍按 `evidence/` 规则保留，不自动清理。
+`patches/init.sh` 从依赖仓固定 Release 下载原样发布的 `system_dlkm-os4.0.6.0.img`，校验后缓存至 `work/cache/downloads/ota/os4.0.6.0/system_dlkm.img`，共 17,281,024 字节。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。正常构建不重新提取 stock 清单，不需要完整 OTA 或其余分区镜像；人工重建清单才需要 `evidence/os4.0.6.0/` 中同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。原始外部证据仍按 `evidence/` 规则保留，不自动清理。
 
 清单工具由 `patches/init.sh` 按固定 Git blob 与 SHA-256 准备于 `work/tools/stock-evidence/`。同一 OTA 的实机验收与静态模块闭包核对均已完成，范围见 [VALIDATION.md](VALIDATION.md)。
 

@@ -72,7 +72,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 - `patches/patch_external.sh`：接入已准备的外部组件。
 - `patches/build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计，闭包齐全且漂移审查完成后打包。
 - `tools/ci/`：宿主准备、标准流程调度与交付通知。`check.yml` 在 main 的 push/PR 执行轻量检查；`build.yml` 手动执行完整构建，分为 build、notify 两个 job。
-- `work/cache/downloads/ota/system_dlkm-os4.0.6.0.img`：CI 构建使用的固定模块闭包输入，由 init 从依赖仓固定 Release 下载，大小和摘要由 `.env` 校验。其他分区镜像与设备证据放在 `evidence/`。
+- `work/cache/downloads/ota/os4.0.6.0/system_dlkm.img`：CI 构建使用的固定模块闭包输入，由 init 从依赖仓固定 Release 下载，大小和摘要由 `.env` 校验。其他分区镜像与设备证据放在 `evidence/`。
 
 `INIT_FETCH_JOBS` 控制初始化并发，CI 使用 2；独立任务共用槽位，完成后立即补位。
 
@@ -111,7 +111,7 @@ CI 缓存 ccache、固定下载、Manager APK、干净 common、回移内容目�
 - ExtTSP MUST 显式禁止作用于无 profile 的函数。AutoFDO 的 Profi 固定使用 `-sample-profile-even-flow-distribution=false`，以官方单路径增广规避当前组合中均匀分流 DAG 搜索的异常耗时；LLVM 22 与 LLVM 23 均已复现该路径，保留 sample-use、Profi 最小费用流与 MIR profile loader。该策略可能改变推断权重和代码布局，不得声称性能等价。C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。
 - stock 清单覆盖 `OS4.0.6.0.XPCCNXM` 同包四分区全部模块，4090 项实际 vmlinux 依赖及五列 tuple 的摘要以 `.env` 为准。system_dlkm 的 103 个模块中，102 个必须严格闭包；唯一 stock `rust_binder.ko` 保留固定镜像身份、240 项原始需求及无导出、无模块依赖、无反向依赖证明，其本次比较完整记录，不得宣称该 `.ko` 可加载。放行另须证明 `modules.builtin` 包含 Rust Binder、`modules.order` 不含它、`System.map` 含 Rust 初始化函数/initcall 且无 C 初始化函数，实际配置在符号解析前屏蔽 stock 同名模块。其余模块不得套用此替代；项目新增模块独立执行第 3 节门禁。
-- 输入固定为 `work/cache/downloads/ota/system_dlkm-os4.0.6.0.img`，由 `patches/init.sh` 下载准备，大小与 SHA-256 由 `.env` 固定。`patches/build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
+- 输入固定为 `work/cache/downloads/ota/os4.0.6.0/system_dlkm.img`，由 `patches/init.sh` 下载准备，大小与 SHA-256 由 `.env` 固定。`patches/build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
 
 发布产物名称：
 
