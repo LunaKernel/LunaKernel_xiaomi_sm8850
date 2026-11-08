@@ -357,6 +357,7 @@ prepare_magiskboot() {
         part_path="${apk_path}.part"
         log_step "下载官方 Magisk v${MAGISK_VERSION}，准备 arm64 magiskboot"
         curl --proto '=https' --tlsv1.2 -fSL --retry 3 \
+            --header 'Accept: application/octet-stream' \
             -o "${part_path}" "${MAGISK_APK_URL}" || die "Magisk v${MAGISK_VERSION} 下载失败"
         actual_sha256="$(sha256sum "${part_path}" | awk '{ print $1 }')"
         [ "${actual_sha256}" = "${MAGISK_APK_SHA256}" ] || \
@@ -545,7 +546,7 @@ KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2712}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
 MAGISK_VERSION="${MAGISK_VERSION:-31.1}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-0972f67d97f9b6302b67c5171283330c74114b4a}"
-MAGISK_APK_URL="${MAGISK_APK_URL:-https://github.com/topjohnwu/Magisk/releases/download/v31.1/Magisk-v31.1.apk}"
+MAGISK_APK_URL="${MAGISK_APK_URL:-https://api.github.com/repos/topjohnwu/Magisk/releases/assets/673844395}"
 MAGISK_APK_SHA256="${MAGISK_APK_SHA256:-89cefac0a318afa39fb3880c45c87b036c05bc1ebf02a7a715b7f8d7c26ac6e7}"
 MAGISKBOOT_ARM64_SHA256="${MAGISKBOOT_ARM64_SHA256:-97e9ec75731103d31c9e1effca7a50c6444309ce8f78c2ec27e9fe721da4bb54}"
 AK3_UPSTREAM_COMMIT="${AK3_UPSTREAM_COMMIT:-41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1}"
