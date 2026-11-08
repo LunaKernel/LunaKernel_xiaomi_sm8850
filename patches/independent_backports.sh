@@ -46,7 +46,7 @@ SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 load_env_file "${WORKSPACE_DIR}/.env"
 
-MANIFEST_TOOL="${WORKSPACE_DIR}/tools/backport_manifest.sh"
+MANIFEST_TOOL="${WORKSPACE_DIR}/patches/backport_manifest.sh"
 MANIFEST_DIR="${WORKSPACE_DIR}/patches/backports/kmi6-2026-09-independent"
 AUDIT_TMP_ROOT=""
 [ -f "${MANIFEST_TOOL}" ] && [ ! -L "${MANIFEST_TOOL}" ] || die "缺少九月回移清单工具"

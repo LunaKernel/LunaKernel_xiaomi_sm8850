@@ -76,7 +76,6 @@ load_env_file() {
     reject_git_environment_overrides
 }
 
-sanitize_path_component() { printf '%s' "$1" | LC_ALL=C tr -cs 'A-Za-z0-9._-' '_'; }
 resolve_workspace_path() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${HOST_WORKSPACE_DIR}" "$1" ;; esac; }
 normalize_git_url() { printf '%s' "$1" | sed -e 's#/$##' -e 's#\.git$##'; }
 
@@ -122,57 +121,6 @@ verify_no_hidden_index_flags() {
 
 tree_sha256() {
     python3 "${HOST_WORKSPACE_DIR}/tools/tree_sha256.py" "$1"
-}
-
-append_orbenv_var() {
-    local name="$1"
-    case ":${ORBENV:-}:" in *:"${name}":*) ;; *) ORBENV="${ORBENV:+${ORBENV}:}${name}" ;; esac
-}
-
-prepare_orb_passthrough_env() {
-    local var
-    for var in INIT_FETCH_JOBS NO_COLOR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
-        [ -z "${!var:-}" ] || append_orbenv_var "${var}"
-    done
-    export ORBENV
-}
-
-orbctl_run() {
-    local cmd=(orbctl run)
-    [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}")
-    "${cmd[@]}" "$@"
-}
-
-orbctl_run_host_path() {
-    local cmd=(orbctl run -p)
-    [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}")
-    "${cmd[@]}" "$@"
-}
-
-sync_control_files_to_orb() {
-    local items="init.sh patch.sh patch_external.sh build.sh"
-    [ ! -f "${HOST_WORKSPACE_DIR}/.env" ] || items="${items} .env"
-    [ ! -d "${HOST_WORKSPACE_DIR}/ak3_template" ] || items="${items} ak3_template"
-    [ ! -d "${HOST_WORKSPACE_DIR}/patches" ] || items="${items} patches"
-    [ ! -d "${HOST_WORKSPACE_DIR}/tools" ] || items="${items} tools"
-    [ ! -d "${HOST_WORKSPACE_DIR}/userspace" ] || items="${items} userspace"
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; mkdir -p \"\$target\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/tools\" \"\$target/userspace\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
-}
-
-run_in_orb_if_needed() {
-    local host_os
-    host_os="$(uname -s)"
-    case "${host_os}" in
-        Linux) return ;;
-        Darwin)
-            command -v orbctl >/dev/null 2>&1 || die "当前是 macOS，请启动 OrbStack。"
-            prepare_orb_passthrough_env
-            sync_control_files_to_orb
-            log_info "macOS 环境，进入 Orb Linux 工作区 ${ORB_LINUX_WORKSPACE} 执行 ${SCRIPT_NAME}"
-            if orbctl_run sh -lc "cd \"\$HOME/${ORB_LINUX_WORKSPACE}\" && exec bash \"./${SCRIPT_NAME}\" \"\$@\"" sh "$@"; then exit 0; else exit $?; fi
-            ;;
-        *) die "不支持的操作系统: ${host_os}" ;;
-    esac
 }
 
 ensure_repo() {
@@ -550,6 +498,10 @@ prepare_android_ndk() {
 
 prepare_userspace_sources() {
     [ "${ENABLE_IPSET}" = "1" ] || return 0
+    ensure_repo "额外模块模板" "${EXTRA_MODULES_DIR}" "${EXTRA_MODULES_REPO:?缺少额外模块 URL pin}" \
+        "${EXTRA_MODULES_REF:?缺少额外模块 ref pin}" "${EXTRA_MODULES_COMMIT:?缺少额外模块 commit pin}"
+    [ "$(tree_sha256 "${EXTRA_MODULES_DIR}/ipset")" = "${IPSET_MODULE_TREE_SHA256:?缺少 IPSet 模板树 pin}" ] || \
+        die "IPSet 模板树完整性校验失败"
     prepare_source_archive "ipset ${IPSET_VERSION}" "${IPSET_URL}" \
         "${SOURCE_DOWNLOAD_DIR}/ipset-${IPSET_VERSION}.tar.bz2" sha512sum "${IPSET_SHA512}" \
         "${IPSET_DIR}" "ipset-${IPSET_VERSION}" "${IPSET_TREE_SHA256}"
@@ -564,7 +516,6 @@ prepare_build_dependencies() {
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
-SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
 parse_init_args "$@"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
@@ -575,13 +526,6 @@ validate_dependency_pins
     die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
 [ "${ENABLE_SUSFS:-0}" = "1" ] || \
     die "Luna 固定构建只支持 ENABLE_SUSFS=1；拒绝未审计的第二套产品矩阵"
-
-WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
-WORKSPACE_NAME="${WORKSPACE_NAME:-workspace}"
-ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
-ORB_LINUX_PROJECT="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME}"
-ORB_LINUX_WORKSPACE="${ORB_LINUX_PROJECT}/workspace"
-run_in_orb_if_needed "$@"
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git}"
 KERNEL_BRANCH="${KERNEL_BRANCH:-popsicle-w-oss}"
@@ -625,6 +569,7 @@ IPSET_URL="${IPSET_URL:-https://ipset.netfilter.org/ipset-7.24.tar.bz2}"
 IPSET_SHA512="${IPSET_SHA512:-18ccb49bd38083f0556b11e1d17f43791c52a2b094c9a500b6f770796b17e8e70c3860a628eac2252eb672b1fc9de734d3a0e0823d61dd9be7b4188adc6dd214}"
 IPSET_TREE_SHA256="${IPSET_TREE_SHA256:-70530678f3318aad36a3fb8acb3eba17a27ad5e464c0caeb8912dee43f0a81ea}"
 IPSET_DIR="$(resolve_workspace_path "${IPSET_SOURCE_DIR:-sources/ipset-7.24}")"
+EXTRA_MODULES_DIR="$(resolve_workspace_path "${EXTRA_MODULES_SOURCE_DIR:-sources/extra-modules}")"
 LIBMNL_VERSION="${LIBMNL_VERSION:-1.0.5}"
 LIBMNL_URL="${LIBMNL_URL:-https://www.netfilter.org/projects/libmnl/files/libmnl-1.0.5.tar.bz2}"
 LIBMNL_SHA256="${LIBMNL_SHA256:-274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525}"

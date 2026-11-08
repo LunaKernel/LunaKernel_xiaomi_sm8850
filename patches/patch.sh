@@ -51,7 +51,6 @@ load_env_file() {
     reject_git_environment_overrides
 }
 
-sanitize_path_component() { printf '%s' "$1" | LC_ALL=C tr -cs 'A-Za-z0-9._-' '_'; }
 resolve_workspace_path() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${HOST_WORKSPACE_DIR}" "$1" ;; esac; }
 
 reject_git_object_overrides() {
@@ -94,38 +93,13 @@ verify_no_hidden_index_flags() {
         die "${label} 存在 skip-worktree/assume-unchanged 标记，无法证明源码状态:\n${hidden}"
 }
 
-orbctl_run() { local cmd=(orbctl run); [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}"); "${cmd[@]}" "$@"; }
-orbctl_run_host_path() { local cmd=(orbctl run -p); [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}"); "${cmd[@]}" "$@"; }
-
-sync_control_files_to_orb() {
-    local items="init.sh patch.sh patch_external.sh build.sh patches tools"
-    [ ! -f "${HOST_WORKSPACE_DIR}/.env" ] || items="${items} .env"
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; mkdir -p \"\$target\"; tar -cf - ${items} | tar -xf - -C \"\$target\""
-}
-
-run_in_orb_if_needed() {
-    case "$(uname -s)" in
-        Linux) return ;;
-        Darwin)
-            command -v orbctl >/dev/null 2>&1 || die "当前是 macOS，请启动 OrbStack。"
-            sync_control_files_to_orb
-            if orbctl_run sh -lc "cd \"\$HOME/${ORB_LINUX_WORKSPACE}\" && exec bash ./patch.sh \"\$@\"" sh "$@"; then exit 0; else exit $?; fi
-            ;;
-        *) die "不支持的操作系统" ;;
-    esac
-}
-
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
-HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
-WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
-ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
-ORB_LINUX_WORKSPACE="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME:-workspace}/workspace"
-run_in_orb_if_needed "$@"
 
-[ "$#" = 0 ] || die "用法: bash patch.sh"
-BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
+[ "$#" = 0 ] || die "用法: bash patches/patch.sh"
+BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh"
 verify_backport_bundle "${HOST_WORKSPACE_DIR}"
 COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 [ -d "${COMMON_DIR}/.git" ] || die "GKI common 未初始化，请先运行 ./init.sh"
@@ -377,10 +351,10 @@ if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX}" = "1" ]; then
 fi
 
 if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-    bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" apply "${COMMON_DIR}"
+    bash "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh" apply "${COMMON_DIR}"
 fi
 
-bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
+bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" \
     apply "${COMMON_DIR}"
 
 log_success "内部 patch 阶段完成"

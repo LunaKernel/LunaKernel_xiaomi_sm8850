@@ -1,23 +1,20 @@
-# 构建 Luna Kernel
+# CI 构建 Luna Kernel
 
-使用 x86_64 Linux；macOS 通过已配置的 OrbStack Linux 执行相同流程。主机需要 Bash、Git、curl、tar、bzip2、xz、unzip、7-Zip、patch、Python 3、GNU coreutils 和常规内核构建依赖。源码与缓存占用数十 GiB。
+完整编译统一在 GitHub Actions 的 x86_64 Linux runner 上执行，构建环境由 `tools/ci/prepare_runner.sh` 准备。在仓库 Actions 页面选择 `.github/workflows/build.yml` 对应工作流，点击 Run workflow 并选择 main；构建完成后从该次运行下载交付 artifact。
 
 所有 pin、构建身份和参考摘要以 [`.env`](../.env) 为准。固定源码的差异必须由补丁脚本精确证明；禁止手改构建配置、符号表或包内容绕过检查。
 
 ## 输入与流程
 
+以下代码路径均相对于 runner 中的仓库根目录，脚本说明用于维护 CI 内部流程。
+
 发布构建直接使用仓库中的 `ci/inputs/os4.0.6.0/system_dlkm.img`，共 17,281,024 字节。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。正常构建不重新提取 stock 清单，不需要完整 OTA 或其余分区镜像；人工重建清单才需要 `evidence/os4.0.6.0/` 中同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。原始外部证据仍按 `evidence/` 规则保留，不自动清理。
 
 清单工具由 `init.sh` 按固定 Git blob 与 SHA-256 准备于 `work/tools/stock-evidence/`。同一 OTA 的实机验收与静态模块闭包核对均已完成，范围见 [VALIDATION.md](VALIDATION.md)。
 
-```bash
-./init.sh
-./patch.sh
-./patch_external.sh
-./build.sh
-```
+CI 按初始化、内核回移、外部组件接入、编译与审计的顺序运行以下脚本。
 
-`init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
+`init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patches/patch.sh` 应用官方内核回移；`patches/patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
 主仓库只消费固定依赖包。`.env` 必须配置回移 manifest 摘要、回移归档 URL/SHA-256、工具链归档 URL/SHA-256，以及工具链安装树摘要。当前依赖版本为 [ci-deps-v1-3fc59ff](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-3fc59ff)。
 
@@ -25,11 +22,15 @@
 
 依赖制作、官方来源审计与候选调查由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 维护。更新时以固定主项目提交提供 pins 和补丁清单，在依赖仓库完成来源审计、组装及打包，发布新版本后更新主项目的 URL 与摘要。具体制作命令见依赖仓库 README。
 
+额外模块模板由 [extra-modules](https://github.com/LunaKernel/extra-modules) 管理。主仓 `.env` 固定其提交与 `ipset/` 模板目录 SHA-256，当前提交为 `50c5b91d7eac1ed88cc93557c89259c49683333a`；`init.sh` 拉取并校验模板，`build.sh` 编译 IPSet 用户态命令、组装模块并交付。
+
 人工重建 stock 清单时，通过依赖仓库准备历史资料，并向 `tools/extract_xiaomi17_android17_stock_common_kmi.py` 的 `--common-repo` 显式传入准备好的 AOSP 历史仓库路径。
 
-`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2；源码、工具和回移依赖共用槽位，任务完成后立即补位，任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
+`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，CI 使用 2；源码、工具和回移依赖共用槽位，任务完成后立即补位，任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
 
 ## GitHub Actions
+
+本地开发可运行 `git diff --check`、相关 shell 语法检查与 `bash tools/ci/check.sh`；这些轻量检查不执行完整编译。完整编译与目标 OTA 模块闭包验证由以下 CI 工作流执行。
 
 `.github/workflows/check.yml` 在 main 的 push 和以 main 为目标的 PR 执行轻量检查，使用 `.env` 固定的官方 actionlint 校验 workflow；`.github/workflows/build.yml` 仅支持从 main 手动触发完整构建，不创建 GitHub Release。云端构建状态以对应提交的 Actions 记录为准，现有实机验收只属于 [VALIDATION.md](VALIDATION.md) 中的既有二进制。
 
@@ -52,7 +53,7 @@ C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`�
 
 Binder 仅使用内置 Rust 实现及其 Binderfs，关闭 C Binder；`module_blacklist=rust_binder` 拒绝 ROM 同名旧模块。构建通过配置、`modules.builtin`、`modules.order`、`System.map` 和命令行证明替代关系；保留旧模块完整需求审计，其余 stock 模块严格检查 ABI/KMI。
 
-实际模块闭包与全量参考快照分开检查：目标依赖的符号、CRC、provider、导出类型、namespace 和相关类型不兼容时拒绝发布；参考漂移须保留快照、完成审查并更新摘要。完整门禁见 [AGENTS.md](../AGENTS.md)。
+实际模块闭包与全量参考快照分开检查：目标依赖的符号、CRC、provider、导出类型、namespace 和相关类型不兼容时拒绝发布；参考漂移须保留快照、完成审查并更新摘要。完整门禁见 [项目协作约束](PROJECT_RULES.md)。
 
 AutoFDO 使用 common 自带的 `gki/aarch64/afdo/kernel.afdo`，校验摘要、Git blob 和 LLVM 可读性，实际 C/Rust 命令必须带 sample-use。固定 `-sample-profile-even-flow-distribution=false` 使用 Profi 官方单路径增广，规避均匀分流 DAG 搜索的异常耗时；保留最小费用流与 MIR profile loader。profile 来自 Pixel 工作负载，该参数影响权重推断和代码布局。
 
@@ -83,4 +84,4 @@ AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/l
 
 Manager 使用 `.env` 固定的官方 main CI。`tools/ksu_manager.py` 校验源码/UAPI、归档与 APK 摘要、证书、包名版本和 arm64 组件，构建后核对实际内核接受的签名。优先复用 `work/cache/ksu-manager/` 或已有匹配 APK，缺失才下载固定 artifact；官方 artifact 过期不影响已保存 APK 的摘要验证。无可用副本时在编译前失败，须恢复同 SHA 官方 APK 或审查后更新 pin，不追随 latest、不本地编译替代。
 
-构建只接受干净项目提交，成功后状态为 `awaiting-device`。产物、审计与缓存的保留和清理按 [项目目录规则](../AGENTS.md#4-脚本职责) 执行。
+构建只接受干净项目提交，成功后状态为 `awaiting-device`。产物、审计与缓存的保留和清理按 [项目目录规则](PROJECT_RULES.md#4-脚本职责) 执行。

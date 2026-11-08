@@ -24,8 +24,9 @@ class BackportBatchTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         (self.root / "tools").mkdir()
+        (self.root / "patches").mkdir()
         for name in ("independent_backports.sh", "backport_manifest.sh"):
-            shutil.copyfile(ROOT / "tools" / name, self.root / "tools" / name)
+            shutil.copyfile(ROOT / "patches" / name, self.root / "patches" / name)
         self.env = {key: value for key, value in os.environ.items()
                     if not key.startswith(("GIT_", "BACKPORT_", "BASH_FUNC_"))
                     and key not in ("BASH_ENV", "ENV")}
@@ -117,7 +118,7 @@ class BackportBatchTests(unittest.TestCase):
             env.update(BACKPORT_INDEPENDENT="1", BACKPORT_MANIFEST_OVERRIDE=str(manifest),
                        BACKPORT_MANIFEST_SHA256_OVERRIDE=hashlib.sha256(manifest.read_bytes()).hexdigest())
         name = "backport_manifest.sh" if standalone else "independent_backports.sh"
-        return subprocess.run([BASH, str(self.root / "tools" / name), command, *map(str, arguments)],
+        return subprocess.run([BASH, str(self.root / "patches" / name), command, *map(str, arguments)],
                               env=env, capture_output=True, text=True, timeout=20)
 
     def assert_success(self, result):
@@ -207,7 +208,7 @@ class BackportBatchTests(unittest.TestCase):
             "HOST_WORKSPACE_DIR=" + shlex.quote(str(self.root)),
             "COMMON_DIR=" + shlex.quote(str(self.target)),
             "BACKPORT_BUNDLE_MANIFEST_SHA256=" + "a" * 64,
-            'BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"',
+            'BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh"',
             functions,
             f"verify_official_backport_applied fixture {commit} {fields[7]} alpha.txt"))
         return subprocess.run([BASH, "-c", script], env=self.env, capture_output=True, text=True, timeout=20)
@@ -255,13 +256,13 @@ BACKPORT_MANIFEST_LIBRARY=1 . "$1"
 declare -F validate_manifest verify_project_patch manifest_group_sequence >/dev/null
 '''
         result = subprocess.run([BASH, "-c", script, "test",
-                                 str(self.root / "tools/backport_manifest.sh")],
+                                 str(self.root / "patches/backport_manifest.sh")],
                                 env=self.env, capture_output=True, text=True, timeout=10)
         self.assert_success(result)
 
     def test_patch_rejects_producer_entry(self):
-        shutil.copyfile(ROOT / "patch.sh", self.root / "patch.sh")
-        result = subprocess.run([BASH, str(self.root / "patch.sh"), "--audit-sources"],
+        shutil.copyfile(ROOT / "patches/patch.sh", self.root / "patches/patch.sh")
+        result = subprocess.run([BASH, str(self.root / "patches/patch.sh"), "--audit-sources"],
                                 env=self.env, capture_output=True, text=True, timeout=20)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("用法", result.stderr)

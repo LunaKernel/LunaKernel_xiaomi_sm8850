@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 import unittest
@@ -33,6 +34,7 @@ class RunBuildTests(unittest.TestCase):
         self.root = self.temp / "repo"
         (self.root / "tools/ci").mkdir(parents=True)
         shutil.copyfile(PROJECT / "tools/ci/run_build.sh", self.root / "tools/ci/run_build.sh")
+        shutil.copyfile(PROJECT / "tools/ci/notify_telegram.py", self.root / "tools/ci/notify_telegram.py")
         shutil.copyfile(PROJECT / "tools/release_artifacts.py", self.root / "tools/release_artifacts.py")
         image = self.root / "ci/inputs/os4.0.6.0/system_dlkm.img"
         image.parent.mkdir(parents=True)
@@ -40,11 +42,9 @@ class RunBuildTests(unittest.TestCase):
         # 只生成公开测试 pin，不读取项目真实 .env 或实际镜像。
         keys = """
 CI_TOOLCHAIN_TREE_SHA256 ANDROID_NDK_TREE_SHA256 SM8850_C_ARCH SM8850_TUNE_CPU
-AOSP_AUTOFDO_PROFILE_SHA256 CI_CLANG_REVISION CI_BINDGEN_URL CI_BINDGEN_SHA256
-CI_HOST_BC_URL CI_HOST_BC_SHA256 AOSP_BUILD_TOOLS_REPO STOCK_AUDIT_TOOLS_COMMIT
+AOSP_AUTOFDO_PROFILE_SHA256 CI_CLANG_REVISION AOSP_BUILD_TOOLS_REPO STOCK_AUDIT_TOOLS_COMMIT
 STOCK_FSCK_EROFS_SHA256 STOCK_KMOD_SHA256 STOCK_LIBCXX_SHA256 ANDROID_NDK_URL
-ANDROID_NDK_SHA256 IPSET_URL IPSET_SHA512 LIBMNL_URL LIBMNL_SHA256 MAGISK_APK_URL
-MAGISK_APK_SHA256 AK3_BUSYBOX_URL AK3_BUSYBOX_SHA256 KSU_MANAGER_APK_SHA256
+ANDROID_NDK_SHA256 IPSET_URL IPSET_SHA512 LIBMNL_URL LIBMNL_SHA256 KSU_MANAGER_APK_SHA256
 COMMON_REPO
 """.split()
         pins = dict.fromkeys(keys, "fixture")
@@ -60,9 +60,11 @@ COMMON_REPO
             "COMMON_COMMIT": "d" * 40,
         })
         (self.root / ".env").write_text("".join(f"{key}={value}\n" for key, value in pins.items()))
-        (self.root / ".gitignore").write_text("work/\nsources/\n")
+        (self.root / ".gitignore").write_text("work/\nsources/\nkernel_out/\n")
+        (self.root / "patches").mkdir()
         for phase in PHASES:
-            (self.root / f"{phase}.sh").write_text(
+            directory = self.root / "patches" if phase in ("patch", "patch_external") else self.root
+            (directory / f"{phase}.sh").write_text(
                 "set -euo pipefail\n"
                 f"printf '%s\\n' {phase} >> \"$MOCK_CALLS\"\n"
                 f"if [[ ${{MOCK_FAIL_PHASE:-}} == {phase} ]]; then exit 7; fi\n"
@@ -173,7 +175,7 @@ COMMON_REPO
         self.assertEqual(env["LUNA_BUILD_ID"], output["build_id"])
         self.assertEqual(env["CI_RUN_DIR"], self.env["CI_RUN_DIR"])
         self.assertGreater(int(env["CI_BUILD_DEADLINE"]), time.time())
-        self.assertEqual(output["bundle_name"], f"luna-{self.env['GITHUB_SHA'][:8]}-123-1.tar.gz")
+        self.assertNotIn("bundle_name", output)
         self.assertEqual(output["manager_key"], "luna-manager-v1-fixture")
         self.assertIn("ccache_prefix", output)
         self.assertIn("downloads_key", output)
@@ -333,7 +335,7 @@ COMMON_REPO
                 self.assert_calls([])
 
     def test_metadata_rejects_dirty_tracked_and_untracked_files(self):
-        for name in ("patch.sh", "unexpected.txt"):
+        for name in ("patches/patch.sh", "unexpected.txt"):
             with self.subTest(path=name):
                 path = self.root / name
                 original = path.read_bytes() if path.exists() else None
@@ -394,6 +396,89 @@ COMMON_REPO
         self.assertIn("待实机验收", summary)
         self.assertIn("| build | 0 |", summary)
         self.assertNotIn("invalid option", result.stderr)
+
+    def prepare_release(self):
+        manager = "KernelSU_v3.3.1-29-gab05a062_32709-release.apk"
+        self.commit_fixture_change(".env", "\nKSU_MANAGER_APK_NAME=" + manager +
+                                   "\nKSU_MANAGER_APK_SHA256=" + hashlib.sha256(b"apk fixture").hexdigest() +
+                                   "\nIPSET_VERSION=7.24\nANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="
+                                   "Xiaomi/pudding/pudding:16/build/OS4.0.6.0.XPCCN:user/release-keys\n")
+        commit = self.env["GITHUB_SHA"]
+        stem = f"luna-xiaomi17-g{commit[:8]}-20261108"
+        build_id = stem + "-1200"
+        self.env.update(LUNA_BUILD_ID=build_id, LUNA_PROJECT_COMMIT=commit)
+        kernel, audit, component = (prefix + build_id for prefix in
+                                    ("kernel_out/", "work/audit/", "work/components/"))
+        files = {
+            kernel + "/Image-" + stem: b"kernel fixture",
+            kernel + "/" + stem + ".zip": b"zip fixture",
+            kernel + "/" + manager: b"apk fixture",
+            audit + "/" + stem + "-audit.zip": b"audit fixture",
+            component + "/ipset-arm64-v7.24": b"ipset fixture",
+            component + "/ipset-v7.24-android-arm64-kernelsu-module.zip": b"module fixture",
+        }
+        files[audit + "/.build-artifacts"] = "".join(
+            hashlib.sha256(data).hexdigest() + "  " + name + "\n" for name, data in files.items()).encode()
+        files[audit + "/release.tsv"] = (
+            "field\tvalue\nbuild_id\t" + build_id + "\nproject_commit\t" + commit +
+            "\nvalidation_status\tawaiting-device\nksu_manager_apk\t" + manager + "\n").encode()
+        for name, data in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return files
+
+    def test_export_contains_only_complete_verified_delivery_and_preserves_sources(self):
+        files = self.prepare_release()
+        audit = self.root / "work/audit" / self.env["LUNA_BUILD_ID"]
+        (audit / "unlisted.log").write_text("not a release artifact\n")
+        self.assert_success(self.run_step("export"))
+        bundle = self.root / self.read_assignments("github.output")["bundle_path"]
+        with tarfile.open(bundle) as archive:
+            members = archive.getmembers()
+            self.assertCountEqual([member.name for member in members], files)
+            self.assertTrue(all(member.isfile() for member in members))
+            for member in members:
+                self.assertEqual(archive.extractfile(member).read(), files[member.name])
+        restored = self.temp / "restored"
+        restored.mkdir()
+        result = subprocess.run([
+            "python3", "-c",
+            "import sys; from pathlib import Path; from release_artifacts import import_archive; "
+            "import_archive(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3])",
+            str(bundle), str(restored), self.env["LUNA_BUILD_ID"],
+        ], cwd=self.root / "tools", env=self.env, capture_output=True, text=True, timeout=10)
+        self.assert_success(result)
+        for name, data in files.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+            self.assertEqual((restored / name).read_bytes(), data)
+        self.assertFalse((self.root / self.env["CI_RUN_DIR"] / "export").exists())
+        digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+        result = self.run_step("export")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("拒绝覆盖", result.stderr)
+        self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), digest)
+
+    def test_export_rejects_corrupt_artifacts_and_missing_component_record(self):
+        files = self.prepare_release()
+        for name, data in files.items():
+            if name.endswith(("/.build-artifacts", "/release.tsv")):
+                continue
+            with self.subTest(path=name):
+                path = self.root / name
+                path.write_bytes(data + b"corrupt")
+                result = self.run_step("export")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("产物缺失或摘要不匹配", result.stderr)
+                path.write_bytes(data)
+        manifest = self.root / "work/audit" / self.env["LUNA_BUILD_ID"] / ".build-artifacts"
+        manifest.write_text("".join(line for line in manifest.read_text().splitlines(keepends=True)
+                                    if not line.rstrip().endswith("/ipset-arm64-v7.24")))
+        result = self.run_step("export")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("完整六文件集合", result.stderr)
+        self.assertFalse(list((self.root / self.env["CI_RUN_DIR"]).glob("*.tar.gz")))
+        self.assertFalse((self.temp / "github.output").exists())
 
     def test_summary_without_destination_is_optional(self):
         self.assert_success(self.run_step("summary", GITHUB_STEP_SUMMARY=""))

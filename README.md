@@ -29,7 +29,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 - KernelSU 内置，version code 32712 / UAPI 6；每次交付配套官方 CI Manager APK。
 - SUSFS v2.3.0；`OPEN_REDIRECT` 未编译，调试日志默认关闭。
 - Baseband Guard，保护基带及关键块设备写入口。
-- IPSet 7.24 内核支持与独立 KernelSU 用户态模块。
+- IPSet 7.24 内核支持与独立 KernelSU 用户态模块；额外模块模板由 [extra-modules](https://github.com/LunaKernel/extra-modules) 管理，主仓固定版本并编译交付。
 - Rust Binder 内置，屏蔽 ROM 同名模块；保留 seccomp、CFI、BPF JIT、FUSE BPF、pKVM guest、BBR v1 与 FQ 等能力。
 - Oryon-1 调度、固定 SM8850 ISA、AutoFDO 与仅对有 profile 函数启用的 ExtTSP；保持 O2 和 `LTO_NONE`。
 - 回移 AOSP、Linux stable 和 mainline 中当前基线仍缺少的文件系统、内存、调度、块层、网络与安全修复。
@@ -38,7 +38,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 
 ## 构建
 
-按 [构建说明](docs/BUILDING.md) 依次执行 `init.sh`、`patch.sh`、`patch_external.sh`、`build.sh`。固定依赖由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 制作与托管。通过内容、模块闭包与发布检查后，交付 Image、AnyKernel3 ZIP、官方 Manager APK、IPSet 组件和构建审计。
+完整编译统一通过 GitHub Actions 的 `build.yml` 从 main 手动触发，操作与产物下载见 [CI 构建说明](docs/BUILDING.md)。固定依赖由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 制作与托管。通过内容、模块闭包与发布检查后，交付 Image、AnyKernel3 ZIP、官方 Manager APK、IPSet 组件和构建审计。
 
 ## 验证状态
 
@@ -46,10 +46,11 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 
 ## 文档
 
-- [构建环境、输入与验证方法](docs/BUILDING.md)
+- [项目协作约束](docs/PROJECT_RULES.md)
+- [CI 构建、输入与验证方法](docs/BUILDING.md)
 - [验证记录](docs/VALIDATION.md)
-- [贡献与回移维护](CONTRIBUTING.md)
-- [安全问题](SECURITY.md)
+- [贡献与回移维护](docs/CONTRIBUTING.md)
+- [安全问题](docs/SECURITY.md)
 
 ## 许可证
 

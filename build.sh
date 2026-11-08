@@ -140,7 +140,6 @@ resolve_build_id() {
         "${RELEASE_DATE}" >/dev/null 2>&1 || die "构建目录中的日期或分钟无效"
     RELEASE_DATE="${RELEASE_DATE%-*}"
     export LUNA_BUILD_ID
-    append_orbenv_var LUNA_BUILD_ID
 }
 
 prepare_release_directories() {
@@ -169,24 +168,6 @@ finish_work_history() {
     exit "${status}"
 }
 
-append_orbenv_var() {
-    local name="$1"
-    case ":${ORBENV:-}:" in
-        *:"${name}":*) ;;
-        *) ORBENV="${ORBENV:+${ORBENV}:}${name}" ;;
-    esac
-}
-
-prepare_orb_passthrough_env() {
-    local var
-    for var in NO_COLOR http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
-        if [ -n "${!var:-}" ]; then
-            append_orbenv_var "${var}"
-        fi
-    done
-    export ORBENV
-}
-
 load_env_file() {
     local env_file="$1"
     local had_allexport=0
@@ -202,10 +183,6 @@ load_env_file() {
         set +a
     fi
     reject_git_environment_overrides
-}
-
-sanitize_path_component() {
-    printf '%s' "$1" | LC_ALL=C tr -cs 'A-Za-z0-9._-' '_'
 }
 
 resolve_workspace_path() {
@@ -263,128 +240,24 @@ normalize_archive_timestamps() {
 resolve_project_identity() {
     local actual_commit
 
-    if git -C "${HOST_WORKSPACE_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
-        reject_git_object_overrides "项目仓库" "${HOST_WORKSPACE_DIR}"
-        verify_no_hidden_index_flags "项目仓库" "${HOST_WORKSPACE_DIR}"
-        actual_commit="$(git -C "${HOST_WORKSPACE_DIR}" rev-parse HEAD)"
-        [[ "${actual_commit}" =~ ^[0-9a-f]{40}$ ]] || die "项目提交格式异常: ${actual_commit}"
-        [ -z "$(git -C "${HOST_WORKSPACE_DIR}" status --porcelain --untracked-files=normal)" ] || \
-            die "项目存在未提交或未跟踪文件，拒绝生成发布产物"
-        if [ -n "${LUNA_PROJECT_COMMIT:-}" ]; then
-            [ "${LUNA_PROJECT_COMMIT}" = "${actual_commit}" ] || \
-                die "宿主与构建环境的项目提交不一致"
-        else
-            LUNA_PROJECT_COMMIT="${actual_commit}"
-        fi
+    reject_git_object_overrides "项目仓库" "${HOST_WORKSPACE_DIR}"
+    verify_no_hidden_index_flags "项目仓库" "${HOST_WORKSPACE_DIR}"
+    actual_commit="$(git -C "${HOST_WORKSPACE_DIR}" rev-parse HEAD)"
+    [[ "${actual_commit}" =~ ^[0-9a-f]{40}$ ]] || die "项目提交格式异常: ${actual_commit}"
+    [ -z "$(git -C "${HOST_WORKSPACE_DIR}" status --porcelain --untracked-files=normal)" ] || \
+        die "项目存在未提交或未跟踪文件，拒绝生成发布产物"
+    if [ -n "${LUNA_PROJECT_COMMIT:-}" ]; then
+        [ "${LUNA_PROJECT_COMMIT}" = "${actual_commit}" ] || \
+            die "CI 与构建环境的项目提交不一致"
     else
-        [[ "${LUNA_PROJECT_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || \
-            die "构建环境缺少宿主项目提交，无法生成可追溯版本"
+        LUNA_PROJECT_COMMIT="${actual_commit}"
     fi
     export LUNA_PROJECT_COMMIT
-    append_orbenv_var LUNA_PROJECT_COMMIT
-}
-
-orbctl_run() {
-    local cmd=(orbctl run)
-    if [ -n "${ORB_MACHINE:-}" ]; then
-        cmd+=(-m "${ORB_MACHINE}")
-    fi
-    "${cmd[@]}" "$@"
-}
-
-orbctl_run_host_path() {
-    local cmd=(orbctl run -p)
-    if [ -n "${ORB_MACHINE:-}" ]; then
-        cmd+=(-m "${ORB_MACHINE}")
-    fi
-    "${cmd[@]}" "$@"
-}
-
-sync_control_files_to_orb() {
-    local items="init.sh patch.sh patch_external.sh build.sh"
-    [ "${ANDROID17_STOCK_SYSTEM_DLKM_IMAGE:-}" = "ci/inputs/os4.0.6.0/system_dlkm.img" ] || \
-        die "macOS 同步只接受固定的 ci/inputs/os4.0.6.0/system_dlkm.img"
-    if [ -f "${HOST_WORKSPACE_DIR}/.env" ]; then items="${items} .env"; fi
-    if [ -d "${HOST_WORKSPACE_DIR}/ak3_template" ]; then items="${items} ak3_template"; fi
-    if [ -d "${HOST_WORKSPACE_DIR}/patches" ]; then items="${items} patches"; fi
-    if [ -d "${HOST_WORKSPACE_DIR}/abi" ]; then items="${items} abi"; fi
-    if [ -d "${HOST_WORKSPACE_DIR}/tools" ]; then items="${items} tools"; fi
-    if [ -d "${HOST_WORKSPACE_DIR}/userspace" ]; then items="${items} userspace"; fi
-    if [ -f "${HOST_WORKSPACE_DIR}/ci/inputs/os4.0.6.0/system_dlkm.img" ]; then
-        items="${items} ci/inputs/os4.0.6.0/system_dlkm.img"
-    fi
-
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; outbox=\"\$HOME/${ORB_LINUX_OUTBOX}\"; mkdir -p \"\$target/ci/inputs/os4.0.6.0\" \"\$outbox\"; rm -rf \"\$target/init.sh\" \"\$target/patch.sh\" \"\$target/patch_external.sh\" \"\$target/build.sh\" \"\$target/.env\" \"\$target/ak3_template\" \"\$target/patches\" \"\$target/abi\" \"\$target/tools\" \"\$target/userspace\"; tar -cf - --exclude='.DS_Store' --exclude='.idea' --exclude='kernel_out' --exclude='toolchain' ${items} | tar --warning=no-unknown-keyword -xf - -C \"\$target\""
-}
-
-export_orb_results() {
-    orbctl_run sh -s -- "${ORB_LINUX_WORKSPACE}" "${ORB_LINUX_OUTBOX}" \
-        "${ORB_RESULT_ARCHIVE}" "${LUNA_BUILD_ID}" <<'SH'
-set -eu
-workspace="$HOME/$1"
-outbox="$HOME/$2"
-archive_name="$3"
-build_id="$4"
-mkdir -p "$workspace/work/tmp" "$outbox"
-staging="$(mktemp -d "$workspace/work/tmp/orb-export.XXXXXX")"
-trap 'rm -rf -- "$staging"' EXIT
-python3 "$workspace/tools/release_artifacts.py" export "$workspace" "$build_id" "$staging"
-tar -cf "$outbox/$archive_name" -C "$staging" kernel_out work
-SH
-}
-
-pull_orb_results() {
-    local temp_dir
-    prepare_workspace_directory work/tmp
-    temp_dir="$(mktemp -d "${BUILD_TEMP_DIR}/${SCRIPT_NAME%.sh}.pull.XXXXXX")"
-    if ! orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -s -- \
-        "${ORB_LINUX_OUTBOX}" "${temp_dir}" "${ORB_RESULT_ARCHIVE}" <<'SH'
-set -eu
-source="$HOME/$1/$3"
-destination="$2/$3"
-[ -f "$source" ] || { printf '[FAIL] Orb 结果归档不存在: %s\n' "$source" >&2; exit 1; }
-cp -f "$source" "$destination"
-SH
-    then
-        rm -rf -- "${temp_dir}"
-        die "Orb 结果归档复制失败"
-    fi
-    if ! python3 "${HOST_WORKSPACE_DIR}/tools/release_artifacts.py" import \
-        "${temp_dir}/${ORB_RESULT_ARCHIVE}" "${LUNA_BUILD_ID}" "${HOST_WORKSPACE_DIR}"; then
-        rm -rf -- "${temp_dir}"
-        die "Orb 结果身份、路径或摘要校验失败"
-    fi
-    rm -rf -- "${temp_dir}"
-    prune_work_history
-    log_success "macOS 当前构建产物已按目录同步: ${PRODUCT_DIR}"
-}
-
-run_in_orb_if_needed() {
-    local host_os
-    host_os="$(uname -s)"
-    case "${host_os}" in
-        Linux) return ;;
-        Darwin)
-            command -v orbctl >/dev/null 2>&1 || die "当前是 macOS，请启动 OrbStack。"
-            prepare_orb_passthrough_env
-            sync_control_files_to_orb
-            printf '[INFO] macOS 环境，进入 Orb Linux 工作区 %s 执行 %s\n' "${ORB_LINUX_WORKSPACE}" "${SCRIPT_NAME}" >&2
-            if orbctl_run sh -lc "cd \"\$HOME/${ORB_LINUX_WORKSPACE}\" && exec bash \"./${SCRIPT_NAME}\" \"\$@\"" sh "$@"; then
-                export_orb_results
-                pull_orb_results
-                exit 0
-            else
-                exit $?
-            fi
-            ;;
-        *) die "不支持的系统: ${host_os}" ;;
-    esac
 }
 
 detect_cpu_count() {
     local cpu_count=""
     if command -v nproc >/dev/null 2>&1; then cpu_count="$(nproc 2>/dev/null || true)"; fi
-    if [ -z "${cpu_count}" ] && command -v sysctl >/dev/null 2>&1; then cpu_count="$(sysctl -n hw.logicalcpu 2>/dev/null || true)"; fi
     if [[ "${cpu_count}" =~ ^[0-9]+$ ]] && [ "${cpu_count}" -gt 0 ]; then
         printf '%s\n' "${cpu_count}"
     else
@@ -525,7 +398,7 @@ verify_final_source_deltas() {
     verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
     verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
     ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
-    bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
+    bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" \
         verify-applied-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
     [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
         die "KernelSU 精确差异指纹不匹配: ${ksu_sha256}"
@@ -661,9 +534,9 @@ verify_susfs_source_state() {
             printf '%s\n' block/blk-wbt.c
         fi
         if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-            bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" list-paths
+            bash "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh" list-paths
         fi
-        bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" list-paths
+        bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" list-paths
     } | sort -u > "${allowed_common}"
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
@@ -1499,6 +1372,10 @@ build_ipset_userspace() {
     local common_cflags libmnl_cflags ipset_cflags cppflags ldflags input_key cached_key reconfigure directory
     local -a libmnl_configure ipset_configure
     [ "${ENABLE_IPSET}" = "1" ] || return
+    verify_repo_identity "额外模块模板" "${EXTRA_MODULES_DIR}" \
+        "${EXTRA_MODULES_REPO:?缺少额外模块 URL pin}" "${EXTRA_MODULES_COMMIT:?缺少额外模块 commit pin}"
+    [ "$(tree_sha256 "${EXTRA_MODULES_DIR}/ipset")" = "${IPSET_MODULE_TREE_SHA256:?缺少 IPSet 模板树 pin}" ] || \
+        die "IPSet 模板树完整性校验失败，请重新运行 ./init.sh"
     ndk_bin="${ANDROID_NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
     [ -x "${ndk_bin}/clang" ] || die "Android NDK clang 缺失，请先运行 ./init.sh"
     cc="${ndk_bin}/clang --target=aarch64-linux-android${ANDROID_NDK_API}"
@@ -1589,7 +1466,7 @@ build_ipset_userspace() {
     chmod 0755 "${COMPONENT_DIR}/ipset-arm64-v${IPSET_VERSION}"
     module_dir="$(mktemp -d "${BUILD_TEMP_DIR}/ipset-module.XXXXXX")"
     mkdir -p "${module_dir}/system/bin" "${module_dir}/LICENSES"
-    cp -a "${HOST_WORKSPACE_DIR}/userspace/ipset_module/." "${module_dir}/"
+    cp -a "${EXTRA_MODULES_DIR}/ipset/"{customize.sh,module.prop,SOURCE.txt} "${module_dir}/"
     cp -f "${binary}" "${module_dir}/system/bin/ipset"
     cp -f "${IPSET_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.ipset"
     cp -f "${LIBMNL_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.libmnl"
@@ -1604,7 +1481,6 @@ build_ipset_userspace() {
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
-SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
 
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
@@ -1614,13 +1490,6 @@ load_env_file "${HOST_WORKSPACE_DIR}/.env"
 [ "${ENABLE_SUSFS:-0}" = "1" ] || \
     die "Luna 固定构建只支持 ENABLE_SUSFS=1；拒绝未审计的第二套产品矩阵"
 
-WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
-WORKSPACE_NAME="${WORKSPACE_NAME:-workspace}"
-ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
-ORB_LINUX_PROJECT="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME}"
-ORB_LINUX_WORKSPACE="${ORB_LINUX_PROJECT}/workspace"
-ORB_LINUX_OUTBOX="${ORB_LINUX_PROJECT}/outbox"
-ORB_RESULT_ARCHIVE="${SCRIPT_NAME%.sh}-result.tar"
 ARTIFACT_MANIFEST_NAME=".build-artifacts"
 
 BUILD_OUTPUT_DIR="${BUILD_OUTPUT_DIR:-kernel_out}"
@@ -1628,7 +1497,6 @@ PRODUCT_DIR=""
 
 resolve_project_identity
 resolve_build_id
-run_in_orb_if_needed "$@"
 prepare_release_directories
 trap 'finish_work_history "$?"' EXIT
 
@@ -1731,6 +1599,7 @@ ENABLE_IPSET="${ENABLE_IPSET:-0}"
 IPSET_VERSION="${IPSET_VERSION:-7.24}"
 IPSET_TREE_SHA256="${IPSET_TREE_SHA256:-70530678f3318aad36a3fb8acb3eba17a27ad5e464c0caeb8912dee43f0a81ea}"
 IPSET_DIR="$(resolve_workspace_path "${IPSET_SOURCE_DIR:-sources/ipset-7.24}")"
+EXTRA_MODULES_DIR="$(resolve_workspace_path "${EXTRA_MODULES_SOURCE_DIR:-sources/extra-modules}")"
 LIBMNL_VERSION="${LIBMNL_VERSION:-1.0.5}"
 LIBMNL_TREE_SHA256="${LIBMNL_TREE_SHA256:-8d6597fd107489c8d90106d99302ff5efb061fe38bb3952f8a1062626b80a7c2}"
 LIBMNL_DIR="$(resolve_workspace_path "${LIBMNL_SOURCE_DIR:-sources/libmnl-1.0.5}")"
@@ -1740,7 +1609,7 @@ ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
-BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
+BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh"
 verify_backport_bundle "${HOST_WORKSPACE_DIR}"
 verify_repo_identity "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_COMMIT}"
 verify_repo_identity "Android 16 GKI common 九月 KMI6" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
@@ -1756,7 +1625,7 @@ verify_ipv6_mld_uaf_fix
 verify_ipv6_mld_delayed_work_uaf_fix
 verify_android17_selected_fixes
 [ "${ENABLE_SELECTED_BACKPORTS:-0}" != "1" ] || \
-    bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" verify-applied "${COMMON_DIR}"
+    bash "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh" verify-applied "${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_source_state
 KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" check \
     --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \

@@ -204,16 +204,9 @@ def import_archive(archive, target, build_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("check", "export"):
-        child = commands.add_parser(command)
-        child.add_argument("workspace", type=Path)
-        child.add_argument("build_id")
-        if command == "export":
-            child.add_argument("destination", type=Path)
-    child = commands.add_parser("import")
-    child.add_argument("archive", type=Path)
-    child.add_argument("build_id")
+    child = commands.add_parser("check")
     child.add_argument("workspace", type=Path)
+    child.add_argument("build_id")
     child = commands.add_parser("prune-work")
     child.add_argument("workspace", type=Path)
     child.add_argument("--keep", type=int, required=True)
@@ -224,12 +217,7 @@ def main():
             removed = prune_work_history(workspace, args.keep)
             print(f"[OK] 工作审计与组件按类别保留最新 {args.keep} 份，清理 {removed} 个旧目录")
             return
-        elif args.command == "check":
-            verify(workspace, args.build_id)
-        elif args.command == "export":
-            copy_release(workspace, args.destination.resolve(strict=True), args.build_id)
-        else:
-            import_archive(args.archive, workspace, args.build_id)
+        verify(workspace, args.build_id)
     except (OSError, ValueError, tarfile.TarError) as error:
         raise SystemExit("[FAIL] " + str(error))
     print("[OK] 发布产物身份、相对路径和摘要校验通过: " + args.build_id)

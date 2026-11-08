@@ -51,7 +51,6 @@ load_env_file() {
     reject_git_environment_overrides
 }
 
-sanitize_path_component() { printf '%s' "$1" | LC_ALL=C tr -cs 'A-Za-z0-9._-' '_'; }
 resolve_workspace_path() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${HOST_WORKSPACE_DIR}" "$1" ;; esac; }
 normalize_git_url() { printf '%s' "$1" | sed -e 's#/$##' -e 's#\.git$##'; }
 reject_git_object_overrides() {
@@ -83,29 +82,6 @@ reject_git_object_overrides() {
             die "${label} Git worktree 与预期目录不一致: ${top_level}"
     fi
 }
-orbctl_run() { local cmd=(orbctl run); [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}"); "${cmd[@]}" "$@"; }
-orbctl_run_host_path() { local cmd=(orbctl run -p); [ -z "${ORB_MACHINE:-}" ] || cmd+=(-m "${ORB_MACHINE}"); "${cmd[@]}" "$@"; }
-
-sync_control_files_to_orb() {
-    local items="init.sh patch.sh patch_external.sh build.sh"
-    [ ! -f "${HOST_WORKSPACE_DIR}/.env" ] || items="${items} .env"
-    [ ! -d "${HOST_WORKSPACE_DIR}/patches" ] || items="${items} patches"
-    [ ! -d "${HOST_WORKSPACE_DIR}/tools" ] || items="${items} tools"
-    orbctl_run_host_path -w "${HOST_WORKSPACE_DIR}" sh -lc "set -e; target=\"\$HOME/${ORB_LINUX_WORKSPACE}\"; mkdir -p \"\$target\"; tar -cf - ${items} | tar -xf - -C \"\$target\""
-}
-
-run_in_orb_if_needed() {
-    case "$(uname -s)" in
-        Linux) return ;;
-        Darwin)
-            command -v orbctl >/dev/null 2>&1 || die "当前是 macOS，请启动 OrbStack。"
-            sync_control_files_to_orb
-            if orbctl_run sh -lc "cd \"\$HOME/${ORB_LINUX_WORKSPACE}\" && exec bash ./patch_external.sh \"\$@\"" sh "$@"; then exit 0; else exit $?; fi
-            ;;
-        *) die "不支持的操作系统" ;;
-    esac
-}
-
 verify_repo_identity() {
     local label="$1" repo_dir="$2" expected_url="$3" expected_commit="$4"
     local actual_url actual_commit
@@ -218,7 +194,7 @@ verify_final_source_deltas() {
         die "GKI common 基础差异快照尚未固定"
     [[ "${KSU_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
         die "KernelSU 精确差异快照尚未固定: ${ksu_sha256}"
-    bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
+    bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" \
         verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
     [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
         die "KernelSU 出现非预期补丁差异: ${ksu_sha256}"
@@ -352,9 +328,9 @@ verify_susfs_integration() {
             printf '%s\n' include/net/addrconf.h net/ipv6/mcast.c
         fi
         if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
-            bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" list-paths
+            bash "${HOST_WORKSPACE_DIR}/patches/backport_manifest.sh" list-paths
         fi
-        bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" list-paths
+        bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" list-paths
     } | sort -u > "${allowed_common}"
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
@@ -554,17 +530,13 @@ apply_kernelsu_integration() {
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
-HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
 [ "${ENABLE_KERNELSU:-0}" = "1" ] || \
     die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
 [ "${ENABLE_SUSFS:-0}" = "1" ] || \
     die "Luna 固定构建只支持 ENABLE_SUSFS=1；拒绝未审计的第二套产品矩阵"
-WORKSPACE_NAME="$(sanitize_path_component "$(basename "${HOST_WORKSPACE_DIR}")")"
-ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
-ORB_LINUX_WORKSPACE="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME:-workspace}/workspace"
-run_in_orb_if_needed "$@"
 
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 

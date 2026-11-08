@@ -89,10 +89,7 @@ metadata() {
         printf 'CI_BUILD_DEADLINE=%s\n' "$(( $(date +%s) + 330 * 60 ))"
         printf 'CI_RUN_DIR=work/tmp/ci-%s-%s\n' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
     } >> "${GITHUB_ENV:?}"
-    {
-        printf 'project_commit=%s\nbuild_id=%s\n' "${GITHUB_SHA}" "${build_id}"
-        printf 'bundle_name=luna-%s-%s-%s.tar.gz\n' "${GITHUB_SHA:0:8}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
-    } >> "${GITHUB_OUTPUT:?}"
+    printf 'project_commit=%s\nbuild_id=%s\n' "${GITHUB_SHA}" "${build_id}" >> "${GITHUB_OUTPUT:?}"
     python3 - <<'PY' >> "${GITHUB_OUTPUT}"
 import hashlib
 import os
@@ -102,13 +99,11 @@ def identity(keys):
 
 compiler = identity(('CI_TOOLCHAIN_TREE_SHA256', 'ANDROID_NDK_TREE_SHA256',
                      'SM8850_C_ARCH', 'SM8850_TUNE_CPU', 'AOSP_AUTOFDO_PROFILE_SHA256'))
-download_keys = ('CI_CLANG_REVISION', 'CI_BINDGEN_URL', 'CI_BINDGEN_SHA256',
-                 'CI_HOST_BC_URL', 'CI_HOST_BC_SHA256', 'AOSP_BUILD_TOOLS_REPO',
+download_keys = ('CI_CLANG_REVISION', 'AOSP_BUILD_TOOLS_REPO',
                  'STOCK_AUDIT_TOOLS_COMMIT', 'STOCK_FSCK_EROFS_SHA256',
                  'STOCK_KMOD_SHA256', 'STOCK_LIBCXX_SHA256',
                  'ANDROID_NDK_URL', 'ANDROID_NDK_SHA256', 'IPSET_URL', 'IPSET_SHA512',
-                 'LIBMNL_URL', 'LIBMNL_SHA256', 'MAGISK_APK_URL', 'MAGISK_APK_SHA256',
-                 'AK3_BUSYBOX_URL', 'AK3_BUSYBOX_SHA256',
+                 'LIBMNL_URL', 'LIBMNL_SHA256',
                  'BACKPORT_BUNDLE_SHA256', 'CI_TOOLCHAIN_BUNDLE_SHA256')
 print('ccache_prefix=luna-ccache-v1-ubuntu24-x64-' + compiler)
 print('downloads_key=luna-downloads-v1-' + identity(download_keys))
@@ -162,12 +157,12 @@ PY
 }
 
 phase() {
-    local script="$1" remaining started status
+    local script="$1" path="$2" remaining started status
     remaining="$(( ${CI_BUILD_DEADLINE:?} - $(date +%s) ))"
     (( remaining > 0 )) || fail '构建主体已达到 330 分钟软时限'
     started="$(date +%s)"
     printf '::group::%s\n' "${script}"
-    if timeout --signal=TERM --kill-after=30s "${remaining}s" bash "${script}.sh" \
+    if timeout --signal=TERM --kill-after=30s "${remaining}s" bash "${path}" \
         2>&1 | tee "${CI_RUN_DIR}/logs/${script}.log"; then
         status=0
     else
@@ -181,12 +176,12 @@ phase() {
 }
 
 compile() {
-    phase patch
-    phase patch_external
+    phase patch patches/patch.sh
+    phase patch_external patches/patch_external.sh
     export CCACHE_DIR="${ROOT}/work/cache/ccache" CCACHE_COMPILERCHECK=content
     ccache --zero-stats
     printf 'CI_CCACHE_USED=true\n' >> "${GITHUB_ENV:?}"
-    phase build
+    phase build build.sh
     # 复用已构建证据核对两项宿主加速；它们不属于设备启动条件。
     [[ -x "${BUILD_DIR}/scripts/kallsyms" && -s "${BUILD_DIR}/scripts/.kallsyms.cmd" ]]
     grep -F 'scripts/kallsyms.c' "${BUILD_DIR}/scripts/.kallsyms.cmd" >/dev/null
@@ -201,12 +196,10 @@ compile() {
 export_bundle() {
     python3 tools/ci/notify_telegram.py --check-only --workspace "${ROOT}" \
         --build-id "${LUNA_BUILD_ID:?}" --project-commit "${LUNA_PROJECT_COMMIT:?}"
-    local staging="${CI_RUN_DIR}/export" bundle
+    local bundle
     bundle="${CI_RUN_DIR}/luna-${LUNA_PROJECT_COMMIT:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
-    [[ ! -e "${staging}" && ! -L "${staging}" && ! -e "${bundle}" && ! -L "${bundle}" ]] || fail '拒绝覆盖已有 CI 传输归档'
-    mkdir "${staging}"
-    python3 tools/release_artifacts.py export "${ROOT}" "${LUNA_BUILD_ID}" "${staging}"
-    python3 - "${staging}" "${LUNA_BUILD_ID}" "${bundle}" <<'PY'
+    [[ ! -e "${bundle}" && ! -L "${bundle}" ]] || fail '拒绝覆盖已有 CI 传输归档'
+    python3 - "${ROOT}" "${LUNA_BUILD_ID}" "${bundle}" <<'PY'
 import gzip
 import sys
 import tarfile
@@ -252,7 +245,7 @@ case "${1:-}" in
         require_run
         prepare_run_directory
         case "$1" in
-            init) validate_fixed_dependencies; phase init; cache_sizes ;;
+            init) validate_fixed_dependencies; phase init init.sh; cache_sizes ;;
             compile) compile ;;
             export) export_bundle ;;
         esac
