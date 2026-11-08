@@ -27,7 +27,7 @@ mkdir -p "${checker}"
 if [[ ! -f "${archive}" ]]; then
     timeout --kill-after=10s 3m curl --fail --location --proto '=https' \
         --connect-timeout 15 --max-time 150 --retry 2 \
-        "https://github.com/rhysd/actionlint/releases/download/v${CI_ACTIONLINT_VERSION}/actionlint_${CI_ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+        --header 'Accept: application/octet-stream' "${CI_ACTIONLINT_URL:?缺少 actionlint URL pin}" \
         --output "${archive}.part"
     mv "${archive}.part" "${archive}"
 fi
