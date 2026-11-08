@@ -440,9 +440,12 @@ verify_susfs_source_state() {
         "${SUSFS_COMMON_FIX_PATCH_FILE}"
     git -C "${KSU_DIR}" apply --reverse --check \
         --exclude=kernel/Kconfig \
+        --exclude=kernel/core/init.c \
+        --exclude=kernel/hook/setuid_hook.c \
         --exclude=kernel/policy/app_profile.c \
         --exclude=kernel/runtime/boot_event.c \
         --exclude=kernel/runtime/ksud_integration.c \
+        --exclude=kernel/selinux/rules.c \
         --exclude=kernel/selinux/selinux.c \
         --exclude=kernel/sulog/event.c \
         --exclude=kernel/supercall/dispatch.c \
@@ -479,8 +482,12 @@ verify_susfs_source_state() {
     {
         patch_paths_excluding "${ksu_patch}" \
             kernel/Kconfig \
+            kernel/core/init.c \
+            kernel/hook/setuid_hook.c \
             kernel/policy/app_profile.c \
             kernel/runtime/boot_event.c \
+            kernel/runtime/ksud_integration.c \
+            kernel/selinux/rules.c \
             kernel/selinux/selinux.c \
             kernel/sulog/event.c \
             kernel/supercall/dispatch.c
