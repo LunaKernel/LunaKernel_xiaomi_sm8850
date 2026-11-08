@@ -36,7 +36,9 @@ class RunBuildTests(unittest.TestCase):
         shutil.copyfile(PROJECT / "tools/ci/run_build.sh", self.root / "tools/ci/run_build.sh")
         shutil.copyfile(PROJECT / "tools/ci/notify_telegram.py", self.root / "tools/ci/notify_telegram.py")
         shutil.copyfile(PROJECT / "tools/release_artifacts.py", self.root / "tools/release_artifacts.py")
-        image = self.root / "ci/inputs/os4.0.6.0/system_dlkm.img"
+        for name in ('ci_dependencies.py', 'tree_sha256.py'):
+            shutil.copyfile(PROJECT / 'tools' / name, self.root / 'tools' / name)
+        image = self.root / "work/cache/downloads/ota/system_dlkm-os4.0.6.0.img"
         image.parent.mkdir(parents=True)
         image.write_bytes(b"public CI input fixture\n")
         # 只生成公开测试 pin，不读取项目真实 .env 或实际镜像。
@@ -49,6 +51,10 @@ COMMON_REPO
 """.split()
         pins = dict.fromkeys(keys, "fixture")
         pins.update({
+            "AK3_TEMPLATE_URL": "https://example.invalid/ak3-template.tar.gz",
+            "AK3_TEMPLATE_SHA256": "8" * 64,
+            "AK3_TEMPLATE_TREE_SHA256": "9" * 64,
+            "ANDROID17_STOCK_SYSTEM_DLKM_URL": "https://example.invalid/system_dlkm.img",
             "ANDROID17_STOCK_SYSTEM_DLKM_IMAGE": image.relative_to(self.root).as_posix(),
             "ANDROID17_STOCK_SYSTEM_DLKM_SIZE": str(image.stat().st_size),
             "ANDROID17_STOCK_SYSTEM_DLKM_SHA256": hashlib.sha256(image.read_bytes()).hexdigest(),
@@ -182,6 +188,51 @@ COMMON_REPO
         config = self.git("config", "--local", "--list").stdout
         self.assertNotIn("gc.auto=", config)
         self.assertIn("core.filemode=false", config)
+
+    def test_input_checks_do_not_require_image_until_after_init(self):
+        image = self.root / 'work/cache/downloads/ota/system_dlkm-os4.0.6.0.img'
+        original = image.read_bytes()
+        for content, message in ((None, '固定镜像缺失'), (b'short', '固定镜像大小'),
+                                 (b'x' * len(original), '固定镜像 SHA-256')):
+            with self.subTest(content=content):
+                if content is None:
+                    image.unlink()
+                else:
+                    image.write_bytes(content)
+                self.assert_success(self.run_step('check-input'))
+                self.assert_success(self.run_step('metadata'))
+                self.reset_phase_records()
+                result = self.run_step('init')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assert_calls(['init'])
+                self.assertNotIn('[CACHE]', result.stdout)
+        image.write_bytes(original)
+        self.assert_success(self.run_step('init'))
+
+    def test_input_pins_fail_before_init_and_download_keys_bind_content(self):
+        self.assert_success(self.run_step('metadata'))
+        original = self.read_assignments('github.output')['downloads_key']
+        for key in ('AK3_TEMPLATE_URL', 'AK3_TEMPLATE_SHA256', 'AK3_TEMPLATE_TREE_SHA256',
+                    'ANDROID17_STOCK_SYSTEM_DLKM_URL', 'ANDROID17_STOCK_SYSTEM_DLKM_SIZE'):
+            with self.subTest(missing=key):
+                text = (self.root / '.env').read_text()
+                value = next(line.split('=', 1)[1] for line in text.splitlines() if line.startswith(key + '='))
+                self.commit_fixture_change('.env', f'\n{key}=\n')
+                for command in ('metadata', 'check-input'):
+                    self.assertNotEqual(self.run_step(command).returncode, 0)
+                self.assert_calls([])
+                self.commit_fixture_change('.env', f'\n{key}={value}\n')
+        for key in ('AK3_TEMPLATE_URL', 'ANDROID17_STOCK_SYSTEM_DLKM_URL'):
+            self.commit_fixture_change('.env', f'\n{key}=https://example.invalid/relocated\n')
+        self.assert_success(self.run_step('metadata'))
+        self.assertEqual(original, self.read_assignments('github.output')['downloads_key'])
+        for key in ('AK3_TEMPLATE_SHA256', 'ANDROID17_STOCK_SYSTEM_DLKM_SHA256'):
+            self.commit_fixture_change('.env', f'\n{key}=' + 'a' * 64 + '\n')
+            self.assert_success(self.run_step('metadata'))
+            current = self.read_assignments('github.output')['downloads_key']
+            self.assertNotEqual(original, current)
+            original = current
 
     def test_fixed_cache_paths_and_sizes_do_not_require_source_caches(self):
         # fixture 不创建来源目录；fixed 缓存不能依赖它们。

@@ -8,15 +8,15 @@
 
 以下代码路径均相对于 runner 中的仓库根目录，脚本说明用于维护 CI 内部流程。
 
-发布构建直接使用仓库中的 `ci/inputs/os4.0.6.0/system_dlkm.img`，共 17,281,024 字节。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。正常构建不重新提取 stock 清单，不需要完整 OTA 或其余分区镜像；人工重建清单才需要 `evidence/os4.0.6.0/` 中同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。原始外部证据仍按 `evidence/` 规则保留，不自动清理。
+`init.sh` 从依赖仓固定 Release 下载原样发布的 `system_dlkm-os4.0.6.0.img`，校验后缓存至 `work/cache/downloads/ota/system_dlkm-os4.0.6.0.img`，共 17,281,024 字节。构建校验固定 `OS4.0.6.0.XPCCNXM` OTA 镜像的大小、摘要、AVB hashtree、EROFS 内容及 stock 模块清单；该镜像不进入刷机包。正常构建不重新提取 stock 清单，不需要完整 OTA 或其余分区镜像；人工重建清单才需要 `evidence/os4.0.6.0/` 中同一 OTA 的 `boot.img`、`vendor_boot.img` 和 `vendor_dlkm.img`。原始外部证据仍按 `evidence/` 规则保留，不自动清理。
 
 清单工具由 `init.sh` 按固定 Git blob 与 SHA-256 准备于 `work/tools/stock-evidence/`。同一 OTA 的实机验收与静态模块闭包核对均已完成，范围见 [VALIDATION.md](VALIDATION.md)。
 
 CI 按初始化、内核回移、外部组件接入、编译与审计的顺序运行以下脚本。
 
-`init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patches/patch.sh` 应用官方内核回移；`patches/patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
+`init.sh` 复用并校验固定源码、工具、AK3 模板、OTA 镜像与官方 CI Manager APK；`patches/patch.sh` 应用官方内核回移；`patches/patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
-主仓库只消费固定依赖包。`.env` 必须配置回移 manifest 摘要、回移归档 URL/SHA-256、工具链归档 URL/SHA-256，以及工具链安装树摘要。当前依赖版本为 [ci-deps-v1-3fc59ff](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-3fc59ff)。
+主仓库只消费固定依赖包。`.env` 必须配置回移 manifest 摘要、回移归档 URL/SHA-256、工具链归档 URL/SHA-256，以及工具链安装树摘要。回移与工具链版本为 [ci-deps-v1-3fc59ff](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-3fc59ff)。AK3 模板与 OTA 镜像使用独立的 [build-inputs-v1-d082477](https://github.com/LunaKernel/ci-dependencies/releases/tag/build-inputs-v1-d082477)，资产分别为 `ak3-template.tar.gz` 和 `system_dlkm-os4.0.6.0.img`，URL、SHA-256、模板树摘要及镜像大小由 `.env` 固定。`init.sh` 校验模板归档 SHA-256、安全解包并校验树摘要。
 
 初始化校验包内容、清单绑定与工具链安装树；补丁阶段校验 patch-id、允许路径、实际应用、撤销和有序重放。回移内容缓存位于 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}`，工具链位于 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，下载归档位于 `work/cache/downloads/ci-dependencies/`。
 
@@ -30,7 +30,7 @@ CI 按初始化、内核回移、外部组件接入、编译与审计的顺序�
 
 ## GitHub Actions
 
-本地开发可运行 `git diff --check`、相关 shell 语法检查与 `bash tools/ci/check.sh`；这些轻量检查不执行完整编译。完整编译与目标 OTA 模块闭包验证由以下 CI 工作流执行。
+本地开发可运行 `git diff --check`、相关 shell 语法检查与 `bash tools/ci/check.sh`；这些轻量检查不执行完整编译。`metadata` 与轻量检查对 AK3 模板、OTA 镜像仅核对 pin 格式，不要求已恢复输入；实际输入验证在 init 准备后执行。完整编译与目标 OTA 模块闭包验证由以下 CI 工作流执行。
 
 `.github/workflows/check.yml` 在 main 的 push 和以 main 为目标的 PR 执行轻量检查，使用 `.env` 固定的官方 actionlint 校验 workflow；`.github/workflows/build.yml` 仅支持从 main 手动触发完整构建，不创建 GitHub Release。云端构建状态以对应提交的 Actions 记录为准，现有实机验收只属于 [VALIDATION.md](VALIDATION.md) 中的既有二进制。
 
@@ -80,7 +80,7 @@ Image-luna-xiaomi17-g<8位提交>-YYYYMMDD
 
 官方 CI Manager APK 与 Image、内核 ZIP 同目录。审计 ZIP、日志和 `.build-artifacts` 位于 `work/audit/<同名目录>/`；IPSet 命令与模块 ZIP 位于 `work/components/<同名目录>/`。六个交付文件全部由清单绑定 SHA-256 和相对路径，`release.tsv` 指定配套 APK，导入导出必须保持完整。
 
-AnyKernel3 由固定官方脚本、[`ak3_template/luna.patch`](../ak3_template/luna.patch)、BusyBox 和 MagiskBoot 组装，仅替换 Image，保留当前槽、分区容量和镜像大小检查。KernelSU/SUSFS 保持内核集成，不打包 SUSFS 模块或独立 helper。
+AnyKernel3 模板源码（官方基线、Luna 补丁及许可证）维护于依赖仓的 [`ak3_template/`](https://github.com/LunaKernel/ci-dependencies/tree/build-inputs-v1-d082477/ak3_template)。`build.sh` 使用 init 已校验的模板、BusyBox 和 MagiskBoot 组装刷机包，仅替换 Image，保留当前槽、分区容量和镜像大小检查。KernelSU/SUSFS 保持内核集成，不打包 SUSFS 模块或独立 helper。
 
 Manager 使用 `.env` 固定的官方 main CI。`tools/ksu_manager.py` 校验源码/UAPI、归档与 APK 摘要、证书、包名版本和 arm64 组件，构建后核对实际内核接受的签名。优先复用 `work/cache/ksu-manager/` 或已有匹配 APK，缺失才下载固定 artifact；官方 artifact 过期不影响已保存 APK 的摘要验证。无可用副本时在编译前失败，须恢复同 SHA 官方 APK 或审查后更新 pin，不追随 latest、不本地编译替代。
 

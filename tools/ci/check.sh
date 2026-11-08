@@ -17,6 +17,7 @@ for path in (*Path('tools').glob('*.py'), *Path('tools/ci').glob('*.py')):
     compile(path.read_text(), str(path), 'exec')
 PY
 python3 -m unittest discover -s tools/ci -p 'test_*.py'
+# 这里只验证固定输入 pin；真实镜像在 init 下载后及 build 中检查。
 bash tools/ci/run_build.sh check-input
 
 # actionlint 是固定摘要的宿主检查工具，留在可复用工具目录。

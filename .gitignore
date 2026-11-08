@@ -6,8 +6,6 @@
 
 # Local boot references and extracted diagnostics
 /evidence/
-/ak3_template/template.zip
-/ak3_template/work/
 
 # macOS metadata
 .DS_Store

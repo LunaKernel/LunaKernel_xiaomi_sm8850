@@ -67,16 +67,16 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 完整编译 MUST 通过 GitHub Actions 的 `build.yml` 从 main 手动触发。Linux runner 内由 `tools/ci/run_build.sh` 依次调度 `init.sh`、`patches/patch.sh`、`patches/patch_external.sh` 与 `build.sh`。本地开发仅执行轻量检查。
 
 - `.env`：唯一受版本控制的 pin、构建身份和验证快照来源。
-- `init.sh`：准备并校验固定源码、依赖包、NDK、stock 工具与官方 CI Manager APK。
+- `init.sh`：准备并校验固定源码、依赖包、AK3 模板、OTA 镜像、NDK、stock 工具与官方 CI Manager APK。
 - `patches/patch.sh`：应用项目维护的官方内核及宿主构建回移，校验内容包、patch-id、路径、幂等、单项应用/撤销和有序重放。
 - `patches/patch_external.sh`：接入已准备的外部组件。
 - `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计，闭包齐全且漂移审查完成后打包。
 - `tools/ci/`：宿主准备、标准流程调度与交付通知。`check.yml` 在 main 的 push/PR 执行轻量检查；`build.yml` 手动执行完整构建，分为 build、notify 两个 job。
-- `ci/inputs/os4.0.6.0/system_dlkm.img`：CI 构建使用的固定模块闭包输入，大小和摘要由 `.env` 校验。其他分区镜像与设备证据放在 `evidence/`。
+- `work/cache/downloads/ota/system_dlkm-os4.0.6.0.img`：CI 构建使用的固定模块闭包输入，由 init 从依赖仓固定 Release 下载，大小和摘要由 `.env` 校验。其他分区镜像与设备证据放在 `evidence/`。
 
 `INIT_FETCH_JOBS` 控制初始化并发，CI 使用 2；独立任务共用槽位，完成后立即补位。
 
-主仓库仅消费 fixed 依赖。五项包 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）必须完整有效。归档、manifest、实际内容和工具链安装树分别按固定摘要验证。现有 v1 包绑定的来源输入字段保持兼容。
+主仓库仅消费 fixed 依赖。五项包 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）必须完整有效。归档、manifest、实际内容和工具链安装树分别按固定摘要验证。现有 v1 包绑定的来源输入字段保持兼容。AK3 模板归档和原样 OTA 镜像独立发布于 [build-inputs-v1-d082477](https://github.com/LunaKernel/ci-dependencies/releases/tag/build-inputs-v1-d082477)，由 `.env` 固定 URL、SHA-256、模板树摘要和镜像大小。
 
 CI 缓存 ccache、固定下载、Manager APK、干净 common、回移内容目录和工具链安装树；key 绑定内容身份与格式。依赖在 init 校验成功后、patch 前保存；common 必须无已跟踪差异、未跟踪或忽略文件，ccache 使用 `compiler_check=content`。目录与完整流程见 [构建说明](BUILDING.md)。
 
@@ -96,7 +96,7 @@ CI 缓存 ccache、固定下载、Manager APK、干净 common、回移内容目�
 
 ## 5. 构建与发布门槛
 
-- `bash tools/ci/check.sh` 统一执行 Shell/Python 语法检查、单元测试、构建输入检查和 actionlint；该轻量检查可在本地开发时执行，完整编译与发布门禁由 CI 执行。
+- `bash tools/ci/check.sh` 统一执行 Shell/Python 语法检查、单元测试、构建输入检查和 actionlint；`metadata` 与轻量检查对 AK3 模板、OTA 镜像仅核对 pin 格式，实际输入在 init 准备后验证。该轻量检查可在本地开发时执行，完整编译与发布门禁由 CI 执行。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
 - 项目配置、modules.order 及摘要以 `.env` 为准；保留 stock Rust Binder 黑名单和工具探测缓存项，后者 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
 - 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
@@ -111,7 +111,7 @@ CI 缓存 ccache、固定下载、Manager APK、干净 common、回移内容目�
 - ExtTSP MUST 显式禁止作用于无 profile 的函数。AutoFDO 的 Profi 固定使用 `-sample-profile-even-flow-distribution=false`，以官方单路径增广规避当前组合中均匀分流 DAG 搜索的异常耗时；LLVM 22 与 LLVM 23 均已复现该路径，保留 sample-use、Profi 最小费用流与 MIR profile loader。该策略可能改变推断权重和代码布局，不得声称性能等价。C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。
 - stock 清单覆盖 `OS4.0.6.0.XPCCNXM` 同包四分区全部模块，4090 项实际 vmlinux 依赖及五列 tuple 的摘要以 `.env` 为准。system_dlkm 的 103 个模块中，102 个必须严格闭包；唯一 stock `rust_binder.ko` 保留固定镜像身份、240 项原始需求及无导出、无模块依赖、无反向依赖证明，其本次比较完整记录，不得宣称该 `.ko` 可加载。放行另须证明 `modules.builtin` 包含 Rust Binder、`modules.order` 不含它、`System.map` 含 Rust 初始化函数/initcall 且无 C 初始化函数，实际配置在符号解析前屏蔽 stock 同名模块。其余模块不得套用此替代；项目新增模块独立执行第 3 节门禁。
-- 输入固定为 `ci/inputs/os4.0.6.0/system_dlkm.img`，大小与 SHA-256 由 `.env` 固定。`build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
+- 输入固定为 `work/cache/downloads/ota/system_dlkm-os4.0.6.0.img`，由 `init.sh` 下载准备，大小与 SHA-256 由 `.env` 固定。`build.sh` 必须校验整镜像身份、AVB hashtree、EROFS 及 stock 清单绑定，缺失或不匹配时在打包前失败。重建清单必须校验同 OTA 四镜像及 `unpack_bootimg`、`bsdtar`、kmod、EROFS 工具；不得混用不同 OTA 的分区证据。
 
 发布产物名称：
 
@@ -120,7 +120,7 @@ luna-xiaomi17-g<项目提交前8位>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<项目提交前8位>-YYYYMMDD
 ```
 
-AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。模板必须由 `ak3_template/` 中固定的官方脚本基线与 Luna 差异补丁重新组装；BusyBox 和 MagiskBoot 必须来自 `.env` 固定来源并在使用前校验摘要，禁止重新提交预制模板 ZIP。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
+AnyKernel3 只能替换 `Image`，必须含 `kernel.string=Luna Kernel for Xiaomi 17` 与 `do.devicecheck=0`，不得携带或修改 DTB、DTBO、vendor modules、ramdisk 或 boot header。模板源码及许可证由依赖仓 [`ak3_template/`](https://github.com/LunaKernel/ci-dependencies/tree/build-inputs-v1-d082477/ak3_template) 维护，主仓 init 校验归档 SHA-256、安全解包并验证树摘要，build 使用其中固定的官方脚本基线与 Luna 差异补丁重新组装；BusyBox 和 MagiskBoot 必须来自 `.env` 固定来源并在使用前校验摘要，禁止重新提交预制模板 ZIP。IPSet 用户态命令继续作为独立 KernelSU 模块交付。
 
 Manager APK 属于配套交付检查，不是内核启动门禁。`.env` MUST 固定官方 main CI 的提交、run/artifact ID、归档与 APK SHA-256、版本、UAPI 和签名证书；更新 KernelSU 时一并审查兼容性。`init.sh` 优先复用 `work/cache/ksu-manager/` 或已验证的现有 APK；`build.sh` 只离线校验、记录来源并交付，校验签名证书与实际内核编译参数一致。APK MUST 纳入 `.build-artifacts`，由 `release.tsv` 的 `ksu_manager_apk` 指定，CI 产物导出不得遗漏；历史未要求 APK 的发布按原清单验证。缺少兼容官方产物时不得静默省略或宣称交付齐全。
 

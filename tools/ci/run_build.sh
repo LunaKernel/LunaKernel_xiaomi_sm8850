@@ -42,24 +42,7 @@ cache_paths() {
 }
 
 check_input() {
-    python3 - <<'PY'
-import hashlib
-import os
-from pathlib import Path
-
-path = Path(os.environ['ANDROID17_STOCK_SYSTEM_DLKM_IMAGE'])
-if path.as_posix() != 'ci/inputs/os4.0.6.0/system_dlkm.img':
-    raise SystemExit('CI 只接受项目固定镜像路径')
-if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file():
-    raise SystemExit('固定镜像缺失或路径不安全')
-if path.stat().st_size != int(os.environ['ANDROID17_STOCK_SYSTEM_DLKM_SIZE']):
-    raise SystemExit('固定镜像大小不匹配')
-with path.open('rb') as stream:
-    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-if digest != os.environ['ANDROID17_STOCK_SYSTEM_DLKM_SHA256']:
-    raise SystemExit('固定镜像 SHA-256 不匹配')
-print('[OK] 固定 CI 镜像身份检查通过')
-PY
+    python3 "${ROOT}/tools/ci_dependencies.py" check-input-pins --workspace "${ROOT}"
 }
 
 require_run() {
@@ -104,7 +87,8 @@ download_keys = ('CI_CLANG_REVISION', 'AOSP_BUILD_TOOLS_REPO',
                  'STOCK_KMOD_SHA256', 'STOCK_LIBCXX_SHA256',
                  'ANDROID_NDK_URL', 'ANDROID_NDK_SHA256', 'IPSET_URL', 'IPSET_SHA512',
                  'LIBMNL_URL', 'LIBMNL_SHA256',
-                 'BACKPORT_BUNDLE_SHA256', 'CI_TOOLCHAIN_BUNDLE_SHA256')
+                 'BACKPORT_BUNDLE_SHA256', 'CI_TOOLCHAIN_BUNDLE_SHA256',
+                 'AK3_TEMPLATE_SHA256', 'ANDROID17_STOCK_SYSTEM_DLKM_SHA256')
 print('ccache_prefix=luna-ccache-v1-ubuntu24-x64-' + compiler)
 print('downloads_key=luna-downloads-v1-' + identity(download_keys))
 print('manager_key=luna-manager-v1-' + os.environ['KSU_MANAGER_APK_SHA256'])
@@ -245,7 +229,12 @@ case "${1:-}" in
         require_run
         prepare_run_directory
         case "$1" in
-            init) validate_fixed_dependencies; phase init init.sh; cache_sizes ;;
+            init)
+                validate_fixed_dependencies
+                phase init init.sh
+                python3 "${ROOT}/tools/ci_dependencies.py" check-stock-image --workspace "${ROOT}"
+                cache_sizes
+                ;;
             compile) compile ;;
             export) export_bundle ;;
         esac

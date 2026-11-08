@@ -148,30 +148,30 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, msg, headers, newurl)
 
 
-def archive_file(root, prefix):
+def archive_file(root, prefix, *, relative=None, size=None):
     digest = digest_pin(prefix + '_SHA256')
-    directory = local_path(root, 'work/cache/downloads/ci-dependencies')
-    directory.mkdir(parents=True, exist_ok=True)
-    archive = directory / (digest + '.tar')
+    archive = local_path(root, relative or ('work/cache/downloads/ci-dependencies/' + digest + '.tar'))
+    archive.parent.mkdir(parents=True, exist_ok=True)
     if archive.exists():
-        require(not archive.is_symlink() and sha256(archive) == digest, '固定依赖归档摘要不匹配')
+        require(archive.is_file() and sha256(archive) == digest, '固定依赖归档摘要不匹配')
+        require(size is None or archive.stat().st_size == size, '固定依赖大小不匹配')
         return archive
     url = os.environ.get(prefix + '_URL', '')
     require(urllib.parse.urlparse(url).scheme == 'https', '固定依赖下载地址必须使用 HTTPS')
-    descriptor, temporary = tempfile.mkstemp(prefix='.download-', dir=directory)
-    try:
+    with tempfile.TemporaryDirectory(prefix='.download-', dir=archive.parent) as directory:
+        temporary = Path(directory) / 'payload'
         opener = urllib.request.build_opener(HTTPSRedirect)
         started = time.monotonic()
         actual = hashlib.sha256()
-        with os.fdopen(descriptor, 'wb') as output, opener.open(url, timeout=60) as response:
+        request = urllib.request.Request(url, headers={'Accept': 'application/octet-stream'})
+        with temporary.open('xb') as output, opener.open(request, timeout=60) as response:
             while chunk := response.read(4 * 1024 * 1024):
                 require(time.monotonic() - started < 600, '固定依赖下载超过十分钟')
                 output.write(chunk)
                 actual.update(chunk)
         require(actual.hexdigest() == digest, '下载依赖的 SHA-256 不匹配')
+        require(size is None or temporary.stat().st_size == size, '下载依赖的大小不匹配')
         os.rename(temporary, archive)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
     return archive
 
 
@@ -220,6 +220,63 @@ def extract_archive(archive, target, *, zstd=False):
             unpack(bundle)
 
 
+STOCK_IMAGE = 'work/cache/downloads/ota/system_dlkm-os4.0.6.0.img'
+
+
+def check_input_pins():
+    for key in ('AK3_TEMPLATE_SHA256', 'AK3_TEMPLATE_TREE_SHA256',
+                'ANDROID17_STOCK_SYSTEM_DLKM_SHA256'):
+        digest_pin(key)
+    for key in ('AK3_TEMPLATE_URL', 'ANDROID17_STOCK_SYSTEM_DLKM_URL'):
+        require(re.fullmatch(r'https://[^/\s]+(?:/[^\s]*)?', os.environ.get(key, '')),
+                '固定输入下载地址必须使用 HTTPS: ' + key)
+    require(os.environ.get('ANDROID17_STOCK_SYSTEM_DLKM_IMAGE') == STOCK_IMAGE,
+            'CI 只接受项目固定镜像路径')
+    require(re.fullmatch(r'[1-9][0-9]*', os.environ.get('ANDROID17_STOCK_SYSTEM_DLKM_SIZE', '')),
+            '固定镜像大小 pin 无效')
+
+
+def checked_stock_image(root):
+    path = local_path(root, STOCK_IMAGE)
+    require(path.is_file(), '固定镜像缺失或路径不安全')
+    require(path.stat().st_size == int(os.environ['ANDROID17_STOCK_SYSTEM_DLKM_SIZE']),
+            '固定镜像大小不匹配')
+    require(sha256(path) == digest_pin('ANDROID17_STOCK_SYSTEM_DLKM_SHA256'),
+            '固定镜像 SHA-256 不匹配')
+    return path
+
+
+def checked_ak3_template(root, directory=None):
+    expected = digest_pin('AK3_TEMPLATE_TREE_SHA256')
+    directory = directory or local_path(root, 'work/cache/dependencies/ak3-template-' + expected)
+    require(directory.is_dir() and not directory.is_symlink(), '固定 AK3 模板缺失')
+    require(tree_sha256(directory) == expected, '固定 AK3 模板树摘要不匹配')
+    return directory
+
+
+def prepare_ak3_template(root):
+    expected = digest_pin('AK3_TEMPLATE_TREE_SHA256')
+    destination = local_path(root, 'work/cache/dependencies/ak3-template-' + expected)
+    if destination.exists():
+        return checked_ak3_template(root, destination)
+    archive = archive_file(root, 'AK3_TEMPLATE')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.ak3-', dir=destination.parent) as directory:
+        staging = Path(directory)
+        extract_archive(archive, staging)
+        require({path.name for path in staging.iterdir()} == {'ak3_template'}, 'AK3 归档根目录错误')
+        payload = checked_ak3_template(root, staging / 'ak3_template')
+        os.rename(payload, destination)
+    return destination
+
+
+def prepare_inputs(root):
+    check_input_pins()
+    archive_file(root, 'ANDROID17_STOCK_SYSTEM_DLKM', relative=STOCK_IMAGE,
+                 size=int(os.environ['ANDROID17_STOCK_SYSTEM_DLKM_SIZE']))
+    return prepare_ak3_template(root)
+
+
 def prepare_backports(root):
     expected = digest_pin('BACKPORT_BUNDLE_MANIFEST_SHA256')
     destination = local_path(root, 'work/cache/dependencies/backports-' + expected)
@@ -264,7 +321,8 @@ def prepare_toolchain(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('backports-check', 'prepare-backports', 'prepare-toolchain'))
+    parser.add_argument('command', choices=('backports-check', 'prepare-backports', 'prepare-toolchain',
+                                            'check-input-pins', 'check-stock-image', 'ak3-check', 'prepare-inputs'))
     parser.add_argument('--workspace', required=True, type=Path)
     args = parser.parse_args()
     root = args.workspace.resolve()
@@ -274,6 +332,15 @@ def main():
         print(prepare_backports(root))
     elif args.command == 'prepare-toolchain':
         print(prepare_toolchain(root))
+    elif args.command == 'check-input-pins':
+        check_input_pins()
+    elif args.command == 'check-stock-image':
+        check_input_pins()
+        print(checked_stock_image(root))
+    elif args.command == 'ak3-check':
+        print(checked_ak3_template(root))
+    elif args.command == 'prepare-inputs':
+        print(prepare_inputs(root))
 
 
 if __name__ == '__main__':

@@ -38,7 +38,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 
 ## 构建
 
-完整编译统一通过 GitHub Actions 的 `build.yml` 从 main 手动触发，操作与产物下载见 [CI 构建说明](docs/BUILDING.md)。固定依赖由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 制作与托管。通过内容、模块闭包与发布检查后，交付 Image、AnyKernel3 ZIP、官方 Manager APK、IPSet 组件和构建审计。
+完整编译统一通过 GitHub Actions 的 `build.yml` 从 main 手动触发，操作与产物下载见 [CI 构建说明](docs/BUILDING.md)。固定依赖、AnyKernel3 模板源码与 OTA 校验镜像由 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 管理，主仓在初始化时下载并校验固定输入。通过内容、模块闭包与发布检查后，交付 Image、AnyKernel3 ZIP、官方 Manager APK、IPSet 组件和构建审计。
 
 ## 验证状态
 

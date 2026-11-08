@@ -725,6 +725,9 @@ if [ "${ENABLE_BBG}" = "1" ]; then
         git_network -C "${BBG_DIR}" fetch --unshallow origin
     fi
 fi
+python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-inputs \
+    --workspace "${HOST_WORKSPACE_DIR}" || die "固定 AK3 模板或 OTA 镜像准备失败"
+
 BACKPORT_BUNDLE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-backports \
     --workspace "${HOST_WORKSPACE_DIR}")" || die "固定回移包准备失败"
 [ -d "${BACKPORT_BUNDLE_DIR}" ] || die "固定回移包目录缺失: ${BACKPORT_BUNDLE_DIR}"

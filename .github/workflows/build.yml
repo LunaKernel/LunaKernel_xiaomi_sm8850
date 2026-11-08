@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
           clean: false
           fetch-depth: 1
-      - name: Fix build identity and verify OTA input
+      - name: Fix build identity and verify input pins
         id: meta
         run: bash tools/ci/run_build.sh metadata
       - name: Prepare temporary runner
