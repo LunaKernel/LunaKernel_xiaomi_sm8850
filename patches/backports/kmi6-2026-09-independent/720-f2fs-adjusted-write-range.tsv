@@ -1,0 +1,2 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	f2fs_adjusted_write_range	direct	aosp	android16-6.12-2026-09_r13	f4cf7d51e6bea5a60615e88efed723bfab37af7c	2026-11-04	65616d19430b02192ed2f021ba3c63760dd2828d	fs/f2fs/file.c	-	-	-

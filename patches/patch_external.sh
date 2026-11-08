@@ -230,9 +230,12 @@ verify_susfs_integration() {
         die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
     git -C "${KSU_DIR}" apply --reverse --check \
         --exclude=kernel/Kconfig \
+        --exclude=kernel/core/init.c \
+        --exclude=kernel/hook/setuid_hook.c \
         --exclude=kernel/policy/app_profile.c \
         --exclude=kernel/runtime/boot_event.c \
         --exclude=kernel/runtime/ksud_integration.c \
+        --exclude=kernel/selinux/rules.c \
         --exclude=kernel/selinux/selinux.c \
         --exclude=kernel/sulog/event.c \
         --exclude=kernel/supercall/dispatch.c \
@@ -273,8 +276,12 @@ verify_susfs_integration() {
     {
         patch_paths_excluding "${KSU_SUSFS_PATCH_FILE}" \
             kernel/Kconfig \
+            kernel/core/init.c \
+            kernel/hook/setuid_hook.c \
             kernel/policy/app_profile.c \
             kernel/runtime/boot_event.c \
+            kernel/runtime/ksud_integration.c \
+            kernel/selinux/rules.c \
             kernel/selinux/selinux.c \
             kernel/sulog/event.c \
             kernel/supercall/dispatch.c
@@ -475,7 +482,11 @@ apply_susfs_integration() {
         log_info "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁与 Luna fixup 已存在"
     else
         apply_patch_once "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁" \
-            "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}"
+            "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}" \
+            --exclude=kernel/core/init.c \
+            --exclude=kernel/hook/setuid_hook.c \
+            --exclude=kernel/runtime/ksud_integration.c \
+            --exclude=kernel/selinux/rules.c
         apply_patch_once "基于 SUSFS v2.3.0 官方补丁的 KernelSU Luna fixup" \
             "${KSU_DIR}" "${SUSFS_KSU_FIX_PATCH_FILE}"
     fi
@@ -548,7 +559,7 @@ TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef5
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-main}"
-KSU_COMMIT="${KSU_COMMIT:-51c217863c5e1fb639501e92ef17ac6d0cf90c92}"
+KSU_COMMIT="${KSU_COMMIT:-730f644615969cfd4a84b45d7f62a667b7b95a50}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
 [ "${KSU_INTEGRATION_MODE}" = "builtin" ] || die "本阶段只允许经批准的 KernelSU built-in 模式"
