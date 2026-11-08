@@ -526,7 +526,7 @@ verify_final_source_deltas() {
     verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
     ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
     bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
-        verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
+        verify-applied-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
     [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
         die "KernelSU 精确差异指纹不匹配: ${ksu_sha256}"
     log_success "GKI common 基础差异、独立回移层与 KernelSU 精确差异指纹匹配"
@@ -774,6 +774,10 @@ verify_bbg_source_state() {
 verify_aosp_backport_source() {
     local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
     local actual_paths patch_file patch_id
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+        return 0
+    fi
     env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
         cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
     actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${AOSP_BACKPORT_AUDIT_DIR}" \
@@ -792,8 +796,12 @@ verify_aosp_backport_applied() {
     local patch_file
     verify_aosp_backport_source "${label}" "${commit}" "${expected_patch_id}" "${expected_paths}"
     patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
-        show --format= "${commit}" > "${patch_file}"
+    if backport_bundle_enabled; then
+        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
+    else
+        env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${AOSP_BACKPORT_AUDIT_DIR}" \
+            show --format= "${commit}" > "${patch_file}"
+    fi
     git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
     rm -f "${patch_file}"
 }
@@ -801,6 +809,10 @@ verify_aosp_backport_applied() {
 verify_linux_stable_source() {
     local label="$1" commit="$2" expected_patch_id="$3" expected_paths="$4"
     local actual_paths patch_file patch_id
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+        return 0
+    fi
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
         cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
@@ -822,6 +834,10 @@ verify_linux_stable_source_exact() {
     local expected_paths="$5" upstream_commit="$6"
     local actual_date commit_message upstream_patch_id upstream_paths
 
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+        return 0
+    fi
     [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 固定审计终点"
     verify_linux_stable_source "${label}" "${commit}" "${expected_patch_id}" \
         "${expected_paths}"
@@ -858,8 +874,12 @@ verify_linux_stable_backport_applied() {
     local patch_file
     verify_linux_stable_source "${label}" "${commit}" "${expected_patch_id}" "${expected_paths}"
     patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
-        -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
+    if backport_bundle_enabled; then
+        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
+    else
+        env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
+            -c log.mailmap=false show --format= "${commit}" > "${patch_file}"
+    fi
     git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
     rm -f "${patch_file}"
 }
@@ -868,6 +888,14 @@ verify_linux_mainline_backport_applied() {
     local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
     local expected_paths="$5" actual_date actual_paths patch_file patch_id
 
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+        patch_file="$(mktemp)"
+        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
+        git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || die "${label}未完整应用"
+        rm -f -- "${patch_file}"
+        return 0
+    fi
     [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 固定审计终点"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
         cat-file -e "${commit}^{commit}" 2>/dev/null || die "${label}对象缺失"
@@ -917,16 +945,18 @@ verify_first_batch_linux_backports() {
             "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" \
             "${F2FS_GC_MERGE_DEADLOCK_PATCH_ID}" \
             "fs/f2fs/segment.c"
-        [ "$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" rev-parse \
-            "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}^")" = \
-            "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" ] || \
-            die "F2FS GC 死锁组合提交顺序异常"
+        if ! backport_bundle_enabled; then
+            [ "$(env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" rev-parse \
+                "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}^")" = \
+                "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" ] || \
+                die "F2FS GC 死锁组合提交顺序异常"
+        fi
         verify_project_patch "F2FS GC 死锁 AOSP r21 适配补丁" \
-            "${F2FS_FOREGROUND_GC_PATCH}" \
+            "${F2FS_FOREGROUND_GC_PATCH_FILE}" \
             "${F2FS_FOREGROUND_GC_PATCH_SHA256}" \
             "${F2FS_FOREGROUND_GC_PATCH_ID}"
         git -C "${COMMON_DIR}" apply --reverse --check \
-            "${F2FS_FOREGROUND_GC_PATCH}" || \
+            "${F2FS_FOREGROUND_GC_PATCH_FILE}" || \
             die "F2FS GC 死锁 AOSP r21 适配补丁未完整应用"
     fi
     log_success "第一批 Linux 稳定修复来源、路径与应用状态检查通过"
@@ -1815,7 +1845,7 @@ F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT="${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_
 F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID="${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID:-8d86d1f0ff47ad109628af8462bd4506c81dd4f6}"
 F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT="${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT:-b885c7783c19c36c7bf899492a0bffcd68afa8c7}"
 F2FS_GC_MERGE_DEADLOCK_PATCH_ID="${F2FS_GC_MERGE_DEADLOCK_PATCH_ID:-f1e7da7bf78fadbfd5f41ae8f1d1b196ee96b98d}"
-F2FS_FOREGROUND_GC_PATCH="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-r21.patch}"
+F2FS_FOREGROUND_GC_PATCH_FILE="${HOST_WORKSPACE_DIR}/${F2FS_FOREGROUND_GC_PATCH:-patches/backports/f2fs-foreground-gc-deadlock-r21.patch}"
 F2FS_FOREGROUND_GC_PATCH_SHA256="${F2FS_FOREGROUND_GC_PATCH_SHA256:?缺少 F2FS foreground GC 补丁摘要 pin}"
 F2FS_FOREGROUND_GC_PATCH_ID="${F2FS_FOREGROUND_GC_PATCH_ID:-70442d9fb39ac24622e33231473817e5dc60249b}"
 ENABLE_TIMER_BASE_FAST_PATH="${ENABLE_TIMER_BASE_FAST_PATH:-0}"
@@ -1863,6 +1893,10 @@ ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
+BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
+if backport_bundle_enabled; then
+    verify_backport_bundle "${HOST_WORKSPACE_DIR}"
+fi
 verify_repo_identity "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_COMMIT}"
 verify_repo_identity "Android 16 GKI common 九月 KMI6" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_COMMIT}" "0"
 [ "$(sed -n 's/^VERSION = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^PATCHLEVEL = //p' "${COMMON_DIR}/Makefile").$(sed -n 's/^SUBLEVEL = //p' "${COMMON_DIR}/Makefile")" = "${COMMON_VERSION:?缺少 COMMON_VERSION}" ] || \
@@ -1878,8 +1912,6 @@ verify_ipv6_mld_delayed_work_uaf_fix
 verify_android17_selected_fixes
 [ "${ENABLE_SELECTED_BACKPORTS:-0}" != "1" ] || \
     bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" verify-applied "${COMMON_DIR}"
-bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" \
-    verify-applied "${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_source_state
 KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" check \
     --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \

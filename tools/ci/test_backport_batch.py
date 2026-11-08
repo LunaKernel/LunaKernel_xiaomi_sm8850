@@ -30,7 +30,7 @@ class BackportBatchTests(unittest.TestCase):
                     if not key.startswith(("GIT_", "BACKPORT_", "BASH_FUNC_"))
                     and key not in ("BASH_ENV", "ENV")}
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
-                        GIT_TERMINAL_PROMPT="0", LC_ALL="C.UTF-8")
+                        GIT_TERMINAL_PROMPT="0", LC_ALL="C.UTF-8", TMPDIR=str(self.root))
         self.source = self.root / "history"
         self.source.mkdir()
         self.git(self.source, "init", "-q")
@@ -134,6 +134,125 @@ class BackportBatchTests(unittest.TestCase):
 
     def target_diff(self):
         return self.git(self.target, "diff", "--binary", "--full-index", "HEAD", "--", ".")
+
+    def enable_bundle(self):
+        self.pins["BACKPORT_BUNDLE_MANIFEST_SHA256"] = "a" * 64
+        self.bundle = self.root / "work/cache/dependencies" / ("backports-" + "a" * 64)
+        (self.bundle / "patches").mkdir(parents=True)
+        for commit in self.commits.values():
+            raw = subprocess.run([GIT, "-C", str(self.source), "show", "--format=", commit],
+                                 env=self.env, capture_output=True, timeout=10, check=True).stdout
+            (self.bundle / "patches" / (commit + ".patch")).write_bytes(raw)
+        # helper 的真实完整性规则由其测试覆盖；这里只验证 shell 的信任边界与调用协议。
+        self.bundle_trace = self.root / "bundle-calls.jsonl"
+        (self.root / "tools/ci_dependencies.py").write_text(
+            "import json, pathlib, sys\n"
+            "assert sys.argv[1:] == ['backports-check', '--workspace', str(pathlib.Path(__file__).resolve().parents[1])]\n"
+            f"trace = pathlib.Path({str(self.bundle_trace)!r})\n"
+            "with trace.open('a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            f"print({str(self.bundle)!r})\n")
+        self.write_pins()
+
+    def test_bundle_combined_verification_reuses_helper_without_sources(self):
+        self.enable_bundle()
+        shutil.rmtree(self.root / "audits")
+        self.assert_success(self.run_tool("apply", self.target))
+        original = self.target_diff()
+        self.bundle_trace.write_text("")
+        self.trace.write_text("")
+        self.assert_success(self.run_tool("verify-applied-base-diff", self.target,
+                                          hashlib.sha256(b"").hexdigest()))
+        self.assertEqual(len(self.bundle_trace.read_text().splitlines()), 1)
+        calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
+        self.assertFalse(any("--is-ancestor" in call or "show" in call for call in calls))
+        index_calls = [call for call in calls if "apply" in call and "--cached" in call]
+        self.assertEqual(len(index_calls), 9)
+        self.assertEqual(sum("--reverse" in call for call in index_calls), 4)
+        self.assertTrue(any("apply" in call and "--reverse" in call and "--cached" not in call
+                            for call in calls))
+        self.assertEqual(self.target_diff(), original)
+
+    def test_bundle_wrong_raw_patch_id_is_rejected_before_mutation(self):
+        self.enable_bundle()
+        commits = list(self.commits.values())
+        shutil.copyfile(self.bundle / "patches" / (commits[0] + ".patch"),
+                        self.bundle / "patches" / (commits[1] + ".patch"))
+        result = self.run_tool("apply", self.target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("patch-id 不匹配", result.stderr)
+        self.assertEqual(self.target_diff(), "")
+
+    def test_source_audit_flag_forces_original_source_checks(self):
+        self.enable_bundle()
+        self.env["BACKPORT_SOURCE_AUDIT"] = "1"
+        self.git(self.root / "audits/mainline.git", "remote", "set-url", "origin", "https://example.invalid/other")
+        result = self.run_tool("apply", self.target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("remote 不匹配", result.stderr)
+        self.assertFalse(self.bundle_trace.exists())
+        self.assertEqual(self.target_diff(), "")
+
+    def test_bundle_adapt_still_checks_project_patch_sha(self):
+        self.enable_bundle()
+        manifest = self.manifests[0]
+        header, row = manifest.read_text().splitlines()
+        fields = row.split("\t")
+        patch = self.root / "patches/alpha.patch"
+        shutil.copyfile(self.bundle / "patches" / (fields[5] + ".patch"), patch)
+        fields[2] = "adapt"
+        fields[9:12] = ["patches/alpha.patch", hashlib.sha256(patch.read_bytes()).hexdigest(), fields[7]]
+        manifest.write_text(header + "\n" + "\t".join(fields) + "\n")
+        self.write_pins()
+        patch.write_bytes(patch.read_bytes() + b"# changed\n")
+        result = self.run_tool("apply", self.target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("项目适配补丁 SHA-256 不匹配", result.stderr)
+        self.assertEqual(self.target_diff(), "")
+
+    def run_legacy_build_checks(self):
+        source = (ROOT / "build.sh").read_text()
+        functions = source[source.index("verify_aosp_backport_source() {"):source.index("verify_first_batch_linux_backports() {")]
+        commit = self.commits["alpha"]
+        fields = self.manifests[0].read_text().splitlines()[1].split("\t")
+        script = "\n".join((
+            "set -euo pipefail", 'die() { printf "%s\\n" "$1" >&2; exit 1; }',
+            "HOST_WORKSPACE_DIR=" + shlex.quote(str(self.root)),
+            "COMMON_DIR=" + shlex.quote(str(self.target)),
+            "BACKPORT_BUNDLE_MANIFEST_SHA256=" + "a" * 64,
+            'BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"',
+            functions,
+            *(f"{function} fixture {commit} {fields[7]} alpha.txt" for function in (
+                "verify_aosp_backport_applied", "verify_linux_stable_backport_applied")),
+            f"verify_linux_mainline_backport_applied fixture {commit} {fields[6]} {fields[7]} alpha.txt"))
+        return subprocess.run([BASH, "-c", script], env=self.env, capture_output=True, text=True, timeout=20)
+
+    def test_legacy_build_bundle_keeps_reverse_checks_without_audits(self):
+        self.enable_bundle()
+        shutil.rmtree(self.root / "audits")
+        self.assert_success(self.run_tool("apply", self.target))
+        self.bundle_trace.write_text("")
+        self.assert_success(self.run_legacy_build_checks())
+        self.assertEqual(len(self.bundle_trace.read_text().splitlines()), 1)
+        self.git(self.target, "restore", "--", "alpha.txt")
+        self.assertNotEqual(self.run_legacy_build_checks().returncode, 0)
+
+    def test_audit_entry_requires_no_common_and_never_uses_bundle(self):
+        self.enable_bundle()
+        shutil.copyfile(ROOT / "patch.sh", self.root / "patch.sh")
+        result = subprocess.run([BASH, str(self.root / "patch.sh"), "--audit-sources"],
+                                env=self.env, capture_output=True, text=True, timeout=20)
+        self.assert_success(result)
+        self.assertIn("未修改 common", result.stdout)
+        self.assertFalse(self.bundle_trace.exists())
+        self.assertEqual(self.target_diff(), "")
+
+    def test_bundle_helper_failure_is_rejected_before_mutation(self):
+        self.enable_bundle()
+        (self.root / "tools/ci_dependencies.py").write_text("raise SystemExit(1)\n")
+        result = self.run_tool("apply", self.target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("固定回移补丁包校验失败", result.stderr)
+        self.assertEqual(self.target_diff(), "")
 
     def test_apply_idempotence_final_state_and_complete_replay(self):
         self.assert_success(self.run_tool("apply", self.target))

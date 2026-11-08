@@ -2,6 +2,55 @@
 #
 # Apply and verify one fixed official-backport manifest as an ordered set.
 #
+# patch/build 仅导入包校验函数，不加载清单状态或重新读取配置。
+VERIFIED_BACKPORT_BUNDLE_WORKSPACE=""
+VERIFIED_BACKPORT_BUNDLE_DIR=""
+backport_bundle_enabled() {
+	[ -n "${BACKPORT_BUNDLE_MANIFEST_SHA256:-}" ] && [ "${BACKPORT_SOURCE_AUDIT:-0}" != 1 ]
+}
+
+verify_backport_bundle() {
+	local workspace="$1" expected_dir
+	[ "${VERIFIED_BACKPORT_BUNDLE_WORKSPACE:-}" != "${workspace}" ] || return 0
+	expected_dir="${workspace}/work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}"
+	VERIFIED_BACKPORT_BUNDLE_DIR="$(python3 "${workspace}/tools/ci_dependencies.py" \
+		backports-check --workspace "${workspace}")" || die "固定回移补丁包校验失败，请先运行 ./init.sh"
+	[ "${VERIFIED_BACKPORT_BUNDLE_DIR}" = "${expected_dir}" ] || die "回移补丁包目录异常"
+	VERIFIED_BACKPORT_BUNDLE_WORKSPACE="${workspace}"
+}
+
+copy_backport_bundle_patch() {
+	local workspace="$1" commit="$2" target="$3" source_sha patch_file
+	verify_backport_bundle "${workspace}"
+	[[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "回移补丁提交 ID 非法"
+	patch_file="${VERIFIED_BACKPORT_BUNDLE_DIR}/patches/${commit}.patch"
+	[ -f "${patch_file}" ] && [ ! -L "${patch_file}" ] || die "固定回移补丁缺失或不安全: ${commit}"
+	source_sha="$(sha256sum "${patch_file}" | awk '{ print $1 }')"
+	cp -- "${patch_file}" "${target}"
+	[ "$(sha256sum "${target}" | awk '{ print $1 }')" = "${source_sha}" ] && \
+		[ "$(sha256sum "${patch_file}" | awk '{ print $1 }')" = "${source_sha}" ] || \
+		die "固定回移补丁复制期间发生变化: ${commit}"
+}
+
+verify_backport_bundle_patch() {
+	local workspace="$1" commit="$2" expected_patch_id="$3" expected_paths="${4:-}"
+	local patch_file actual_paths
+	verify_backport_bundle "${workspace}"
+	[[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "回移补丁提交 ID 非法"
+	patch_file="${VERIFIED_BACKPORT_BUNDLE_DIR}/patches/${commit}.patch"
+	[ -f "${patch_file}" ] && [ ! -L "${patch_file}" ] || die "固定回移补丁缺失或不安全: ${commit}"
+	[ "$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')" = "${expected_patch_id}" ] || \
+		die "固定回移补丁 patch-id 不匹配: ${commit}"
+	if [ -n "${expected_paths}" ]; then
+		actual_paths="$(git apply --numstat "${patch_file}" | cut -f3 | LC_ALL=C sort | paste -sd ' ' -)"
+		[ "${actual_paths}" = "${expected_paths}" ] || die "固定回移补丁路径不匹配: ${commit}"
+	fi
+}
+
+if [ "${BASH_SOURCE[0]}" != "$0" ] && [ "${BACKPORT_BUNDLE_LIBRARY:-0}" = 1 ]; then
+	return 0
+fi
+
 set -euo pipefail
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
@@ -340,7 +389,20 @@ verify_project_patch() {
 }
 
 verify_sources() {
-	local row stable_message
+	local row stable_message order group action source ref commit date patch_id paths
+	local project_patch project_sha project_patch_id
+	if backport_bundle_enabled; then
+		verify_backport_bundle "${WORKSPACE_DIR}"
+		for row in "${MANIFEST_ROWS[@]}"; do
+			IFS=$'\t' read -r order group action source ref commit date patch_id paths \
+				project_patch project_sha project_patch_id <<<"${row}"
+			if [ "${action}" = adapt ]; then
+				verify_project_patch "${group}" "${paths}" "${project_patch}" \
+					"${project_sha}" "${project_patch_id}" "${source}" "${commit}"
+			fi
+		done
+		return 0
+	fi
 	verify_audit_repo "AOSP common 审计源" "${AOSP_DIR}" "${COMMON_REPO}"
 	verify_audit_repo "Linux stable 审计源" "${STABLE_DIR}" "${LINUX_STABLE_AUDIT_REPO}"
 	verify_audit_repo "Linux mainline 审计源" "${MAINLINE_DIR}" "${LINUX_MAINLINE_AUDIT_REPO}"
@@ -369,9 +431,15 @@ prepare_patch_cache() {
 		patch_file="${TMP_ROOT}/patches/${order}.patch"
 		case "${action}" in
 			direct)
-				source_repo_and_tip "${source}" "${ref}"
-				env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${SOURCE_REPO}" \
-					show --format= "${commit}" > "${patch_file}"
+				if backport_bundle_enabled; then
+					copy_backport_bundle_patch "${WORKSPACE_DIR}" "${commit}" "${patch_file}"
+				else
+					source_repo_and_tip "${source}" "${ref}"
+					env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${SOURCE_REPO}" \
+						show --format= "${commit}" > "${patch_file}"
+				fi
+				[ "$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')" = "${patch_id}" ] || \
+					die "${group} 官方补丁准备期间 patch-id 不匹配"
 				;;
 			adapt)
 				# 后续各轮使用同一份已固定内容，不重复读取可变的项目文件。

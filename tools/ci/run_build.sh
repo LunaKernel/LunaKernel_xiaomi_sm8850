@@ -10,8 +10,46 @@ set +a
 
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
+dependencies_mode() {
+    local key configured=false
+    local pins=(BACKPORT_BUNDLE_MANIFEST_SHA256 BACKPORT_BUNDLE_SHA256 BACKPORT_BUNDLE_URL
+        CI_TOOLCHAIN_BUNDLE_SHA256 CI_TOOLCHAIN_BUNDLE_URL)
+    for key in "${pins[@]}"; do
+        [[ -z "${!key:-}" ]] || configured=true
+    done
+    if [[ "${configured}" == false ]]; then
+        printf 'source\n'
+        return
+    fi
+    for key in "${pins[@]}"; do
+        [[ -n "${!key:-}" ]] || fail "固定依赖 pin 不完整: ${key}"
+    done
+    for key in BACKPORT_BUNDLE_MANIFEST_SHA256 BACKPORT_BUNDLE_SHA256 \
+        CI_TOOLCHAIN_BUNDLE_SHA256 CI_TOOLCHAIN_TREE_SHA256; do
+        [[ "${!key:-}" =~ ^[0-9a-f]{64}$ ]] || fail "固定依赖摘要无效: ${key}"
+    done
+    printf 'fixed\n'
+}
+
 cache_paths() {
-    local path commit
+    local path commit mode
+    mode="$(dependencies_mode)"
+    [[ "${COMMON_SOURCE_DIR}" == sources/aosp_common_6.12.92_kmi6_2026-09 ]] || \
+        fail "common 缓存路径不在固定范围: ${COMMON_SOURCE_DIR}"
+    [[ "${COMMON_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || fail 'common 缓存缺少固定提交'
+    printf '%s\t%s\n' common "${COMMON_SOURCE_DIR}"
+    if [[ "${mode}" == fixed ]]; then
+        [[ "${CI_TOOLCHAIN_NAME:-}" =~ ^ci-sm8850-[A-Za-z0-9._-]+$ ]] || fail '工具链缓存目录名无效'
+        path="${BUILD_ENVIRONMENT_DIR:?缺少工具链安装根目录 pin}"
+        [[ "${path}" =~ ^work/([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$ ]] || fail '工具链缓存路径必须位于 work 内'
+        case "/${path}/" in
+            */./*|*/../*) fail '工具链缓存路径不允许相对跳转' ;;
+        esac
+        printf '%s\t%s\n' \
+            backports "work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}" \
+            toolchain "${path}/toolchain/${CI_TOOLCHAIN_NAME}"
+        return
+    fi
     for path in "${AOSP_BACKPORT_AUDIT_SOURCE_DIR}" "${LINUX_STABLE_AUDIT_SOURCE_DIR}" \
         "${LINUX_MAINLINE_AUDIT_SOURCE_DIR}" "${KBUILD_AUDIT_SOURCE_DIR}"; do
         case "${path}" in
@@ -20,13 +58,10 @@ cache_paths() {
             *) fail "审计缓存路径不在固定范围: ${path}" ;;
         esac
     done
-    [[ "${COMMON_SOURCE_DIR}" == sources/aosp_common_6.12.92_kmi6_2026-09 ]] || \
-        fail "common 缓存路径不在固定范围: ${COMMON_SOURCE_DIR}"
-    for commit in "${COMMON_COMMIT}" "${AOSP_CLANG_COMMIT}" "${AOSP_RUST_COMMIT}" "${AOSP_BUILD_TOOLS_COMMIT}"; do
+    for commit in "${AOSP_CLANG_COMMIT}" "${AOSP_RUST_COMMIT}" "${AOSP_BUILD_TOOLS_COMMIT}"; do
         [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || fail '来源缓存缺少固定提交'
     done
     printf '%s\t%s\n' \
-        common "${COMMON_SOURCE_DIR}" \
         aosp "${AOSP_BACKPORT_AUDIT_SOURCE_DIR}" \
         stable "${LINUX_STABLE_AUDIT_SOURCE_DIR}" \
         mainline "${LINUX_MAINLINE_AUDIT_SOURCE_DIR}" \
@@ -71,6 +106,8 @@ metadata() {
     require_run
     check_input
     local build_id checkout_gc paths name path
+    export CI_DEPENDENCIES_MODE
+    CI_DEPENDENCIES_MODE="$(dependencies_mode)"
     paths="$(cache_paths)"
     # checkout 关闭自动 gc；只移除已知附加项，不扩大项目 Git 配置白名单。
     checkout_gc="$(git config --local --get-all gc.auto || true)"
@@ -85,6 +122,7 @@ metadata() {
         printf 'CI_RUN_DIR=work/tmp/ci-%s-%s\n' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
     } >> "${GITHUB_ENV:?}"
     {
+        printf 'dependencies_mode=%s\n' "${CI_DEPENDENCIES_MODE}"
         printf 'project_commit=%s\nbuild_id=%s\n' "${GITHUB_SHA}" "${build_id}"
         printf 'bundle_name=luna-%s-%s-%s.tar.gz\n' "${GITHUB_SHA:0:8}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
     } >> "${GITHUB_OUTPUT:?}"
@@ -98,16 +136,27 @@ def identity(keys):
 
 compiler = identity(('CI_TOOLCHAIN_TREE_SHA256', 'ANDROID_NDK_TREE_SHA256',
                      'SM8850_C_ARCH', 'SM8850_TUNE_CPU', 'AOSP_AUTOFDO_PROFILE_SHA256'))
-downloads = identity(('CI_CLANG_REVISION', 'CI_BINDGEN_URL', 'CI_BINDGEN_SHA256',
-                      'CI_HOST_BC_URL', 'CI_HOST_BC_SHA256', 'AOSP_BUILD_TOOLS_REPO',
-                      'STOCK_AUDIT_TOOLS_COMMIT', 'STOCK_FSCK_EROFS_SHA256',
-                      'STOCK_KMOD_SHA256', 'STOCK_LIBCXX_SHA256',
-                      'ANDROID_NDK_URL', 'ANDROID_NDK_SHA256', 'IPSET_URL', 'IPSET_SHA512',
-                      'LIBMNL_URL', 'LIBMNL_SHA256', 'MAGISK_APK_URL', 'MAGISK_APK_SHA256',
-                      'AK3_BUSYBOX_URL', 'AK3_BUSYBOX_SHA256'))
+download_keys = ('CI_CLANG_REVISION', 'CI_BINDGEN_URL', 'CI_BINDGEN_SHA256',
+                 'CI_HOST_BC_URL', 'CI_HOST_BC_SHA256', 'AOSP_BUILD_TOOLS_REPO',
+                 'STOCK_AUDIT_TOOLS_COMMIT', 'STOCK_FSCK_EROFS_SHA256',
+                 'STOCK_KMOD_SHA256', 'STOCK_LIBCXX_SHA256',
+                 'ANDROID_NDK_URL', 'ANDROID_NDK_SHA256', 'IPSET_URL', 'IPSET_SHA512',
+                 'LIBMNL_URL', 'LIBMNL_SHA256', 'MAGISK_APK_URL', 'MAGISK_APK_SHA256',
+                 'AK3_BUSYBOX_URL', 'AK3_BUSYBOX_SHA256')
+fixed = os.environ['CI_DEPENDENCIES_MODE'] == 'fixed'
+if fixed:
+    download_keys += ('BACKPORT_BUNDLE_SHA256', 'CI_TOOLCHAIN_BUNDLE_SHA256')
 print('ccache_prefix=luna-ccache-v1-ubuntu24-x64-' + compiler)
-print('downloads_key=luna-downloads-v1-' + downloads)
+print('downloads_key=luna-downloads-v1-' + identity(download_keys))
 print('manager_key=luna-manager-v1-' + os.environ['KSU_MANAGER_APK_SHA256'])
+
+# common 的缓存格式与内容身份独立于 init 调度，恢复后仍由 init 验证干净树。
+print('common_key=luna-common-v2-ubuntu24-x64-' + identity(('COMMON_REPO', 'COMMON_COMMIT')))
+if fixed:
+    # 只使用精确 key；归档下载缓存与解包内容/安装树缓存分别按内容标识。
+    print('backports_key=luna-backports-v1-ubuntu24-x64-' + os.environ['BACKPORT_BUNDLE_MANIFEST_SHA256'])
+    print('toolchain_key=luna-toolchain-v1-ubuntu24-x64-' + os.environ['CI_TOOLCHAIN_TREE_SHA256'])
+    raise SystemExit(0)
 
 # 来源缓存只使用精确 key；准备算法和清单变化不能继承旧的历史范围。
 def source_identity(keys, files):
@@ -138,7 +187,6 @@ sources = {
 for name, keys in sources.items():
     print(f'{name}_key=luna-source-v1-{name}-' + source_identity([*audit_keys, *keys], audit_files))
 checkouts = {
-    'common': ('COMMON_REPO', 'COMMON_BRANCH', 'COMMON_COMMIT', 'COMMON_SOURCE_DIR'),
     'clang': ('AOSP_CLANG_REPO', 'AOSP_CLANG_COMMIT', 'CI_CLANG_REVISION',
               'CI_CLANG_GIT_TREE', 'CI_CLANG_LEAF_TREE_SHA256'),
     'rust': ('AOSP_RUST_REPO', 'AOSP_RUST_COMMIT', 'CI_RUST_SUBTREE',
@@ -288,7 +336,7 @@ case "${1:-}" in
         require_run
         prepare_run_directory
         case "$1" in
-            init) phase init; cache_sizes ;;
+            init) dependencies_mode >/dev/null; phase init; cache_sizes ;;
             compile) compile ;;
             export) export_bundle ;;
         esac

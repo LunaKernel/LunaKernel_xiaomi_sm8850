@@ -25,7 +25,8 @@ def function(name):
 
 
 FUNCTIONS = "\n".join(function(name) for name in (
-    "validate_init_fetch_jobs", "stop_toolchain_fetches", "prepare_toolchain_source_trees"
+    "validate_init_fetch_jobs", "stop_toolchain_fetches", "run_init_tasks",
+    "prepare_toolchain_source_trees"
 ))
 MOCK = r'''
 import json, os, pathlib, subprocess, sys, time
@@ -42,7 +43,8 @@ if os.environ.get("MOCK_MODE") == "cancel":
 if os.environ.get("MOCK_FAIL") == name:
     time.sleep(0.05)
     sys.exit(int(os.environ.get("MOCK_EXIT", "7")))
-time.sleep(30 if child or os.environ.get("MOCK_SLOW") == name else 0.15)
+delay = 0.8 if os.environ.get("MOCK_LONG") == name else 0.15
+time.sleep(30 if child or os.environ.get("MOCK_SLOW") == name else delay)
 (root / (name + ".end")).write_text(str(time.monotonic()))
 '''
 SCRIPT = r'''
@@ -156,6 +158,11 @@ class InitParallelTests(unittest.TestCase):
 
     def test_parallel_limit_is_two(self):
         self.check_success("2", 2)
+
+    def test_completed_slot_is_refilled_before_slow_worker_finishes(self):
+        self.check_success("2", 2, MOCK_LONG="clang")
+        started = json.loads((self.root / "tools.start").read_text())["time"]
+        self.assertLess(started, float((self.root / "clang.end").read_text()))
 
     def test_completed_tasks_are_reaped_successfully(self):
         self.check_success("2", 2, MOCK_WAIT_COMPLETED="1")

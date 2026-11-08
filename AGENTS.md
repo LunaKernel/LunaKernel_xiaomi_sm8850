@@ -74,14 +74,18 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 ```
 
 - `.env`：唯一受版本控制的 pin、构建身份和验证快照来源。
-- `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK、配套官方 CI Manager APK 和已采用补丁必需的只读官方来源；`--audit-history` 额外准备候选调查历史、历史 ABI 与 stock 清单重建资料。不应用补丁、不编译。
-- `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。
+- `init.sh`：准备并校验固定源码、工具、NDK 与配套官方 CI Manager APK。无依赖包 pin 时沿用官方工具链与构建必需只读来源准备；固定依赖模式按摘要准备回移内容包和 AOSP 工具链安装树，不准备来源审计仓库。`--prepare-dependencies` 强制准备制作所需官方来源和工具，不直接导出；`--audit-history` 额外准备候选调查历史、历史 ABI 与 stock 清单重建资料。不应用补丁、不编译。
+- `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。固定依赖模式校验内容包、patch-id、路径、单项应用/撤销和有序重放；`--audit-sources` 执行完整来源审计，供依赖制作与人工调查使用。
 - `patch_external.sh`：仅接入已准备的外部组件；不得下载。
 - `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计；仅在发布闭包齐全且无未确认漂移后打包，不得准备源码。
 - `tools/ci/`：CI 宿主准备、标准流程调度与交付通知；不得绕过上述脚本和门禁。`.github/workflows/check.yml` 在 main 的 push/PR 执行轻量检查，`build.yml` 仅手动在 main 执行完整构建，分为 build、notify 两个 job，不创建 Release。
 - `ci/inputs/os4.0.6.0/system_dlkm.img`：用户批准随仓库保存的唯一分区镜像，作为本地与 CI 共用的固定运行输入；大小和摘要仍由 `.env` 校验。其他 ROM、分区镜像及设备证据不得提交。
 
-`INIT_FETCH_JOBS` 是 `init.sh` 的运行时并发参数，本地默认 1、CI 使用 2，不属于 `.env` pin。CI 可复用内容校验的 ccache、固定下载、官方 Manager、固定工具链来源树及构建必需的只读审计对象；来源缓存按固定输入和准备逻辑生成 key，恢复后仍须验证来源与内容。不得缓存已打补丁的源码工作树，或通过伪造时间、宽松文件状态匹配、关闭编译器身份校验换取命中。完整 CI 的宿主、缓存、产物和通知流程见 `docs/BUILDING.md`。
+`INIT_FETCH_JOBS` 是 `init.sh` 的运行时并发参数，本地默认 1、CI 使用 2；源码、工具和回移依赖共用槽位，任务完成后立即补位，不属于 `.env` pin。CI 保留内容校验的 ccache、固定下载、官方 Manager 与干净 common 缓存；common key 只绑定内容身份与缓存格式，不绑定 init 调度。依赖包五项 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）全未配置时采用 source 模式；任一已配置则须完整有效，缺项必须失败，不得静默降级。真实包发布并取得相应远端授权前保留 source 模式，不得填占位 URL 或假摘要。
+
+fixed 模式仅按平台、内容身份和格式精确缓存 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}` 与 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，不恢复、统计或保存四个审计来源目录及 Clang/Rust/build-tools 三个来源目录；source 模式沿用这些来源缓存。归档共存 `work/cache/downloads/ci-dependencies/`，由固定下载缓存覆盖。依赖缓存恢复后仍须校验内容和摘要，init 成功后、patch 前才保存；common 有已跟踪差异、未跟踪或忽略文件时不保存。不得缓存已打补丁的源码工作树，或通过伪造时间、宽松文件状态匹配、关闭编译器身份校验换取命中。完整 CI 的宿主、缓存、产物和通知流程见 `docs/BUILDING.md`。
+
+固定依赖优先通过 `bash tools/prepare_ci_dependencies.sh` 制作：先调用 helper `export-toolchain`，内部强制 `init.sh --prepare-dependencies` 以准备并校验官方来源和工具，再调用 `export-backports`、`pack-backports --input`。底层入口为 `tools/ci_dependencies.py export-backports/pack-backports/export-toolchain --workspace ROOT --output PATH`。结果写入新的 `work/ci-dependencies/prepared.*/`，保留回移/工具链归档、回移 manifest 与来源文件及只含真实摘要、不含 URL 的 `pins.env`；不发布、不修改主 `.env`，不得以不完整的制作 pin 配置启用日常 fixed 模式。制作阶段必须证明官方 Git 来源、固定提交及关系，保留来源、许可证和逐文件摘要；回移导出必须通过 `patch.sh --audit-sources`。日常 fixed 模式按固定 manifest、归档和安装树摘要校验内容，不重复依赖来源仓库；仍须验证补丁实际应用与重放、工具身份、实际源码树及第 3、5 节全部目标 OTA、ABI/KMI、快照与产物门禁，不得把制作期来源证明当作本次构建通过证据。
 
 固定源码仓库必须保持干净，或其差异能被补丁脚本用允许路径和 reverse-apply 精确证明。`sources/`、`work/`、`evidence/`、`kernel_out/`、日志、转储和测试包不得提交。不得在输出目录手工修改 `.config`、`Module.symvers` 或包内容绕过守卫。
 
@@ -103,7 +107,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 - seccomp 内核能力必须启用。KernelSU Manager 或获准 root 进程因官方 `disable_seccomp()` 显示 `Seccomp: 0` 属于预期；普通 Android 应用应为 `2`。
 - 保留 AOSP r21 原生 Unicode/casefold 语义，F2FS 使用默认 `LOOKUP_PERF`。
 - LSM 展开后的 `MAX_LSM_COUNT` 必须与实际启用的 LSM 数量精确一致；当前参考值为 6，BBG 占 1 槽，KernelSU 不得额外注册 LSM。
-- Clang r596125（22.0.2）、Rust 1.97.0-dev（LLVM 22.1.6）与 build-tools 来自固定 AOSP Git subtree；完整上游 Git tree、检出内容及安装树均须符合 `.env` pin。bindgen 0.72.1、宿主 bc 校验固定 Git blob 与 SHA-256。Clang/Rust 的 LLVM 主版本必须一致，启用 `RUST_INLINE_HELPERS`；Rust 独立安装，禁止覆盖 Clang 共享库。
+- Clang r596125（22.0.2）、Rust 1.97.0-dev（LLVM 22.1.6）与 build-tools 来自固定 AOSP Git subtree；制作期/source 模式校验完整上游 Git tree 与检出内容，日常 fixed 模式校验固定归档、来源记录与安装树，`CI_TOOLCHAIN_TREE_SHA256` 含义不变。bindgen 0.72.1、宿主 bc 的固定 Git blob 与 SHA-256 不变。两种模式均须符合 `.env` pin 并校验实际工具身份；Clang/Rust 的 LLVM 主版本必须一致，启用 `RUST_INLINE_HELPERS`；Rust 独立安装，禁止覆盖 Clang 共享库。
 - AutoFDO MUST 使用固定 common 自带的 `gki/aarch64/afdo/kernel.afdo`，路径和 SHA-256 由 `.env` 固定；构建前校验 Git blob 身份及固定 LLVM 的读取能力，实际 C/Rust 命令 MUST 包含对应 sample-use 参数。缺失或不匹配必须失败，不得静默退回普通编译；保持 `LTO_NONE`。当前编译策略见 `docs/BUILDING.md`，回移来源与审查见 `patches/backports/`。
 - ExtTSP MUST 显式禁止作用于无 profile 的函数。AutoFDO 的 Profi 固定使用 `-sample-profile-even-flow-distribution=false`，以官方单路径增广规避当前组合中均匀分流 DAG 搜索的异常耗时；LLVM 22 与 LLVM 23 均已复现该路径，保留 sample-use、Profi 最小费用流与 MIR profile loader。该策略可能改变推断权重和代码布局，不得声称性能等价。C/Rust 后端参数最终值独立审计。Rust 仅 core 使用 `.env` 固定的四线程前端，保留 GNU Make jobserver 和全部内核 crate 的 `codegen-units=1`；这些构建策略 MUST NOT 纳入启动门禁。
 - Rust 普通内核代码允许非对齐访问，使用 softfloat 且特性列表以 `-strict-align,-neon` 结束，MUST 校验实际 LLVM 属性；早期启动 C 保持原生严格对齐规则。IPSet/libmnl 使用固定 SM8850 ISA 与 Oryon-1，配置缓存仅在源码、工具链、API、参数及路径身份一致时复用；内核与 NDK 共用项目 ccache，容量由 `.env` 固定。

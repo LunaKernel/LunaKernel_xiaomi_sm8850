@@ -14,6 +14,15 @@ import unittest
 PROJECT = Path(__file__).resolve().parents[2]
 COMMON_SOURCE = "sources/aosp_common_6.12.92_kmi6_2026-09"
 PHASES = ("init", "patch", "patch_external", "build")
+FIXED_PINS = {
+    "BACKPORT_BUNDLE_MANIFEST_SHA256": "1" * 64,
+    "BACKPORT_BUNDLE_SHA256": "2" * 64,
+    "BACKPORT_BUNDLE_URL": "https://example.invalid/backports.tar.gz",
+    "CI_TOOLCHAIN_BUNDLE_SHA256": "3" * 64,
+    "CI_TOOLCHAIN_BUNDLE_URL": "https://example.invalid/toolchain.tar.zst",
+}
+TOOLCHAIN_PATH = "work/tools/toolchain/ci-sm8850-r596125-rust1.97.0-bc39cdb1dc"
+SOURCE_CACHES = ("aosp", "stable", "mainline", "kbuild", "clang", "rust", "build_tools")
 
 
 class RunBuildTests(unittest.TestCase):
@@ -51,6 +60,9 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
             "ANDROID17_STOCK_SYSTEM_DLKM_SIZE": str(image.stat().st_size),
             "ANDROID17_STOCK_SYSTEM_DLKM_SHA256": hashlib.sha256(image.read_bytes()).hexdigest(),
             "BUILD_DIR": "work/cache/kernel",
+            "BUILD_ENVIRONMENT_DIR": "work/tools",
+            "CI_TOOLCHAIN_NAME": Path(TOOLCHAIN_PATH).name,
+            "CI_TOOLCHAIN_TREE_SHA256": "e" * 64,
             "COMMON_SOURCE_DIR": COMMON_SOURCE,
             "COMMON_COMMIT": "d" * 40,
             "AOSP_BACKPORT_AUDIT_SOURCE_DIR": "sources/aosp_common_backport_audit",
@@ -174,6 +186,7 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.assert_success(self.run_step("metadata"))
         output = self.read_assignments("github.output")
         env = self.read_assignments("github.env")
+        self.assertEqual(output["dependencies_mode"], "source")
         self.assertEqual(output["project_commit"], self.env["GITHUB_SHA"])
         self.assertEqual(env["LUNA_PROJECT_COMMIT"], self.env["GITHUB_SHA"])
         self.assertRegex(output["build_id"], "^luna-xiaomi17-g" + self.env["GITHUB_SHA"][:8] + r"-\d{8}-\d{4}$")
@@ -206,9 +219,9 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.commit_fixture_change("init.sh", "# preparation algorithm changed\n")
         self.assert_success(self.run_step("metadata"))
         algorithm = self.read_assignments("github.output")
-        for name in names:
+        for name in SOURCE_CACHES:
             self.assertNotEqual(manifest[name + "_key"], algorithm[name + "_key"])
-        for key in ("ccache_prefix", "downloads_key", "manager_key"):
+        for key in ("common_key", "ccache_prefix", "downloads_key", "manager_key"):
             self.assertEqual(original[key], algorithm[key])
 
     def test_source_cache_keys_bind_pins_and_reject_broad_paths(self):
@@ -224,6 +237,102 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         result = self.run_step("metadata")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("审计缓存路径不在固定范围", result.stderr)
+
+    def test_fixed_cache_paths_and_sizes_do_not_require_source_caches(self):
+        # 移除的目录全部来自本测试的临时 fixture，fixed 模式不能依赖它们。
+        for path in ("sources/aosp_common_backport_audit", "sources/linux_stable_6.12_audit",
+                     "sources/linux_mainline_audit", "sources/linux_kbuild_audit",
+                     "work/cache/toolchains"):
+            shutil.rmtree(self.root / path)
+        backports = "work/cache/dependencies/backports-" + FIXED_PINS["BACKPORT_BUNDLE_MANIFEST_SHA256"]
+        for path in (backports, TOOLCHAIN_PATH):
+            directory = self.root / path
+            directory.mkdir(parents=True)
+            (directory / "fixture.txt").write_text("verified by init stub\n")
+        self.assert_success(self.run_step("metadata", **FIXED_PINS))
+        output = self.read_assignments("github.output")
+        self.assertEqual(output["dependencies_mode"], "fixed")
+        self.assertEqual({key: value for key, value in output.items() if key.endswith("_path")}, {
+            "common_path": COMMON_SOURCE, "backports_path": backports, "toolchain_path": TOOLCHAIN_PATH,
+        })
+        self.assertEqual(output["backports_key"], "luna-backports-v1-ubuntu24-x64-" + "1" * 64)
+        self.assertEqual(output["toolchain_key"], "luna-toolchain-v1-ubuntu24-x64-" + "e" * 64)
+        for name in SOURCE_CACHES:
+            self.assertNotIn(name + "_key", output)
+        result = self.run_step("init", **FIXED_PINS)
+        self.assert_success(result)
+        output = self.read_assignments("github.output")
+        self.assertEqual(result.stdout.count("[CACHE]"), 3)
+        for name in ("common", "backports", "toolchain"):
+            self.assertEqual(output[name + "_save"], "true")
+        for name in SOURCE_CACHES:
+            self.assertNotIn(name + "_save", output)
+        self.assert_calls(["init"])
+
+    def test_fixed_keys_bind_content_without_binding_scheduling_or_urls(self):
+        self.assert_success(self.run_step("metadata", **FIXED_PINS))
+        original = self.read_assignments("github.output")
+        self.commit_fixture_change("init.sh", "# scheduling changed\n")
+        self.commit_fixture_change("patches/backports/selected.tsv", "# preparation changed\n")
+        relocated = {**FIXED_PINS, "BACKPORT_BUNDLE_URL": "https://example.invalid/moved.tar.gz",
+                     "CI_TOOLCHAIN_BUNDLE_URL": "https://example.invalid/moved.tar.zst"}
+        self.assert_success(self.run_step("metadata", **relocated, GITHUB_RUN_ID="456"))
+        changed = self.read_assignments("github.output")
+        for key in ("backports_key", "toolchain_key", "common_key", "downloads_key", "ccache_prefix"):
+            self.assertEqual(original[key], changed[key])
+        # 压缩归档改变只影响下载缓存，不改变已解包内容的身份。
+        repacked = {**FIXED_PINS, "BACKPORT_BUNDLE_SHA256": "4" * 64,
+                    "CI_TOOLCHAIN_BUNDLE_SHA256": "5" * 64}
+        self.assert_success(self.run_step("metadata", **repacked))
+        changed = self.read_assignments("github.output")
+        self.assertNotEqual(original["downloads_key"], changed["downloads_key"])
+        for key in ("backports_key", "toolchain_key", "common_key"):
+            self.assertEqual(original[key], changed[key])
+        replacement = {**FIXED_PINS, "BACKPORT_BUNDLE_MANIFEST_SHA256": "6" * 64}
+        self.assert_success(self.run_step("metadata", **replacement))
+        changed = self.read_assignments("github.output")
+        self.assertNotEqual(original["backports_key"], changed["backports_key"])
+        self.assertTrue(changed["backports_path"].endswith("6" * 64))
+        self.assertEqual(original["toolchain_key"], changed["toolchain_key"])
+        self.commit_fixture_change(".env", "\nCI_TOOLCHAIN_TREE_SHA256=" + "7" * 64 + "\n")
+        self.assert_success(self.run_step("metadata", **FIXED_PINS))
+        changed = self.read_assignments("github.output")
+        self.assertNotEqual(original["toolchain_key"], changed["toolchain_key"])
+        self.assertEqual(original["backports_key"], changed["backports_key"])
+        self.assertEqual(original["common_key"], changed["common_key"])
+
+    def test_partial_fixed_pins_fail_before_init_without_falling_back(self):
+        cases = [{key: value for key, value in FIXED_PINS.items() if key != missing}
+                 for missing in FIXED_PINS]
+        cases += [{key: value} for key, value in FIXED_PINS.items()]
+        for pins in cases:
+            for command in ("metadata", "init"):
+                with self.subTest(pins=tuple(pins), command=command):
+                    result = self.run_step(command, **pins)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("固定依赖 pin 不完整", result.stderr)
+                    self.assert_calls([])
+                    self.assertFalse((self.temp / "github.output").exists())
+
+    def test_fixed_pins_reject_invalid_digests_and_unsafe_toolchain_paths(self):
+        for key in ("BACKPORT_BUNDLE_MANIFEST_SHA256", "BACKPORT_BUNDLE_SHA256",
+                    "CI_TOOLCHAIN_BUNDLE_SHA256"):
+            with self.subTest(key=key):
+                result = self.run_step("metadata", **{**FIXED_PINS, key: "invalid"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("固定依赖摘要无效", result.stderr)
+        for assignment in ("CI_TOOLCHAIN_TREE_SHA256=invalid", "CI_TOOLCHAIN_NAME=../escape",
+                           "BUILD_ENVIRONMENT_DIR=work/../sources", "BUILD_ENVIRONMENT_DIR=work"):
+            with self.subTest(assignment=assignment):
+                self.commit_fixture_change(".env", "\n" + assignment + "\n")
+                result = self.run_step("metadata", **FIXED_PINS)
+                self.assertNotEqual(result.returncode, 0)
+                # 恢复本轮字段，确保每个路径检查独立触达。
+                key = assignment.split("=", 1)[0]
+                value = {"CI_TOOLCHAIN_TREE_SHA256": "e" * 64,
+                         "CI_TOOLCHAIN_NAME": Path(TOOLCHAIN_PATH).name,
+                         "BUILD_ENVIRONMENT_DIR": "work/tools"}[key]
+                self.commit_fixture_change(".env", f"\n{key}={value}\n")
 
     def test_common_cache_binds_fixed_source_without_invalidating_other_caches(self):
         self.assert_success(self.run_step("metadata"))

@@ -19,11 +19,33 @@
 
 `init.sh` 复用并校验固定源码、工具与官方 CI Manager APK；`patch.sh` 应用官方内核回移；`patch_external.sh` 接入已准备的组件，不下载；`build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
-正常初始化仅准备已采用补丁所需的官方提交、父对象与来源关系。调查候选补丁、比较历史 ABI 或重建 stock 清单前，运行 `./init.sh --audit-history` 补齐维护资料；这些资料不参与常规 CI 缓存。来源范围收敛不改变已采用补丁集合及本次 Image 的 ABI/STG 检查。
+初始化支持 source 与 fixed 两种依赖模式。五项依赖包 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）均未配置时，source 模式沿用官方工具链与已采用补丁必需的提交、父对象及来源关系准备。五项完整且摘要有效时，CI metadata 输出 `dependencies_mode=fixed`；有任一配置但缺项或摘要无效时直接失败，不静默降级。真实依赖包尚未发布时保留 source 模式，不能向主 `.env` 写入占位 URL 或假摘要；发布及切换真实 pin 仍须遵守远端操作授权边界。
 
-独立回移审计在同一次调用中复用已验证的清单、来源及导出补丁，仍执行逐项应用、撤销和完整重放；单独调用的检查入口保持自校验，不使用跨构建的通过标记跳过证明。
+fixed 模式按固定摘要下载或恢复回移内容包与工具链安装树。回移目录为 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}`；工具链目录为 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，当前实际为 `work/tools/toolchain/ci-sm8850-r596125-rust1.97.0-bc39cdb1dc`。工具链安装树 pin `CI_TOOLCHAIN_TREE_SHA256` 保持相同含义，不以归档摘要替代。归档共存 `work/cache/downloads/ci-dependencies/`。日常校验包 manifest、清单绑定、逐文件摘要、patch-id 和允许路径，执行单项应用、撤销、有序重放及实际源码树验证；工具链仍校验安装树与实际编译器身份。不复用跨构建的审计通过标记，不减免目标 OTA、ABI/KMI、配置、Image/modules 和交付门禁。
 
-`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2；任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
+来源证明在固定依赖制作期完成。推荐从仓库根目录运行统一制作入口，主机须有 `zstd`；脚本按现有隐私授权加载项目公开 pins，不发布、不修改主 `.env`：
+
+```bash
+bash tools/prepare_ci_dependencies.sh
+```
+
+入口先调用 helper 的 `export-toolchain`，由其强制运行 `init.sh --prepare-dependencies`，从官方固定来源准备并完整校验工具链与制作必需对象，再校验完整安装树并导出 zstd 归档。随后 `export-backports` 自动执行 `patch.sh --audit-sources` 的完整来源审计，导出固定提交的补丁、来源/父对象/日期/消息/路径、许可证和逐文件摘要 manifest；`pack-backports --input` 再次校验本次导出目录并打包。`init.sh --prepare-dependencies` 本身只准备来源和工具，不直接导出或应用补丁。制作记录绑定项目提交及相关脚本摘要。
+
+每次制作使用新的 `work/ci-dependencies/prepared.*/` 目录，保留 `backports.tar.gz`、`toolchain.tar.zst`、`backports/manifest.json` 及其来源文件，并生成 `pins.env`，记录真实的 `BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256` 和 `CI_TOOLCHAIN_BUNDLE_SHA256`。该文件不含 URL，不能直接替代完整构建 pin 配置。包发布获授权、实际地址和归档摘要确认后，才在同一变更中切换完整 pin；不得仅凭制作期审计宣称日常构建或发布验证通过。
+
+需要单独制作时，按现有隐私授权将公开 pins 导入环境后使用底层入口；`ROOT` 为工作区，输出路径必须尚不存在。以下 `BACKPORTS_DIR` 是同一份新导出目录，打包前须在制作环境设置其真实 `BACKPORT_BUNDLE_MANIFEST_SHA256`：
+
+```bash
+python3 tools/ci_dependencies.py export-toolchain --workspace ROOT --output TOOLCHAIN_TAR_ZST
+python3 tools/ci_dependencies.py export-backports --workspace ROOT --output BACKPORTS_DIR
+python3 tools/ci_dependencies.py pack-backports --workspace ROOT --input BACKPORTS_DIR --output BACKPORTS_TAR_GZ
+```
+
+省略 `pack-backports --input` 时，helper 使用 manifest 摘要对应的标准内容目录。
+
+调查候选补丁、比较历史 ABI 或重建 stock 清单前，运行 `./init.sh --audit-history` 补齐维护资料，再按需运行 `./patch.sh --audit-sources`；这些资料不参与日常 fixed 模式缓存。source 模式仍保留既有来源检查。来源审计与日常内容校验的分工不改变已采用补丁集合及本次 Image 的 ABI/STG 检查。
+
+`INIT_FETCH_JOBS` 仅控制独立依赖的准备并发，本地默认 1、CI 使用 2；源码、工具和回移依赖共用槽位，任务完成后立即补位，任一任务失败会终止其他准备任务。它是运行时参数，不写入 `.env`，也不改变来源、工具链或内核参数。
 
 ## GitHub Actions
 
@@ -32,7 +54,7 @@
 完整流程使用 GitHub 托管 `ubuntu-24.04`，分为 build、notify 两个 job：
 
 - **build**：`tools/ci/prepare_runner.sh` 准备宿主，先检查空间，仅在不足时按固定白名单逐项清理无关 SDK，达到 50 GiB 即停止，安装依赖后再次检查；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
-- **缓存**：保留 5 GiB ccache、固定归档下载及官方 Manager APK 缓存，并按固定输入缓存未打补丁的 common 源码、构建必需的只读审计对象和 Clang/Rust/build-tools 来源树，初始化验证成功后才保存。common 缓存绑定来源、分支、提交、目录与准备逻辑，在应用补丁前保存；存在已跟踪差异、未跟踪或忽略文件时不保存。ccache 使用 `compiler_check=content`，来源与下载缓存恢复后仍校验内容、来源及固定摘要。已打补丁的源码、构建目录、审计结果和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
+- **缓存**：保留 5 GiB ccache、固定下载（含 `ci-dependencies/`）、官方 Manager APK 与干净 common 源码。common key 按内容身份与格式生成，不绑定 init 脚本或调度逻辑；存在已跟踪差异、未跟踪或忽略文件时不保存。fixed 模式只额外恢复、统计和保存 backports 内容目录与工具链安装树，使用仅绑定平台、内容身份和格式的精确 key，不缓存四个审计来源目录或 Clang/Rust/build-tools 三个来源目录。source 模式沿用既有来源缓存与 key。依赖缓存只在 init 成功后、patch 前保存，恢复后仍须完成内容、来源及固定摘要校验。ccache 使用 `compiler_check=content`；已打补丁的源码、构建目录、审计结果和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
 - **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为一个保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`；云端构建成功不等同于实机验收。
 - **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明只保留 `SHA256` 与 `Build`；验收状态仍保存在交付清单中。不发送源码、原始证据或凭据。通知失败可单独重跑 notify，下载同一次构建的 artifact 重新校验并发送，无需重新编译；artifact 过期后不能通过重跑通知恢复产物。
 
@@ -40,7 +62,7 @@
 
 ## 编译策略
 
-固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22.1.6）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库，并验证官方 Git 对象、明确检出树与安装树摘要。
+固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22.1.6）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库。制作期/source 模式验证官方 Git 对象与明确检出树，日常 fixed 模式验证固定内容与安装树摘要；两种模式均须验证实际工具身份。
 
 common 使用官方 `android16-6.12-2026-09_r11`（Linux 6.12.92 / KMI generation 6），仅构建和交付 4 KiB 页面版本。
 

@@ -124,20 +124,40 @@ ORB_LINUX_ROOT="${ORB_LINUX_ROOT:-.cache/xiaomi_kernel_build}"
 ORB_LINUX_WORKSPACE="${ORB_LINUX_ROOT%/}/${WORKSPACE_NAME:-workspace}/workspace"
 run_in_orb_if_needed "$@"
 
+AUDIT_SOURCES_ONLY=0
+case "${1:-}" in
+    --audit-sources)
+        [ "$#" = 1 ] || die "用法: bash patch.sh [--audit-sources]"
+        AUDIT_SOURCES_ONLY=1
+        export BACKPORT_SOURCE_AUDIT=1
+        ;;
+    "") [ "$#" = 0 ] || die "用法: bash patch.sh [--audit-sources]" ;;
+    *) die "用法: bash patch.sh [--audit-sources]" ;;
+esac
+BACKPORT_BUNDLE_LIBRARY=1 . "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh"
+if backport_bundle_enabled; then
+    verify_backport_bundle "${HOST_WORKSPACE_DIR}"
+fi
 COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
-[ -d "${COMMON_DIR}/.git" ] || die "GKI common 未初始化，请先运行 ./init.sh"
-[ "$(git -C "${COMMON_DIR}" rev-parse HEAD)" = "${COMMON_COMMIT:-aa556307b679df7ced0cc644068a529280dbc412}" ] || die "GKI common pin 不匹配"
+if [ "${AUDIT_SOURCES_ONLY}" != 1 ]; then
+    [ -d "${COMMON_DIR}/.git" ] || die "GKI common 未初始化，请先运行 ./init.sh"
+    [ "$(git -C "${COMMON_DIR}" rev-parse HEAD)" = "${COMMON_COMMIT:-aa556307b679df7ced0cc644068a529280dbc412}" ] || die "GKI common pin 不匹配"
+fi
 
 AOSP_BACKPORT_AUDIT_DIR="$(resolve_workspace_path "${AOSP_BACKPORT_AUDIT_SOURCE_DIR:-sources/aosp_common_backport_audit}")"
 LINUX_STABLE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_STABLE_AUDIT_SOURCE_DIR:-sources/linux_stable_6.12_audit}")"
 LINUX_STABLE_AUDIT_COMMIT="${LINUX_STABLE_AUDIT_COMMIT:-}"
 LINUX_MAINLINE_AUDIT_DIR="$(resolve_workspace_path "${LINUX_MAINLINE_AUDIT_SOURCE_DIR:-sources/linux_mainline_audit}")"
 LINUX_MAINLINE_AUDIT_COMMIT="${LINUX_MAINLINE_AUDIT_COMMIT:-}"
-reject_git_object_overrides "GKI common" "${COMMON_DIR}"
-verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
-reject_git_object_overrides "AOSP common 审计仓库" "${AOSP_BACKPORT_AUDIT_DIR}"
-reject_git_object_overrides "Linux stable 审计仓库" "${LINUX_STABLE_AUDIT_DIR}"
-reject_git_object_overrides "Linux mainline 审计仓库" "${LINUX_MAINLINE_AUDIT_DIR}"
+if [ "${AUDIT_SOURCES_ONLY}" != 1 ]; then
+    reject_git_object_overrides "GKI common" "${COMMON_DIR}"
+    verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
+fi
+if ! backport_bundle_enabled; then
+    reject_git_object_overrides "AOSP common 审计仓库" "${AOSP_BACKPORT_AUDIT_DIR}"
+    reject_git_object_overrides "Linux stable 审计仓库" "${LINUX_STABLE_AUDIT_DIR}"
+    reject_git_object_overrides "Linux mainline 审计仓库" "${LINUX_MAINLINE_AUDIT_DIR}"
+fi
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
@@ -195,11 +215,15 @@ apply_official_backport_once() {
         *) die "${label}审计仓库模式无效" ;;
     esac
     patch_file="$(mktemp)"
-    env GIT_NO_LAZY_FETCH=1 "${git_cmd[@]}" \
-        cat-file -e "${commit}^{commit}" 2>/dev/null || \
-        die "${label}对象缺失，请先运行 ./init.sh"
-    env GIT_NO_LAZY_FETCH=1 "${git_cmd[@]}" -c log.mailmap=false \
-        show --format= "${commit}" > "${patch_file}"
+    if backport_bundle_enabled; then
+        copy_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${patch_file}"
+    else
+        env GIT_NO_LAZY_FETCH=1 "${git_cmd[@]}" \
+            cat-file -e "${commit}^{commit}" 2>/dev/null || \
+            die "${label}对象缺失，请先运行 ./init.sh"
+        env GIT_NO_LAZY_FETCH=1 "${git_cmd[@]}" -c log.mailmap=false \
+            show --format= "${commit}" > "${patch_file}"
+    fi
     patch_id="$(git patch-id --stable < "${patch_file}" | awk '{ print $1 }')"
     [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
     if git -C "${COMMON_DIR}" apply --check "${patch_file}" >/dev/null 2>&1; then
@@ -231,6 +255,10 @@ verify_linux_mainline_source_exact() {
     local label="$1" commit="$2" commit_date="$3" expected_patch_id="$4"
     local expected_paths="$5" actual_date actual_paths patch_id
 
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+        return 0
+    fi
     [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 固定审计终点"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_MAINLINE_AUDIT_DIR}" \
         cat-file -e "${commit}^{commit}" 2>/dev/null || \
@@ -252,6 +280,10 @@ verify_linux_mainline_source_exact() {
 verify_linux_stable_source() {
     local label="$1" commit="$2" expected_patch_id="$3"
     local patch_file patch_id
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}"
+        return 0
+    fi
     patch_file="$(mktemp)"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
         cat-file -e "${commit}^{commit}" 2>/dev/null || \
@@ -271,6 +303,10 @@ verify_linux_stable_source_exact() {
     local expected_paths="$5" upstream_commit="$6"
     local actual_date actual_paths commit_message upstream_patch_id upstream_paths
 
+    if backport_bundle_enabled; then
+        verify_backport_bundle_patch "${HOST_WORKSPACE_DIR}" "${commit}" "${expected_patch_id}" "${expected_paths}"
+        return 0
+    fi
     [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 固定审计终点"
     verify_linux_stable_source "${label}" "${commit}" "${expected_patch_id}"
     env GIT_NO_LAZY_FETCH=1 git --git-dir="${LINUX_STABLE_AUDIT_DIR}" \
@@ -323,6 +359,81 @@ apply_project_patch_once() {
     git -C "${COMMON_DIR}" apply --reverse --check "${patch_file}" || \
         die "${label}状态不完整"
 }
+
+audit_legacy_raw_source() {
+    local label="$1" repo="$2" commit="$3" expected_patch_id="$4" expected_paths="$5"
+    local actual_paths patch_id
+    env GIT_NO_LAZY_FETCH=1 git -C "${repo}" cat-file -e "${commit}^{commit}" || die "${label}对象缺失"
+    actual_paths="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo}" diff-tree \
+        --no-commit-id --name-only -r "${commit}" | LC_ALL=C sort | paste -sd ' ' -)"
+    [ "${actual_paths}" = "${expected_paths}" ] || die "${label}路径集合异常"
+    patch_id="$(env GIT_NO_LAZY_FETCH=1 git -c log.mailmap=false -C "${repo}" \
+        show --format= "${commit}" | git patch-id --stable | awk '{ print $1 }')"
+    [ "${patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
+}
+
+audit_legacy_sources() {
+    local feature commit_pin patch_pin paths
+    if [ "${ENABLE_TIMER_BASE_FAST_PATH}" = 1 ]; then
+        verify_linux_mainline_source_exact timer "${TIMER_BASE_FAST_PATH_COMMIT}" \
+            "${TIMER_BASE_FAST_PATH_COMMIT_DATE}" "${TIMER_BASE_FAST_PATH_PATCH_ID}" "kernel/time/timer.c"
+    fi
+    for feature in F2FS_DIO_OVERWRITE BLK_WBT_DONE MEMCG_RSTAT TCP_RECV_MSTAMP IPV6_MLD; do
+        case "${feature}" in
+            IPV6_MLD) commit_pin=IPV6_MLD_UAF_FIX_COMMIT; patch_pin=IPV6_MLD_UAF_FIX_PATCH_ID; paths=net/ipv6/mcast.c ;;
+            *) commit_pin="${feature}_FAST_PATH_COMMIT"; patch_pin="${feature}_FAST_PATH_PATCH_ID"
+                case "${feature}" in
+                    F2FS_DIO_OVERWRITE) paths=fs/f2fs/data.c ;;
+                    BLK_WBT_DONE) paths=block/blk-wbt.c ;;
+                    MEMCG_RSTAT) paths=mm/memcontrol.c ;;
+                    TCP_RECV_MSTAMP) paths='net/ipv4/tcp.c net/ipv4/tcp_input.c' ;;
+                esac ;;
+        esac
+        if [ "${feature}" = IPV6_MLD ]; then feature=IPV6_MLD_UAF_FIX; else feature="${feature}_FAST_PATH"; fi
+        feature="ENABLE_${feature}"
+        [ "${!feature:-0}" != 1 ] || audit_legacy_raw_source "${feature}" \
+            "${AOSP_BACKPORT_AUDIT_DIR}" "${!commit_pin}" "${!patch_pin}" "${paths}"
+    done
+    for feature in F2FS_ACL_ENTRY_BOUNDS F2FS_LISTXATTR_BOUNDS BLKCG_RSTAT_RELEASE; do
+        commit_pin="${feature}_STABLE_COMMIT"; patch_pin="${feature}_PATCH_ID"
+        case "${feature}" in
+            F2FS_ACL_ENTRY_BOUNDS) paths=fs/f2fs/acl.c ;;
+            F2FS_LISTXATTR_BOUNDS) paths=fs/f2fs/xattr.c ;;
+            BLKCG_RSTAT_RELEASE) paths=block/blk-cgroup.c ;;
+        esac
+        feature="ENABLE_${feature}_FIX"
+        if [ "${!feature:-0}" = 1 ]; then
+            verify_linux_stable_source "${feature}" "${!commit_pin}" "${!patch_pin}"
+            audit_legacy_raw_source "${feature}" "${LINUX_STABLE_AUDIT_DIR}" \
+                "${!commit_pin}" "${!patch_pin}" "${paths}"
+        fi
+    done
+    if [ "${ENABLE_F2FS_FOREGROUND_GC_DEADLOCK_FIX}" = 1 ]; then
+        verify_linux_stable_source f2fs_gc "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" "${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID}"
+        verify_linux_stable_source f2fs_gc_merge "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" "${F2FS_GC_MERGE_DEADLOCK_PATCH_ID}"
+        audit_legacy_raw_source f2fs_gc "${LINUX_STABLE_AUDIT_DIR}" \
+            "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" "${F2FS_FOREGROUND_GC_DEADLOCK_PATCH_ID}" \
+            "fs/f2fs/data.c fs/f2fs/f2fs.h fs/f2fs/segment.c"
+        audit_legacy_raw_source f2fs_gc_merge "${LINUX_STABLE_AUDIT_DIR}" \
+            "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}" "${F2FS_GC_MERGE_DEADLOCK_PATCH_ID}" "fs/f2fs/segment.c"
+        [ "$(git -C "${LINUX_STABLE_AUDIT_DIR}" rev-parse "${F2FS_GC_MERGE_DEADLOCK_STABLE_COMMIT}^")" = \
+            "${F2FS_FOREGROUND_GC_DEADLOCK_STABLE_COMMIT}" ] || die "F2FS GC 死锁组合提交顺序异常"
+    fi
+    if [ "${ENABLE_IPV6_MLD_DELAYED_WORK_UAF_FIX}" = 1 ]; then
+        verify_linux_stable_source_exact ipv6_mld_delayed_work "${IPV6_MLD_DELAYED_WORK_STABLE_COMMIT}" \
+            "${IPV6_MLD_DELAYED_WORK_COMMIT_DATE}" "${IPV6_MLD_DELAYED_WORK_OFFICIAL_PATCH_ID}" \
+            "include/net/addrconf.h net/ipv6/mcast.c" "${IPV6_MLD_DELAYED_WORK_UPSTREAM_COMMIT}"
+    fi
+}
+
+if [ "${AUDIT_SOURCES_ONLY}" = 1 ]; then
+    audit_legacy_sources
+    [ "${ENABLE_SELECTED_BACKPORTS:-0}" != 1 ] || \
+        bash "${HOST_WORKSPACE_DIR}/tools/backport_manifest.sh" verify-sources
+    bash "${HOST_WORKSPACE_DIR}/tools/independent_backports.sh" verify-sources
+    log_success "全部启用回移的官方来源证明通过（未修改 common）"
+    exit 0
+fi
 
 apply_project_patch_once "AOSP r21 Tegra 不透明指针 KMI 兼容标注" \
     "${TEGRA_MC_KMI_PATCH_FILE}" \

@@ -15,12 +15,17 @@ log_success() { printf '[OK] %s\n' "$1"; }
 
 parse_init_args() {
     INIT_AUDIT_HISTORY=0
+    INIT_PREPARE_DEPENDENCIES=0
     case "$#:${1:-}" in
         0:) ;;
         1:--audit-history) INIT_AUDIT_HISTORY=1 ;;
-        *) die "用法: ./init.sh [--audit-history]" ;;
+        1:--prepare-dependencies) INIT_PREPARE_DEPENDENCIES=1 ;;
+        *) die "用法: ./init.sh [--audit-history|--prepare-dependencies]" ;;
     esac
-    readonly INIT_AUDIT_HISTORY
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ] || [ "${INIT_PREPARE_DEPENDENCIES}" = 1 ]; then
+        export BACKPORT_SOURCE_AUDIT=1
+    fi
+    readonly INIT_AUDIT_HISTORY INIT_PREPARE_DEPENDENCIES
 }
 
 validate_init_fetch_jobs() {
@@ -687,15 +692,9 @@ stop_toolchain_fetches() {
     fi
 }
 
-prepare_toolchain_source_trees() {
-    local task index monitor_enabled=0
-    local -a fetch_pids=()
-    local -a tasks=(prepare_clang_source_tree prepare_rust_source_tree prepare_build_tools_source_tree)
-
-    # Child shells cannot return variables; derive all paths before launching.
-    CI_CLANG_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}/clang-${CI_CLANG_REVISION}"
-    CI_RUST_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}/${CI_RUST_SUBTREE}"
-    CI_BUILD_TOOLS_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}/${CI_BUILD_TOOLS_SUBTREE}"
+run_init_tasks() {
+    local task index next=0 monitor_enabled=0
+    local -a fetch_pids=() tasks=("$@")
 
     case "$-" in *m*) monitor_enabled=1 ;; esac
     # Separate process groups let cancellation stop Git and all its helpers.
@@ -703,36 +702,41 @@ prepare_toolchain_source_trees() {
     trap stop_toolchain_fetches EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    for task in "${tasks[@]}"; do
-        (trap - EXIT INT TERM; "${task}") &
-        fetch_pids+=("$!")
-        if [ "${#fetch_pids[@]}" -eq "${INIT_FETCH_JOBS}" ] || \
-                [ "${task}" = prepare_build_tools_source_tree ]; then
-            while [ "${#fetch_pids[@]}" -gt 0 ]; do
-                for index in "${!fetch_pids[@]}"; do
-                    # Plain wait retains completed statuses on Bash 5.2. Check
-                    # both workers so an earlier failure never waits on a download.
-                    if [ "${INIT_FETCH_JOBS}" = 1 ] || \
-                            ! kill -0 "${fetch_pids[$index]}" 2>/dev/null; then
-                        wait "${fetch_pids[$index]}" || die "固定工具链来源准备失败，停止安装"
-                        unset 'fetch_pids[index]'
-                    fi
-                done
-                [ "${#fetch_pids[@]}" -eq 0 ] || sleep 0.05
-            done
-            fetch_pids=()
-        fi
+    while [ "${next}" -lt "${#tasks[@]}" ] || [ "${#fetch_pids[@]}" -gt 0 ]; do
+        for index in "${!fetch_pids[@]}"; do
+            # Plain wait retains completed statuses on Bash 5.2. Reap every
+            # completed worker before filling slots, including failed workers.
+            if ! kill -0 "${fetch_pids[$index]}" 2>/dev/null; then
+                wait "${fetch_pids[$index]}" || die "固定依赖准备失败，停止安装"
+                unset 'fetch_pids[index]'
+            fi
+        done
+        fetch_pids=("${fetch_pids[@]}")
+        while [ "${#fetch_pids[@]}" -lt "${INIT_FETCH_JOBS}" ] && \
+                [ "${next}" -lt "${#tasks[@]}" ]; do
+            task="${tasks[$next]}"
+            (trap - EXIT INT TERM; "${task}") &
+            fetch_pids+=("$!")
+            next=$((next + 1))
+        done
+        [ "${#fetch_pids[@]}" -eq 0 ] || sleep 0.05
     done
     trap - EXIT INT TERM
     [ "${monitor_enabled}" = 1 ] || set +m
 }
 
-setup_toolchain() {
-    local files=(bindgen gavinhoward-bc stock-fsck.erofs stock-depmod stock-libc++.so)
-    local file expected actual marker marker_value staging backup rust_bin compiler blob stock_tools_dir
-    mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
-    prepare_toolchain_source_trees
-    for file in "${files[@]}"; do
+prepare_toolchain_source_trees() {
+    # Child shells cannot return variables; derive all paths before launching.
+    CI_CLANG_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}/clang-${CI_CLANG_REVISION}"
+    CI_RUST_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}/${CI_RUST_SUBTREE}"
+    CI_BUILD_TOOLS_PAYLOAD_DIR="${WORK_DIR}/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}/${CI_BUILD_TOOLS_SUBTREE}"
+    run_init_tasks prepare_clang_source_tree prepare_rust_source_tree prepare_build_tools_source_tree
+}
+
+prepare_toolchain_assets() {
+    local file expected actual blob
+    mkdir -p "${DL_DIR}"
+    for file in "$@"; do
         expected="${TC_SHA256[$file]:-}"
         blob="${TC_GIT_BLOB[$file]:-}"
         [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || die "工具链资产缺少固定 SHA-256: ${file}"
@@ -761,7 +765,11 @@ setup_toolchain() {
                 die "工具链缓存 Git blob 不匹配: ${file}"
         fi
     done
+}
 
+prepare_stock_tools() {
+    local file stock_tools_dir
+    prepare_toolchain_assets stock-fsck.erofs stock-depmod stock-libc++.so
     stock_tools_dir="${WORK_DIR}/tools/stock-evidence"
     [ ! -L "${WORK_DIR}" ] && [ ! -L "${WORK_DIR}/tools" ] && [ ! -L "${stock_tools_dir}" ] || \
         die "stock 解析工具目录不得经过符号链接"
@@ -776,21 +784,77 @@ setup_toolchain() {
     mkdir -p "${stock_tools_dir}/lib64"
     cp -f "${DL_DIR}/stock-libc++.so" "${stock_tools_dir}/lib64/libc++.so"
     chmod 0755 "${stock_tools_dir}/lib64/libc++.so"
+}
 
-    marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256"
+verify_installed_toolchain() {
+    local actual marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256" marker_value
     if [ -d "${CI_TOOLCHAIN_DIR}" ]; then
-        actual="$(tree_sha256 "${CI_TOOLCHAIN_DIR}")"
+        actual="$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" || die "无法校验固定工具链安装树"
         if [ "${actual}" = "${CI_TOOLCHAIN_TREE_SHA256}" ]; then
-            printf '%s\n' "${CI_TOOLCHAIN_TREE_SHA256}" > "${marker}"
             verify_toolchain_identity
+            printf '%s\n' "${CI_TOOLCHAIN_TREE_SHA256}" > "${marker}" || die "无法保存固定工具链树指纹"
             log_success "固定工具链安装树完整性校验通过"
-            return
+            return 0
         fi
         marker_value="$(sed -n '1p' "${marker}" 2>/dev/null || true)"
         [ "${marker_value}" != "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
             die "固定工具链安装树在初始化后被修改: ${actual}"
         log_step "工具链 pin 已变化或缺少旧树指纹，使用已校验来源重建"
     fi
+    return 1
+}
+
+validate_dependency_pins() {
+    local key configured=false
+    local pins=(BACKPORT_BUNDLE_MANIFEST_SHA256 BACKPORT_BUNDLE_SHA256 BACKPORT_BUNDLE_URL
+        CI_TOOLCHAIN_BUNDLE_SHA256 CI_TOOLCHAIN_BUNDLE_URL)
+    if [ "${INIT_PREPARE_DEPENDENCIES}" = 1 ] || [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        return
+    fi
+    for key in "${pins[@]}"; do
+        [[ -z "${!key:-}" ]] || configured=true
+    done
+    [[ "${configured}" == true ]] || return 0
+    for key in "${pins[@]}"; do
+        [[ -n "${!key:-}" ]] || die "固定依赖 pin 不完整: ${key}"
+    done
+    for key in BACKPORT_BUNDLE_MANIFEST_SHA256 BACKPORT_BUNDLE_SHA256 \
+        CI_TOOLCHAIN_BUNDLE_SHA256 CI_TOOLCHAIN_TREE_SHA256; do
+        [[ "${!key:-}" =~ ^[0-9a-f]{64}$ ]] || die "固定依赖摘要无效: ${key}"
+    done
+    for key in BACKPORT_BUNDLE_URL CI_TOOLCHAIN_BUNDLE_URL; do
+        [[ "${!key}" =~ ^https://[^/[:space:]]+(/[^[:space:]]*)?$ ]] || \
+            die "固定依赖下载地址必须使用 HTTPS: ${key}"
+    done
+}
+
+backport_bundle_enabled() {
+    [ "${INIT_PREPARE_DEPENDENCIES}" = 0 ] && [ "${INIT_AUDIT_HISTORY}" = 0 ] && \
+        [ -n "${BACKPORT_BUNDLE_MANIFEST_SHA256:-}" ]
+}
+
+toolchain_bundle_enabled() {
+    [ "${INIT_PREPARE_DEPENDENCIES}" = 0 ] && [ "${INIT_AUDIT_HISTORY}" = 0 ] && \
+        { [ -n "${CI_TOOLCHAIN_BUNDLE_SHA256:-}" ] || [ -n "${CI_TOOLCHAIN_BUNDLE_URL:-}" ]; }
+}
+
+setup_toolchain() {
+    local actual marker="${CI_TOOLCHAIN_DIR}.project-tree-sha256" staging backup rust_bin compiler prepared
+    mkdir -p "${DL_DIR}" "$(dirname "${CI_TOOLCHAIN_DIR}")"
+    prepare_stock_tools
+    if [ "${INIT_PREPARE_DEPENDENCIES}" = 0 ] && [ "${INIT_AUDIT_HISTORY}" = 0 ]; then
+        if verify_installed_toolchain; then return; fi
+        if toolchain_bundle_enabled; then
+            prepared="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-toolchain \
+                --workspace "${HOST_WORKSPACE_DIR}")" || die "固定工具链包准备失败"
+            [ "${prepared}" = "${CI_TOOLCHAIN_DIR}" ] || die "固定工具链包安装目录不匹配: ${prepared}"
+            verify_installed_toolchain || die "固定工具链包安装树不匹配"
+            return
+        fi
+    fi
+    prepare_toolchain_source_trees
+    prepare_toolchain_assets bindgen gavinhoward-bc
+    if verify_installed_toolchain; then return; fi
 
     staging="$(mktemp -d "$(dirname "${CI_TOOLCHAIN_DIR}")/.ci-toolchain-install.XXXXXX")"
     if ! {
@@ -931,20 +995,6 @@ prepare_android_ndk() {
     local archive actual_sha1 actual_sha256 actual_tree marker marker_value staging candidate backup
     archive="${SOURCE_DOWNLOAD_DIR}/android-ndk-${ANDROID_NDK_VERSION}-linux.zip"
     mkdir -p "${SOURCE_DOWNLOAD_DIR}" "$(dirname "${ANDROID_NDK_DIR}")"
-    if [ ! -f "${archive}" ]; then
-        log_step "下载 Android NDK ${ANDROID_NDK_VERSION}"
-        curl -fSL --retry 3 -C - -o "${archive}.part" "${ANDROID_NDK_URL}"
-        actual_sha1="$(sha1sum "${archive}.part" | awk '{ print $1 }')"
-        [ "${actual_sha1}" = "${ANDROID_NDK_SHA1}" ] || die "Android NDK 下载文件 SHA-1 不匹配: ${actual_sha1}"
-        actual_sha256="$(sha256sum "${archive}.part" | awk '{ print $1 }')"
-        [ "${actual_sha256}" = "${ANDROID_NDK_SHA256}" ] || die "Android NDK 下载文件 SHA-256 不匹配: ${actual_sha256}"
-        mv "${archive}.part" "${archive}"
-    fi
-    actual_sha1="$(sha1sum "${archive}" | awk '{ print $1 }')"
-    [ "${actual_sha1}" = "${ANDROID_NDK_SHA1}" ] || die "Android NDK SHA-1 不匹配: ${actual_sha1}"
-    actual_sha256="$(sha256sum "${archive}" | awk '{ print $1 }')"
-    [ "${actual_sha256}" = "${ANDROID_NDK_SHA256}" ] || die "Android NDK SHA-256 不匹配: ${actual_sha256}"
-
     marker="${ANDROID_NDK_DIR}.project-tree-sha256"
     if [ -d "${ANDROID_NDK_DIR}" ]; then
         actual_tree="$(tree_sha256 "${ANDROID_NDK_DIR}")"
@@ -958,6 +1008,18 @@ prepare_android_ndk() {
             die "Android NDK 安装树在初始化后被修改: ${actual_tree}"
         log_step "Android NDK pin 已变化或缺少旧树指纹，使用已校验归档重建"
     fi
+
+    candidate="${archive}"
+    if [ ! -f "${archive}" ]; then
+        candidate="${archive}.part"
+        log_step "下载 Android NDK ${ANDROID_NDK_VERSION}"
+        curl -fSL --retry 3 -C - -o "${candidate}" "${ANDROID_NDK_URL}"
+    fi
+    actual_sha1="$(sha1sum "${candidate}" | awk '{ print $1 }')"
+    [ "${actual_sha1}" = "${ANDROID_NDK_SHA1}" ] || die "Android NDK SHA-1 不匹配: ${actual_sha1}"
+    actual_sha256="$(sha256sum "${candidate}" | awk '{ print $1 }')"
+    [ "${actual_sha256}" = "${ANDROID_NDK_SHA256}" ] || die "Android NDK SHA-256 不匹配: ${actual_sha256}"
+    [ "${candidate}" = "${archive}" ] || mv "${candidate}" "${archive}"
 
     staging="$(mktemp -d "$(dirname "${ANDROID_NDK_DIR}")/.android-ndk-install.XXXXXX")"
     if ! unzip -q "${archive}" -d "${staging}"; then
@@ -991,6 +1053,27 @@ prepare_android_ndk() {
     log_success "Android NDK ${ANDROID_NDK_VERSION} arm64 工具链准备完成"
 }
 
+prepare_userspace_sources() {
+    [ "${ENABLE_IPSET}" = "1" ] || return 0
+    prepare_source_archive "ipset ${IPSET_VERSION}" "${IPSET_URL}" \
+        "${SOURCE_DOWNLOAD_DIR}/ipset-${IPSET_VERSION}.tar.bz2" sha512sum "${IPSET_SHA512}" \
+        "${IPSET_DIR}" "ipset-${IPSET_VERSION}" "${IPSET_TREE_SHA256}"
+    prepare_source_archive "libmnl ${LIBMNL_VERSION}" "${LIBMNL_URL}" \
+        "${SOURCE_DOWNLOAD_DIR}/libmnl-${LIBMNL_VERSION}.tar.bz2" sha256sum "${LIBMNL_SHA256}" \
+        "${LIBMNL_DIR}" "libmnl-${LIBMNL_VERSION}" "${LIBMNL_TREE_SHA256}"
+    prepare_android_ndk
+}
+
+prepare_build_dependencies() {
+    if toolchain_bundle_enabled; then
+        # The bundle branch never starts the three-source scheduler inside it.
+        run_init_tasks setup_toolchain prepare_userspace_sources
+    else
+        prepare_userspace_sources
+        setup_toolchain
+    fi
+}
+
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
@@ -998,6 +1081,7 @@ parse_init_args "$@"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 validate_init_fetch_jobs
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
+validate_dependency_pins
 [ "${ENABLE_KERNELSU:-0}" = "1" ] || \
     die "Luna 固定构建只支持 ENABLE_KERNELSU=1；拒绝未审计的第二套产品矩阵"
 [ "${ENABLE_SUSFS:-0}" = "1" ] || \
@@ -1265,7 +1349,12 @@ if [ "${ENABLE_BBG}" = "1" ]; then
         git_network -C "${BBG_DIR}" fetch --unshallow origin
     fi
 fi
-if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
+if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ] && backport_bundle_enabled; then
+    BACKPORT_BUNDLE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-backports \
+        --workspace "${HOST_WORKSPACE_DIR}")" || die "固定回移包准备失败"
+    [ -d "${BACKPORT_BUNDLE_DIR}" ] || die "固定回移包目录缺失: ${BACKPORT_BUNDLE_DIR}"
+    log_success "固定回移包已准备并通过验证: ${BACKPORT_BUNDLE_DIR}"
+elif [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     [ -n "${BACKPORT_AUDIT_SNAPSHOT}" ] || die "缺少后续改进审计快照日期"
     [ -n "${AOSP_BACKPORT_AUDIT_REFS}" ] || die "缺少 AOSP 后续审计 refs"
     [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 审计终点"
@@ -1377,7 +1466,7 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     bash "${INDEPENDENT_BACKPORT_TOOL}" verify-sources
     log_success "已选回移来源已固定并通过离线审计"
 fi
-if [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" = "1" ]; then
+if ! backport_bundle_enabled && [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" = "1" ]; then
     verify_aosp_backport_source "F2FS DIO overwrite 映射检查优化" \
         "${F2FS_DIO_OVERWRITE_FAST_PATH_AOSP_REF}" \
         "${F2FS_DIO_OVERWRITE_FAST_PATH_COMMIT}" \
@@ -1385,7 +1474,7 @@ if [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" = "1" ]; then
         "${F2FS_DIO_OVERWRITE_FAST_PATH_PATCH_ID}" \
         "fs/f2fs/data.c"
 fi
-if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" = "1" ]; then
+if ! backport_bundle_enabled && [ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" = "1" ]; then
     verify_aosp_backport_source "blk-wbt 非节流写完成快路径优化" \
         "${BLK_WBT_DONE_FAST_PATH_AOSP_REF}" \
         "${BLK_WBT_DONE_FAST_PATH_COMMIT}" \
@@ -1393,7 +1482,7 @@ if [ "${ENABLE_BLK_WBT_DONE_FAST_PATH}" = "1" ]; then
         "${BLK_WBT_DONE_FAST_PATH_PATCH_ID}" \
         "block/blk-wbt.c"
 fi
-if [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then
+if ! backport_bundle_enabled && [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then
     verify_aosp_backport_source "memcg rstat 快路径优化" \
         "${MEMCG_RSTAT_FAST_PATH_AOSP_REF}" \
         "${MEMCG_RSTAT_FAST_PATH_COMMIT}" \
@@ -1401,7 +1490,7 @@ if [ "${ENABLE_MEMCG_RSTAT_FAST_PATH}" = "1" ]; then
         "${MEMCG_RSTAT_FAST_PATH_PATCH_ID}" \
         "mm/memcontrol.c"
 fi
-if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
+if ! backport_bundle_enabled && [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
     verify_aosp_backport_source "TCP recv 时间戳快路径优化" \
         "${TCP_RECV_MSTAMP_FAST_PATH_AOSP_REF}" \
         "${TCP_RECV_MSTAMP_FAST_PATH_COMMIT}" \
@@ -1409,7 +1498,7 @@ if [ "${ENABLE_TCP_RECV_MSTAMP_FAST_PATH}" = "1" ]; then
         "${TCP_RECV_MSTAMP_FAST_PATH_PATCH_ID}" \
         "net/ipv4/tcp.c net/ipv4/tcp_input.c"
 fi
-if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
+if ! backport_bundle_enabled && [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
     verify_aosp_backport_source "IPv6 MLD 查询释放后访问修复" \
         "${IPV6_MLD_UAF_FIX_AOSP_REF}" \
         "${IPV6_MLD_UAF_FIX_COMMIT}" \
@@ -1417,17 +1506,8 @@ if [ "${ENABLE_IPV6_MLD_UAF_FIX}" = "1" ]; then
         "${IPV6_MLD_UAF_FIX_PATCH_ID}" \
         "net/ipv6/mcast.c"
 fi
-if [ "${ENABLE_IPSET}" = "1" ]; then
-    prepare_source_archive "ipset ${IPSET_VERSION}" "${IPSET_URL}" \
-        "${SOURCE_DOWNLOAD_DIR}/ipset-${IPSET_VERSION}.tar.bz2" sha512sum "${IPSET_SHA512}" \
-        "${IPSET_DIR}" "ipset-${IPSET_VERSION}" "${IPSET_TREE_SHA256}"
-    prepare_source_archive "libmnl ${LIBMNL_VERSION}" "${LIBMNL_URL}" \
-        "${SOURCE_DOWNLOAD_DIR}/libmnl-${LIBMNL_VERSION}.tar.bz2" sha256sum "${LIBMNL_SHA256}" \
-        "${LIBMNL_DIR}" "libmnl-${LIBMNL_VERSION}" "${LIBMNL_TREE_SHA256}"
-    prepare_android_ndk
-fi
 verify_source_baseline
-setup_toolchain
+prepare_build_dependencies
 prepare_magiskboot
 prepare_anykernel_tools
 

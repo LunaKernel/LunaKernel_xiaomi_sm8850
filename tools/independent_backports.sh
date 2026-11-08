@@ -284,7 +284,7 @@ verify_applied() {
 }
 
 usage() {
-	printf '用法: %s {verify-manifests|list SOURCE|list-paths|verify-sources|apply TREE|verify-applied TREE|verify-base-diff TREE SHA256}\n' "$0" >&2
+	printf '用法: %s {verify-manifests|list SOURCE|list-paths|verify-sources|apply TREE|verify-applied TREE|verify-base-diff TREE SHA256|verify-applied-base-diff TREE SHA256}\n' "$0" >&2
 	exit 2
 }
 
@@ -318,8 +318,12 @@ case "${1:-}" in
 		verify_applied "$2"
 		log_success "九月独立回移最终应用状态正确"
 		;;
-	verify-base-diff)
+	verify-base-diff|verify-applied-base-diff)
 		[ "$#" = 3 ] || usage
+		if [ "$1" = verify-applied-base-diff ]; then
+			verify_applied "$2"
+			log_success "九月独立回移最终应用状态正确"
+		fi
 		verify_base_diff "$2" "$3"
 		;;
 	*) usage ;;
