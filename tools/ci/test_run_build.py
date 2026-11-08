@@ -12,6 +12,7 @@ import unittest
 
 
 PROJECT = Path(__file__).resolve().parents[2]
+COMMON_SOURCE = "sources/aosp_common_6.12.92_kmi6_2026-09"
 PHASES = ("init", "patch", "patch_external", "build")
 
 
@@ -35,7 +36,7 @@ CI_HOST_BC_URL CI_HOST_BC_SHA256 AOSP_BUILD_TOOLS_REPO STOCK_AUDIT_TOOLS_COMMIT
 STOCK_FSCK_EROFS_SHA256 STOCK_KMOD_SHA256 STOCK_LIBCXX_SHA256 ANDROID_NDK_URL
 ANDROID_NDK_SHA256 IPSET_URL IPSET_SHA512 LIBMNL_URL LIBMNL_SHA256 MAGISK_APK_URL
 MAGISK_APK_SHA256 AK3_BUSYBOX_URL AK3_BUSYBOX_SHA256 KSU_MANAGER_APK_SHA256
-COMMON_REPO AOSP_BACKPORT_AUDIT_REFS ENABLE_BACKPORT_AUDIT ENABLE_SELECTED_BACKPORTS
+COMMON_REPO COMMON_BRANCH AOSP_BACKPORT_AUDIT_REFS ENABLE_BACKPORT_AUDIT ENABLE_SELECTED_BACKPORTS
 BACKPORT_AUDIT_SNAPSHOT SELECTED_BACKPORT_MANIFEST_SHA256
 LINUX_STABLE_AUDIT_REPO LINUX_STABLE_AUDIT_REF LINUX_STABLE_AUDIT_COMMIT
 LINUX_STABLE_STANDALONE_COMMITS LINUX_MAINLINE_AUDIT_REPO LINUX_MAINLINE_AUDIT_COMMIT
@@ -50,7 +51,8 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
             "ANDROID17_STOCK_SYSTEM_DLKM_SIZE": str(image.stat().st_size),
             "ANDROID17_STOCK_SYSTEM_DLKM_SHA256": hashlib.sha256(image.read_bytes()).hexdigest(),
             "BUILD_DIR": "work/cache/kernel",
-            "COMMON_SOURCE_DIR": "work/source",
+            "COMMON_SOURCE_DIR": COMMON_SOURCE,
+            "COMMON_COMMIT": "d" * 40,
             "AOSP_BACKPORT_AUDIT_SOURCE_DIR": "sources/aosp_common_backport_audit",
             "LINUX_STABLE_AUDIT_SOURCE_DIR": "sources/linux_stable_6.12_audit",
             "LINUX_MAINLINE_AUDIT_SOURCE_DIR": "sources/linux_mainline_audit",
@@ -87,7 +89,8 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         files = {
             "work/cache/kernel/scripts/kallsyms": "#!/bin/sh\nexit 0\n",
             "work/cache/kernel/scripts/.kallsyms.cmd": "cc scripts/kallsyms.c\n",
-            "work/source/scripts/kallsyms.c": "token_syms\n",
+            f"{COMMON_SOURCE}/scripts/kallsyms.c": "token_syms\n",
+            f"{COMMON_SOURCE}/.gitignore": "ignored/\n",
             "work/cache/kernel/.config": "CONFIG_CC_OPT_NO_ADDRSIG=y\nCONFIG_CC_OPT_STRICT_FLEX_ARRAYS=y\n",
             "work/cache/kernel/arch/arm64/kernel/pi/.map_range.o.cmd": "cc -fno-addrsig -mstrict-align\n",
         }
@@ -125,6 +128,10 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
             self.git("init", "-q", "--bare", pins[key])
         for prefix, commit in (("aosp-clang-git", "a"), ("aosp-rust", "b"), ("aosp-build-tools", "c")):
             (self.root / "work/cache/toolchains" / (prefix + "-" + commit * 40)).mkdir(parents=True)
+        self.git("-C", COMMON_SOURCE, "init", "-q")
+        self.git("-C", COMMON_SOURCE, "add", ".")
+        self.git("-C", COMMON_SOURCE, "-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid",
+                 "-c", "core.hooksPath=/dev/null", "commit", "-qm", "source fixture", "--no-gpg-sign")
 
     def git(self, *arguments):
         return subprocess.run(["git", *arguments], cwd=self.root, env=self.env,
@@ -186,7 +193,7 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         original = self.read_assignments("github.output")
         self.assert_success(self.run_step("metadata", GITHUB_RUN_ID="456", GITHUB_RUN_ATTEMPT="2"))
         rerun = self.read_assignments("github.output")
-        names = ("aosp", "stable", "mainline", "kbuild", "clang", "rust", "build_tools")
+        names = ("aosp", "stable", "mainline", "kbuild", "clang", "rust", "build_tools", "common")
         for name in names:
             self.assertEqual(original[name + "_key"], rerun[name + "_key"])
         self.commit_fixture_change("patches/backports/selected.tsv", "# changed requirement\n")
@@ -218,16 +225,58 @@ CI_BUILD_TOOLS_GIT_TREE CI_BUILD_TOOLS_LEAF_TREE_SHA256
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("审计缓存路径不在固定范围", result.stderr)
 
+    def test_common_cache_binds_fixed_source_without_invalidating_other_caches(self):
+        self.assert_success(self.run_step("metadata"))
+        original = self.read_assignments("github.output")
+        self.assertEqual(original["common_path"], COMMON_SOURCE)
+        self.commit_fixture_change(".env", "\nCOMMON_COMMIT=" + "e" * 40 + "\n")
+        self.assert_success(self.run_step("metadata"))
+        changed = self.read_assignments("github.output")
+        self.assertNotEqual(original["common_key"], changed["common_key"])
+        for key in original:
+            if key.endswith("_key") and key != "common_key":
+                self.assertEqual(original[key], changed[key])
+        self.commit_fixture_change(".env", "\nCOMMON_SOURCE_DIR=sources\n")
+        result = self.run_step("metadata")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("common 缓存路径不在固定范围", result.stderr)
+
     def test_init_reports_cache_sizes_and_does_not_save_expanded_history(self):
         self.git("-C", "sources/aosp_common_backport_audit", "config", "backport.auditHistoryExpanded", "true")
         result = self.run_step("init")
         self.assert_success(result)
         output = self.read_assignments("github.output")
         self.assertEqual(output["aosp_save"], "false")
-        for name in ("stable", "mainline", "kbuild", "clang", "rust", "build_tools"):
+        for name in ("common", "stable", "mainline", "kbuild", "clang", "rust", "build_tools"):
             self.assertEqual(output[name + "_save"], "true")
-        self.assertEqual(result.stdout.count("[CACHE]"), 7)
+        self.assertEqual(result.stdout.count("[CACHE]"), 8)
         self.assertIn("[TIME] init status=0", result.stdout)
+
+    def test_common_cache_excludes_patched_staged_untracked_and_ignored_files(self):
+        for relative, staged in (("scripts/kallsyms.c", False), ("scripts/kallsyms.c", True),
+                                 ("unexpected.txt", False), ("ignored/build.o", False)):
+            with self.subTest(path=relative, staged=staged):
+                path = self.root / COMMON_SOURCE / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                original = path.read_bytes() if path.exists() else None
+                path.write_bytes((original or b"") + b"changed\n")
+                if staged:
+                    self.git("-C", COMMON_SOURCE, "add", relative)
+                try:
+                    result = self.run_step("init")
+                    self.assert_success(result)
+                    self.assertEqual(self.read_assignments("github.output")["common_save"], "false")
+                finally:
+                    if original is None:
+                        path.unlink()
+                        if path.parent.name == "ignored":
+                            path.parent.rmdir()
+                    else:
+                        path.write_bytes(original)
+                    if staged:
+                        self.git("-C", COMMON_SOURCE, "add", relative)
+        self.assert_success(self.run_step("init"))
+        self.assertEqual(self.read_assignments("github.output")["common_save"], "true")
 
     def test_metadata_accepts_no_gc_override_and_rejects_unknown_value(self):
         self.assert_success(self.run_step("metadata"))

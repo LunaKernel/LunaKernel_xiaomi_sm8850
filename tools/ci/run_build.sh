@@ -20,10 +20,13 @@ cache_paths() {
             *) fail "审计缓存路径不在固定范围: ${path}" ;;
         esac
     done
-    for commit in "${AOSP_CLANG_COMMIT}" "${AOSP_RUST_COMMIT}" "${AOSP_BUILD_TOOLS_COMMIT}"; do
-        [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || fail '工具链来源缓存缺少固定提交'
+    [[ "${COMMON_SOURCE_DIR}" == sources/aosp_common_6.12.92_kmi6_2026-09 ]] || \
+        fail "common 缓存路径不在固定范围: ${COMMON_SOURCE_DIR}"
+    for commit in "${COMMON_COMMIT}" "${AOSP_CLANG_COMMIT}" "${AOSP_RUST_COMMIT}" "${AOSP_BUILD_TOOLS_COMMIT}"; do
+        [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || fail '来源缓存缺少固定提交'
     done
     printf '%s\t%s\n' \
+        common "${COMMON_SOURCE_DIR}" \
         aosp "${AOSP_BACKPORT_AUDIT_SOURCE_DIR}" \
         stable "${LINUX_STABLE_AUDIT_SOURCE_DIR}" \
         mainline "${LINUX_MAINLINE_AUDIT_SOURCE_DIR}" \
@@ -134,7 +137,8 @@ sources = {
 }
 for name, keys in sources.items():
     print(f'{name}_key=luna-source-v1-{name}-' + source_identity([*audit_keys, *keys], audit_files))
-toolchains = {
+checkouts = {
+    'common': ('COMMON_REPO', 'COMMON_BRANCH', 'COMMON_COMMIT', 'COMMON_SOURCE_DIR'),
     'clang': ('AOSP_CLANG_REPO', 'AOSP_CLANG_COMMIT', 'CI_CLANG_REVISION',
               'CI_CLANG_GIT_TREE', 'CI_CLANG_LEAF_TREE_SHA256'),
     'rust': ('AOSP_RUST_REPO', 'AOSP_RUST_COMMIT', 'CI_RUST_SUBTREE',
@@ -142,7 +146,7 @@ toolchains = {
     'build_tools': ('AOSP_BUILD_TOOLS_REPO', 'AOSP_BUILD_TOOLS_COMMIT', 'CI_BUILD_TOOLS_SUBTREE',
                     'CI_BUILD_TOOLS_GIT_TREE', 'CI_BUILD_TOOLS_LEAF_TREE_SHA256'),
 }
-for name, keys in toolchains.items():
+for name, keys in checkouts.items():
     print(f'{name}_key=luna-source-v1-{name}-' + source_identity(keys, ['init.sh']))
 PY
     while IFS=$'\t' read -r name path; do
@@ -151,7 +155,7 @@ PY
 }
 
 cache_sizes() {
-    local name path bytes save paths
+    local name path bytes save paths status
     paths="$(cache_paths)"
     while IFS=$'\t' read -r name path; do
         python3 - "${path}" <<'PY'
@@ -166,6 +170,11 @@ PY
         bytes="$(du -sb -- "${path}" | cut -f1)"
         save=true
         case "${name}" in
+            common)
+                # init 允许后续补丁脚本复核已有差异，来源缓存只接受干净树。
+                status="$(git -C "${path}" status --porcelain=v1 --untracked-files=all --ignored=matching)"
+                [[ -z "${status}" ]] || save=false
+                ;;
             aosp|stable|mainline|kbuild)
                 if [[ "$(git -C "${path}" config --get backport.auditHistoryExpanded || true)" == true ]]; then
                     save=false

@@ -53,6 +53,12 @@ jobs:
         with:
           path: work/cache/ksu-manager
           key: ${{ steps.meta.outputs.manager_key }}
+      - name: Restore clean common source
+        id: common
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.common_path }}
+          key: ${{ steps.meta.outputs.common_key }}
       - name: Restore AOSP required audit objects
         id: aosp
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -112,6 +118,13 @@ jobs:
         with:
           path: work/cache/ksu-manager
           key: ${{ steps.meta.outputs.manager_key }}
+      - name: Save verified clean common source
+        if: steps.init.outcome == 'success' && steps.common.outputs.cache-hit != 'true' && steps.init.outputs.common_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.common_path }}
+          key: ${{ steps.meta.outputs.common_key }}
       - name: Save verified AOSP required audit objects
         if: steps.init.outcome == 'success' && steps.aosp.outputs.cache-hit != 'true' && steps.init.outputs.aosp_save == 'true'
         continue-on-error: true

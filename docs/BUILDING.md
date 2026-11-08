@@ -32,7 +32,7 @@
 完整流程使用 GitHub 托管 `ubuntu-24.04`，分为 build、notify 两个 job：
 
 - **build**：`tools/ci/prepare_runner.sh` 准备宿主，先检查空间，仅在不足时按固定白名单逐项清理无关 SDK，达到 50 GiB 即停止，安装依赖后再次检查；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
-- **缓存**：保留 5 GiB ccache、固定归档下载及官方 Manager APK 缓存，并按固定输入缓存构建必需的只读审计对象和 Clang/Rust/build-tools 来源树，初始化验证成功后才保存。ccache 使用 `compiler_check=content`，来源与下载缓存恢复后仍校验内容、来源及固定摘要。已打补丁的源码、构建目录、审计结果和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
+- **缓存**：保留 5 GiB ccache、固定归档下载及官方 Manager APK 缓存，并按固定输入缓存未打补丁的 common 源码、构建必需的只读审计对象和 Clang/Rust/build-tools 来源树，初始化验证成功后才保存。common 缓存绑定来源、分支、提交、目录与准备逻辑，在应用补丁前保存；存在已跟踪差异、未跟踪或忽略文件时不保存。ccache 使用 `compiler_check=content`，来源与下载缓存恢复后仍校验内容、来源及固定摘要。已打补丁的源码、构建目录、审计结果和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
 - **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为一个保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`；云端构建成功不等同于实机验收。
 - **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明只保留 `SHA256` 与 `Build`；验收状态仍保存在交付清单中。不发送源码、原始证据或凭据。通知失败可单独重跑 notify，下载同一次构建的 artifact 重新校验并发送，无需重新编译；artifact 过期后不能通过重跑通知恢复产物。
 
