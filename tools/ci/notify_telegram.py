@@ -14,16 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import release_artifacts
 
 
-OTA = "OS4.0.6.0.XPCCNXM"
 MAX_UPLOAD_BYTES = 50_000_000
 MAX_RESPONSE_BYTES = 65536
 MAX_ATTEMPTS = 3
 MAX_RETRY_AFTER = 60
-RUN_URL = re.compile(
-    r"https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/"
-    r"[A-Za-z0-9_][A-Za-z0-9_.-]*/actions/runs/[1-9][0-9]*"
-    r"(?:/attempts/[1-9][0-9]*)?"
-)
 
 
 class NetworkError(RuntimeError):
@@ -35,9 +29,8 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def checked_documents(workspace, build_id, project_commit, run_url=None):
+def checked_documents(workspace, build_id, project_commit):
     require(re.fullmatch(r"[0-9a-f]{40}", project_commit), "项目提交必须是完整 SHA")
-    require(run_url is None or RUN_URL.fullmatch(run_url), "运行链接必须是 GitHub Actions HTTPS 地址")
     manager = os.environ.get("KSU_MANAGER_APK_NAME", "")
     manager_sha = os.environ.get("KSU_MANAGER_APK_SHA256", "")
     ipset = os.environ.get("IPSET_VERSION", "")
@@ -81,10 +74,7 @@ def checked_documents(workspace, build_id, project_commit, run_url=None):
     for relative in (kernel_zip, manager_path):
         path = release_artifacts.checked_path(workspace, relative)
         require(0 < path.stat().st_size <= MAX_UPLOAD_BYTES, "Telegram 文件为空或超过 50 MB: " + path.name)
-        caption = (f"{path.name}\nSHA256: {records[relative]}\nBuild: {build_id}\n"
-                   f"Status: awaiting-device\nOTA: {OTA}")
-        if run_url:
-            caption += "\n" + run_url
+        caption = f"SHA256: {records[relative]}\nBuild: {build_id}"
         require(len(caption) <= 1024, "Telegram caption 超过长度限制")
         documents.append((path, caption))
     return documents
@@ -170,11 +160,10 @@ def main(argv=None):
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--build-id", required=True)
     parser.add_argument("--project-commit", required=True)
-    parser.add_argument("--run-url")
     parser.add_argument("--check-only", action="store_true")
     args = parser.parse_args(argv)
     documents = checked_documents(args.workspace.resolve(strict=True), args.build_id,
-                                  args.project_commit, args.run_url)
+                                  args.project_commit)
     if args.check_only:
         print("[OK] CI 六文件、项目身份、官方 Manager 与 TG 文件大小检查通过")
         return

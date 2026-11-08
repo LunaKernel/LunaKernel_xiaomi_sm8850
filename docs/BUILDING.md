@@ -30,7 +30,7 @@
 - **build**：`tools/ci/prepare_runner.sh` 准备宿主，完整构建前要求至少 50 GiB 可用空间；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
 - **缓存**：保留 5 GiB ccache、固定归档下载及官方 Manager APK 缓存。ccache 使用 `compiler_check=content`，保持严格内容和路径校验；下载缓存恢复后仍校验固定摘要。构建目录、历史审计和产物不作为依赖缓存保存，缓存缺失不能改变构建配置或跳过校验。
 - **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为一个保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`；云端构建成功不等同于实机验收。
-- **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，只发送已校验的内核 ZIP、官方 Manager APK 及 SHA-256，不发送源码、原始证据或凭据。通知失败可单独重跑 notify，下载同一次构建的 artifact 重新校验并发送，无需重新编译；artifact 过期后不能通过重跑通知恢复产物。
+- **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明只保留 `SHA256` 与 `Build`；验收状态仍保存在交付清单中。不发送源码、原始证据或凭据。通知失败可单独重跑 notify，下载同一次构建的 artifact 重新校验并发送，无需重新编译；artifact 过期后不能通过重跑通知恢复产物。
 
 两个 Telegram secrets 仅供 notify 使用，不写入 `.env` 或日志。发送成功但响应丢失时，重试可能产生重复文件消息。首次 CI 的实际磁盘占用、缓存命中和耗时以运行记录为准；不得以提速为由引入时间劫持、宽松 ccache 校验或省略 Image/modules 及闭包审计。
 

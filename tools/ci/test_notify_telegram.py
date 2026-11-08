@@ -70,8 +70,7 @@ class NotifyTests(unittest.TestCase):
 
     def arguments(self):
         return ["--workspace", str(self.root), "--build-id", self.build_id,
-                "--project-commit", self.commit, "--run-url",
-                "https://github.com/example/luna/actions/runs/123"]
+                "--project-commit", self.commit]
 
     def run_main(self, *extra):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -98,10 +97,8 @@ class NotifyTests(unittest.TestCase):
         for call, relative in zip(self.network.call_args_list, (self.zip, self.apk)):
             path, caption = call.args[2:]
             self.assertEqual(path, self.root / relative)
-            self.assertIn(notify.release_artifacts.sha256(path), caption)
-            self.assertIn(self.build_id, caption)
-            self.assertIn("awaiting-device", caption)
-            self.assertIn(notify.OTA, caption)
+            self.assertEqual(caption, f"SHA256: {notify.release_artifacts.sha256(path)}\n"
+                                     f"Build: {self.build_id}")
 
     def test_corrupt_second_file_stops_before_first_send(self):
         (self.root / self.apk).write_bytes(b"corrupt")
@@ -151,13 +148,6 @@ class NotifyTests(unittest.TestCase):
         os.environ["KSU_MANAGER_APK_SHA256"] = notify.release_artifacts.sha256(self.root / self.apk)
         with mock.patch.object(notify, "MAX_UPLOAD_BYTES", 100):
             self.assert_local_failure()
-
-    def test_invalid_run_url_is_rejected(self):
-        for url in ("http://github.com/a/b/actions/runs/1", "https://evil.invalid/a",
-                    "https://github.com@evil.invalid/a", "https://github.com/a/b/actions/runs/1?token=x"):
-            with self.subTest(url=url), self.assertRaises(ValueError):
-                notify.checked_documents(self.root, self.build_id, self.commit, url)
-        self.network.assert_not_called()
 
     def send(self):
         with contextlib.redirect_stderr(io.StringIO()):

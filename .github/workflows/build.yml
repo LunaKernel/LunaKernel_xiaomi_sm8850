@@ -153,10 +153,9 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -a
           . ./.env
           set +a
           python3 tools/ci/notify_telegram.py --workspace "$GITHUB_WORKSPACE" \
-            --build-id "$BUILD_ID" --project-commit "$PROJECT_COMMIT" --run-url "$RUN_URL"
+            --build-id "$BUILD_ID" --project-commit "$PROJECT_COMMIT"
