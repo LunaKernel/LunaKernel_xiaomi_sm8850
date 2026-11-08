@@ -13,6 +13,16 @@ log_info() { printf '[INFO] %s\n' "$1"; }
 log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
 
+parse_init_args() {
+    INIT_AUDIT_HISTORY=0
+    case "$#:${1:-}" in
+        0:) ;;
+        1:--audit-history) INIT_AUDIT_HISTORY=1 ;;
+        *) die "用法: ./init.sh [--audit-history]" ;;
+    esac
+    readonly INIT_AUDIT_HISTORY
+}
+
 validate_init_fetch_jobs() {
     INIT_FETCH_JOBS="${INIT_FETCH_JOBS-1}"
     case "${INIT_FETCH_JOBS}" in
@@ -232,6 +242,10 @@ ensure_audit_repo() {
     actual_url="$(git -C "${target_dir}" remote get-url origin 2>/dev/null || true)"
     [ "$(normalize_git_url "${actual_url}")" = "$(normalize_git_url "${repo_url}")" ] || \
         die "${label} remote 不匹配: ${actual_url}"
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        # Never export expanded maintenance history as a daily CI cache.
+        git -C "${target_dir}" config backport.auditHistoryExpanded true
+    fi
 }
 
 fetch_audit_ref() {
@@ -273,6 +287,10 @@ hydrate_audit_patches() {
     [ "$#" -gt 0 ] || return
     log_step "水合 ${label} 已选补丁对象，确保 patch/build 阶段不联网"
     for commit in "$@"; do
+        if env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" -c log.mailmap=false \
+            show --format= "${commit}" >/dev/null 2>&1; then
+            continue
+        fi
         git_network -C "${repo_dir}" -c log.mailmap=false show --format= "${commit}" >/dev/null
         env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" -c log.mailmap=false \
             show --format= "${commit}" >/dev/null || \
@@ -376,13 +394,14 @@ prepare_kbuild_audit() {
 hydrate_audit_blob() {
     local label="$1" repo_dir="$2" commit="$3" path="$4" expected_sha256="$5"
     local actual_sha256
-    actual_sha256="$(git_network -C "${repo_dir}" show "${commit}:${path}" | sha256sum | awk '{ print $1 }')"
+    if ! actual_sha256="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" \
+        show "${commit}:${path}" 2>/dev/null | sha256sum | awk '{ print $1 }')"; then
+        git_network -C "${repo_dir}" show "${commit}:${path}" >/dev/null
+        actual_sha256="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" \
+            show "${commit}:${path}" | sha256sum | awk '{ print $1 }')"
+    fi
     [ "${actual_sha256}" = "${expected_sha256}" ] || \
         die "${label} SHA-256 不匹配: ${actual_sha256}"
-    actual_sha256="$(env GIT_NO_LAZY_FETCH=1 git -C "${repo_dir}" \
-        show "${commit}:${path}" | sha256sum | awk '{ print $1 }')"
-    [ "${actual_sha256}" = "${expected_sha256}" ] || \
-        die "${label} 未完整离线水合"
     log_success "${label} 已固定并可离线读取"
 }
 
@@ -401,6 +420,76 @@ hydrate_audit_commit_history() {
     git_network -C "${repo_dir}" fetch --no-tags --filter=blob:none \
         --shallow-since="${shallow_since}" origin "$@"
     git -C "${repo_dir}" config backport.auditCommitHistoryIdentity "${identity}"
+}
+
+# Manifests are verified by the caller before their source refs are read.
+required_aosp_refs() {
+    local feature enabled ref manifest
+    for feature in F2FS_DIO_OVERWRITE_FAST_PATH BLK_WBT_DONE_FAST_PATH \
+        MEMCG_RSTAT_FAST_PATH TCP_RECV_MSTAMP_FAST_PATH IPV6_MLD_UAF_FIX; do
+        enabled="ENABLE_${feature}" ref="${feature}_AOSP_REF"
+        [ "${!enabled:-0}" = 1 ] || continue
+        [ -n "${!ref:-}" ] || die "${feature} 缺少 AOSP 来源 ref"
+        printf '%s\n' "${!ref}"
+    done
+    if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = 1 ]; then
+        manifest="$(resolve_workspace_path "${SELECTED_BACKPORT_MANIFEST:-patches/backports/kmi6-2026-09-selected-backports.tsv}")"
+        awk -F '\t' '!/^#/ && $4 == "aosp" { print $5 }' "${manifest}"
+    fi
+    for manifest in "${HOST_WORKSPACE_DIR}"/patches/backports/kmi6-2026-09-independent/[0-9][0-9][0-9]-*.tsv; do
+        [ -f "${manifest}" ] || continue
+        awk -F '\t' '!/^#/ && $4 == "aosp" { print $5 }' "${manifest}"
+    done
+}
+
+prepare_aosp_audit_sources() {
+    local requested name pair commit
+    local -a commits=()
+    ensure_audit_repo "AOSP common 回移来源" "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_REPO}"
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        requested="$(printf '%s\n' ${AOSP_BACKPORT_AUDIT_REFS} | cut -d: -f1)"
+        commits=("${AOSP_BACKPORT_AUDIT_BASE_COMMIT:?缺少回移审计快照基线}" "${ABI_BASELINE_COMMIT}")
+        fetch_audit_ref "AOSP common September KMI6 构建基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
+            "aosp/build-base-kmi6-2026-09" "${COMMON_COMMIT}" "${AOSP_BACKPORT_AUDIT_SHALLOW_SINCE}"
+        fetch_audit_ref "AOSP generation-6 ABI 历史基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
+            "aosp/abi-generation-6-base" "${ABI_BASELINE_COMMIT}" "2025-01-01"
+    else
+        requested="$(required_aosp_refs | LC_ALL=C sort -u)"
+    fi
+    while IFS= read -r name; do
+        [ -n "${name}" ] || continue
+        commit=""
+        for pair in ${AOSP_BACKPORT_AUDIT_REFS}; do
+            [ "${pair%%:*}" = "${name}" ] || continue
+            [ -z "${commit}" ] || die "AOSP ref 重复: ${name}"
+            commit="${pair#*:}"
+        done
+        [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "AOSP ref 未固定: ${name}"
+        commits+=("${commit}")
+        fetch_audit_ref "AOSP ${name}" "${AOSP_BACKPORT_AUDIT_DIR}" \
+            "aosp/${name}" "${commit}" "2025-01-01"
+    done <<<"${requested}"
+    if [ "${#commits[@]}" -gt 0 ]; then
+        hydrate_audit_history "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
+            "${BACKPORT_AUDIT_SNAPSHOT}" "2025-01-01" "${commits[@]}"
+    fi
+    [ "${INIT_AUDIT_HISTORY}" = 1 ] || return 0
+    hydrate_audit_blob "AOSP generation-6 历史 ABI STG" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${ABI_BASELINE_COMMIT}" \
+        "gki/aarch64/abi.stg" "${ABI_BASELINE_STG_SHA256}"
+    hydrate_audit_blob "AOSP 九月 ABI STG" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_COMMIT}" \
+        "gki/aarch64/abi.stg" "${COMMON_ABI_STG_SHA256}"
+    [ "$(git -C "${AOSP_BACKPORT_AUDIT_DIR}" rev-parse \
+        "refs/backport-audit/aosp/${ANDROID17_ABI_CLASSIFICATION_REF}^{commit}")" = \
+        "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" ] || \
+        die "Android 17 ABI 分类 ref 与固定提交不匹配"
+    hydrate_audit_blob "Android 17 ABI 分类 QCOM symbol list" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
+        "gki/aarch64/symbols/qcom" "${ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256}"
+    hydrate_audit_blob "Android 17 ABI 分类 Xiaomi symbol list" \
+        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
+        "gki/aarch64/symbols/xiaomi" "${ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256}"
 }
 
 verify_aosp_backport_source() {
@@ -905,6 +994,7 @@ prepare_android_ndk() {
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 SCRIPT_NAME="$(basename "${SCRIPT_SOURCE}")"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+parse_init_args "$@"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 validate_init_fetch_jobs
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
@@ -1178,47 +1268,18 @@ fi
 if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
     [ -n "${BACKPORT_AUDIT_SNAPSHOT}" ] || die "缺少后续改进审计快照日期"
     [ -n "${AOSP_BACKPORT_AUDIT_REFS}" ] || die "缺少 AOSP 后续审计 refs"
-    [ -n "${LINUX_STABLE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux stable 审计起点"
     [ -n "${LINUX_STABLE_AUDIT_COMMIT}" ] || die "缺少 Linux stable 审计终点"
-    [ -n "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux mainline 审计起点"
     [ -n "${LINUX_MAINLINE_AUDIT_COMMIT}" ] || die "缺少 Linux mainline 审计终点"
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        [ -n "${LINUX_STABLE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux stable 审计起点"
+        [ -n "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" ] || die "缺少 Linux mainline 审计起点"
+    fi
     if [ "${ENABLE_SELECTED_BACKPORTS:-0}" = "1" ]; then
         bash "${BACKPORT_TOOL}" verify-manifest
     fi
     bash "${INDEPENDENT_BACKPORT_TOOL}" verify-manifests
 
-    aosp_audit_commits=("${AOSP_BACKPORT_AUDIT_BASE_COMMIT:?缺少回移审计快照基线}" "${ABI_BASELINE_COMMIT}")
-    ensure_audit_repo "AOSP common 后续历史" "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_REPO}"
-    fetch_audit_ref "AOSP common September KMI6 构建基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
-        "aosp/build-base-kmi6-2026-09" "${COMMON_COMMIT}" "${AOSP_BACKPORT_AUDIT_SHALLOW_SINCE}"
-    fetch_audit_ref "AOSP generation-6 ABI 历史基线" "${AOSP_BACKPORT_AUDIT_DIR}" \
-        "aosp/abi-generation-6-base" "${ABI_BASELINE_COMMIT}" "2025-01-01"
-    for audit_ref in ${AOSP_BACKPORT_AUDIT_REFS}; do
-        audit_name="${audit_ref%%:*}"
-        audit_commit="${audit_ref#*:}"
-        [ -n "${audit_name}" ] && [ -n "${audit_commit}" ] || die "AOSP 审计 ref 格式错误: ${audit_ref}"
-        aosp_audit_commits+=("${audit_commit}")
-        fetch_audit_ref "AOSP ${audit_name}" "${AOSP_BACKPORT_AUDIT_DIR}" \
-            "aosp/${audit_name}" "${audit_commit}" "2025-01-01"
-    done
-    hydrate_audit_history "AOSP common" "${AOSP_BACKPORT_AUDIT_DIR}" \
-        "${BACKPORT_AUDIT_SNAPSHOT}" "2025-01-01" "${aosp_audit_commits[@]}"
-    hydrate_audit_blob "AOSP generation-6 历史 ABI STG" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${ABI_BASELINE_COMMIT}" \
-        "gki/aarch64/abi.stg" "${ABI_BASELINE_STG_SHA256}"
-    hydrate_audit_blob "AOSP 九月 ABI STG" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${COMMON_COMMIT}" \
-        "gki/aarch64/abi.stg" "${COMMON_ABI_STG_SHA256}"
-    [ "$(git -C "${AOSP_BACKPORT_AUDIT_DIR}" rev-parse \
-        "refs/backport-audit/aosp/${ANDROID17_ABI_CLASSIFICATION_REF}^{commit}")" = \
-        "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" ] || \
-        die "Android 17 ABI 分类 ref 与固定提交不匹配"
-    hydrate_audit_blob "Android 17 ABI 分类 QCOM symbol list" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
-        "gki/aarch64/symbols/qcom" "${ANDROID17_ABI_CLASSIFICATION_QCOM_SHA256}"
-    hydrate_audit_blob "Android 17 ABI 分类 Xiaomi symbol list" \
-        "${AOSP_BACKPORT_AUDIT_DIR}" "${ANDROID17_ABI_CLASSIFICATION_COMMIT}" \
-        "gki/aarch64/symbols/xiaomi" "${ANDROID17_ABI_CLASSIFICATION_XIAOMI_SHA256}"
+    prepare_aosp_audit_sources
 
     selected_aosp_patches=()
     for selected_aosp_entry in \
@@ -1242,16 +1303,22 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         "${selected_aosp_patches[@]}"
 
     ensure_audit_repo "Linux 6.12 stable 历史" "${LINUX_STABLE_AUDIT_DIR}" "${LINUX_STABLE_AUDIT_REPO}"
-    fetch_audit_ref "Linux stable v6.12.69" "${LINUX_STABLE_AUDIT_DIR}" \
-        "linux-stable/base-v6.12.69" "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "2026-01-01"
+    stable_audit_commits=("${LINUX_STABLE_AUDIT_COMMIT}")
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        fetch_audit_ref "Linux stable v6.12.69" "${LINUX_STABLE_AUDIT_DIR}" \
+            "linux-stable/base-v6.12.69" "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "2026-01-01"
+        stable_audit_commits=("${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${stable_audit_commits[@]}")
+    fi
     fetch_audit_ref "Linux stable ${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_DIR}" \
         "linux-stable/${LINUX_STABLE_AUDIT_REF}" "${LINUX_STABLE_AUDIT_COMMIT}" "2026-02-01"
     hydrate_audit_commit_history "Linux 6.12 stable" "${LINUX_STABLE_AUDIT_DIR}" \
         "${BACKPORT_AUDIT_SNAPSHOT}" "2026-02-01" \
-        "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}"
-    env GIT_NO_LAZY_FETCH=1 git -C "${LINUX_STABLE_AUDIT_DIR}" merge-base --is-ancestor \
-        "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
-        die "Linux stable 审计历史未形成 v6.12.69 到固定终点的完整祖先链"
+        "${stable_audit_commits[@]}"
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        env GIT_NO_LAZY_FETCH=1 git -C "${LINUX_STABLE_AUDIT_DIR}" merge-base --is-ancestor \
+            "${LINUX_STABLE_AUDIT_BASE_COMMIT}" "${LINUX_STABLE_AUDIT_COMMIT}" || \
+            die "Linux stable 审计历史未形成 v6.12.69 到固定终点的完整祖先链"
+    fi
     selected_stable_patches=()
     for selected_stable_entry in \
         "${ENABLE_F2FS_ACL_ENTRY_BOUNDS_FIX:-0}:${F2FS_ACL_ENTRY_BOUNDS_STABLE_COMMIT:-}" \
@@ -1275,13 +1342,17 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         "${selected_stable_patches[@]}"
 
     ensure_audit_repo "Linux mainline 历史" "${LINUX_MAINLINE_AUDIT_DIR}" "${LINUX_MAINLINE_AUDIT_REPO}"
-    fetch_audit_ref "Linux mainline v6.12" "${LINUX_MAINLINE_AUDIT_DIR}" \
-        "linux-mainline/base-v6.12" "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "2024-11-01"
+    mainline_audit_commits=("${LINUX_MAINLINE_AUDIT_COMMIT}")
+    if [ "${INIT_AUDIT_HISTORY}" = 1 ]; then
+        fetch_audit_ref "Linux mainline v6.12" "${LINUX_MAINLINE_AUDIT_DIR}" \
+            "linux-mainline/base-v6.12" "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "2024-11-01"
+        mainline_audit_commits=("${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "${mainline_audit_commits[@]}")
+    fi
     fetch_audit_ref "Linux mainline 快照" "${LINUX_MAINLINE_AUDIT_DIR}" \
         "linux-mainline/snapshot-${BACKPORT_AUDIT_SNAPSHOT}" "${LINUX_MAINLINE_AUDIT_COMMIT}" "2024-11-01"
     hydrate_audit_commit_history "Linux mainline" "${LINUX_MAINLINE_AUDIT_DIR}" \
         "${BACKPORT_AUDIT_SNAPSHOT}" "2024-11-01" \
-        "${LINUX_MAINLINE_AUDIT_BASE_COMMIT}" "${LINUX_MAINLINE_AUDIT_COMMIT}"
+        "${mainline_audit_commits[@]}"
     selected_mainline_patches=()
     if [ "${ENABLE_TIMER_BASE_FAST_PATH:-0}" = "1" ]; then
         selected_mainline_patches+=("${TIMER_BASE_FAST_PATH_COMMIT}")
@@ -1304,7 +1375,7 @@ if [ "${ENABLE_BACKPORT_AUDIT}" = "1" ]; then
         bash "${BACKPORT_TOOL}" verify-sources
     fi
     bash "${INDEPENDENT_BACKPORT_TOOL}" verify-sources
-    log_success "后续改进只读审计历史已固定"
+    log_success "已选回移来源已固定并通过离线审计"
 fi
 if [ "${ENABLE_F2FS_DIO_OVERWRITE_FAST_PATH}" = "1" ]; then
     verify_aosp_backport_source "F2FS DIO overwrite 映射检查优化" \

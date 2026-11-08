@@ -74,14 +74,14 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 ```
 
 - `.env`：唯一受版本控制的 pin、构建身份和验证快照来源。
-- `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK、配套官方 CI Manager APK 和只读官方审计仓库；不应用补丁、不编译。
+- `init.sh`：准备并校验固定源码、AOSP 官方工具链、Rust、build-tools、NDK、配套官方 CI Manager APK 和已采用补丁必需的只读官方来源；`--audit-history` 额外准备候选调查历史、历史 ABI 与 stock 清单重建资料。不应用补丁、不编译。
 - `patch.sh`：仅应用项目维护的官方内核及宿主构建回移；必须幂等。
 - `patch_external.sh`：仅接入已准备的外部组件；不得下载。
 - `build.sh`：生成配置、编译，执行第 3、5 节门禁与快照审计；仅在发布闭包齐全且无未确认漂移后打包，不得准备源码。
 - `tools/ci/`：CI 宿主准备、标准流程调度与交付通知；不得绕过上述脚本和门禁。`.github/workflows/check.yml` 在 main 的 push/PR 执行轻量检查，`build.yml` 仅手动在 main 执行完整构建，分为 build、notify 两个 job，不创建 Release。
 - `ci/inputs/os4.0.6.0/system_dlkm.img`：用户批准随仓库保存的唯一分区镜像，作为本地与 CI 共用的固定运行输入；大小和摘要仍由 `.env` 校验。其他 ROM、分区镜像及设备证据不得提交。
 
-`INIT_FETCH_JOBS` 是 `init.sh` 的运行时并发参数，本地默认 1、CI 使用 2，不属于 `.env` pin。CI 只复用内容校验的 ccache、固定下载和官方 Manager 缓存；不得通过伪造时间、宽松文件状态匹配或关闭编译器身份校验换取命中。完整 CI 的宿主、缓存、产物和通知流程见 `docs/BUILDING.md`。
+`INIT_FETCH_JOBS` 是 `init.sh` 的运行时并发参数，本地默认 1、CI 使用 2，不属于 `.env` pin。CI 可复用内容校验的 ccache、固定下载、官方 Manager、固定工具链来源树及构建必需的只读审计对象；来源缓存按固定输入和准备逻辑生成 key，恢复后仍须验证来源与内容。不得缓存已打补丁的源码工作树，或通过伪造时间、宽松文件状态匹配、关闭编译器身份校验换取命中。完整 CI 的宿主、缓存、产物和通知流程见 `docs/BUILDING.md`。
 
 固定源码仓库必须保持干净，或其差异能被补丁脚本用允许路径和 reverse-apply 精确证明。`sources/`、`work/`、`evidence/`、`kernel_out/`、日志、转储和测试包不得提交。不得在输出目录手工修改 `.config`、`Module.symvers` 或包内容绕过守卫。
 

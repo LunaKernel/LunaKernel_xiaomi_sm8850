@@ -9,16 +9,23 @@ fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 . /etc/os-release
 [[ "${ID}" == ubuntu && "${VERSION_ID}" == 24.04 ]] || fail '需要 Ubuntu 24.04'
 
-# 只删除明确无关的预装 SDK；不跟随目录或祖先路径的符号链接。
+# 空间足够时保留预装 SDK；不足时只清理白名单，且不跟随符号链接。
+prepare_started="$(date +%s)"
 timeout --kill-after=15s 5m sudo -n python3 - <<'PY'
 from pathlib import Path
 import shutil
 
+minimum = 50 * 2**30
+free = shutil.disk_usage('.').free
+print(f'[INFO] SDK 清理前可用磁盘={free / 2**30:.1f} GiB', flush=True)
 for name in (
     '/usr/local/lib/android', '/usr/share/dotnet', '/opt/ghc',
     '/usr/local/.ghcup', '/usr/share/swift', '/usr/local/share/powershell',
     '/opt/hostedtoolcache/CodeQL', '/usr/share/miniconda',
 ):
+    if free >= minimum:
+        print('[OK] 空间已满足 50 GiB，跳过其余 SDK 清理', flush=True)
+        break
     path = Path(name)
     if any(parent.is_symlink() for parent in (path, *path.parents)):
         raise SystemExit('拒绝清理经过符号链接的 SDK: ' + name)
@@ -27,8 +34,13 @@ for name in (
             raise SystemExit('预装 SDK 路径不是目录: ' + name)
         shutil.rmtree(path)
         print('[CLEAN] ' + name, flush=True)
+        free = shutil.disk_usage('.').free
+if free < minimum:
+    raise SystemExit('清理白名单后可用空间仍不足 50 GiB')
 PY
+printf '[INFO] SDK 空间准备耗时=%s 秒\n' "$(( $(date +%s) - prepare_started ))"
 
+packages_started="$(date +%s)"
 timeout --kill-after=15s 5m sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -q
 timeout --kill-after=15s 10m sudo -n env DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
@@ -42,6 +54,7 @@ for tool in bash git curl make gcc cc ld flex bison python3 pkg-config ccache \
 done
 [[ -x /usr/bin/x86_64-linux-gnu-gcc ]] || fail '缺少固定宿主 gcc 入口'
 pkg-config --exists libdw libelf zlib openssl || fail '缺少宿主开发库'
+printf '[INFO] 宿主依赖准备耗时=%s 秒\n' "$(( $(date +%s) - packages_started ))"
 
 python3 - <<'PY'
 import os

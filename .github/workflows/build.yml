@@ -53,6 +53,48 @@ jobs:
         with:
           path: work/cache/ksu-manager
           key: ${{ steps.meta.outputs.manager_key }}
+      - name: Restore AOSP required audit objects
+        id: aosp
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.aosp_path }}
+          key: ${{ steps.meta.outputs.aosp_key }}
+      - name: Restore Linux stable required audit objects
+        id: stable
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.stable_path }}
+          key: ${{ steps.meta.outputs.stable_key }}
+      - name: Restore Linux mainline required audit objects
+        id: mainline
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.mainline_path }}
+          key: ${{ steps.meta.outputs.mainline_key }}
+      - name: Restore Kbuild required audit objects
+        id: kbuild
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.kbuild_path }}
+          key: ${{ steps.meta.outputs.kbuild_key }}
+      - name: Restore fixed Clang source
+        id: clang
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.clang_path }}
+          key: ${{ steps.meta.outputs.clang_key }}
+      - name: Restore fixed Rust source
+        id: rust
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.rust_path }}
+          key: ${{ steps.meta.outputs.rust_key }}
+      - name: Restore fixed build-tools source
+        id: build_tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.build_tools_path }}
+          key: ${{ steps.meta.outputs.build_tools_key }}
       - name: Prepare and verify pinned sources and tools
         id: init
         run: bash tools/ci/run_build.sh init
@@ -70,6 +112,55 @@ jobs:
         with:
           path: work/cache/ksu-manager
           key: ${{ steps.meta.outputs.manager_key }}
+      - name: Save verified AOSP required audit objects
+        if: steps.init.outcome == 'success' && steps.aosp.outputs.cache-hit != 'true' && steps.init.outputs.aosp_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.aosp_path }}
+          key: ${{ steps.meta.outputs.aosp_key }}
+      - name: Save verified Linux stable required audit objects
+        if: steps.init.outcome == 'success' && steps.stable.outputs.cache-hit != 'true' && steps.init.outputs.stable_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.stable_path }}
+          key: ${{ steps.meta.outputs.stable_key }}
+      - name: Save verified Linux mainline required audit objects
+        if: steps.init.outcome == 'success' && steps.mainline.outputs.cache-hit != 'true' && steps.init.outputs.mainline_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.mainline_path }}
+          key: ${{ steps.meta.outputs.mainline_key }}
+      - name: Save verified Kbuild required audit objects
+        if: steps.init.outcome == 'success' && steps.kbuild.outputs.cache-hit != 'true' && steps.init.outputs.kbuild_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.kbuild_path }}
+          key: ${{ steps.meta.outputs.kbuild_key }}
+      - name: Save verified fixed Clang source
+        if: steps.init.outcome == 'success' && steps.clang.outputs.cache-hit != 'true' && steps.init.outputs.clang_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.clang_path }}
+          key: ${{ steps.meta.outputs.clang_key }}
+      - name: Save verified fixed Rust source
+        if: steps.init.outcome == 'success' && steps.rust.outputs.cache-hit != 'true' && steps.init.outputs.rust_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.rust_path }}
+          key: ${{ steps.meta.outputs.rust_key }}
+      - name: Save verified fixed build-tools source
+        if: steps.init.outcome == 'success' && steps.build_tools.outputs.cache-hit != 'true' && steps.init.outputs.build_tools_save == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.meta.outputs.build_tools_path }}
+          key: ${{ steps.meta.outputs.build_tools_key }}
       - name: Apply patches and build with existing gates
         id: compile
         run: bash tools/ci/run_build.sh compile

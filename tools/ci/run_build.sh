@@ -10,6 +10,29 @@ set +a
 
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
+cache_paths() {
+    local path commit
+    for path in "${AOSP_BACKPORT_AUDIT_SOURCE_DIR}" "${LINUX_STABLE_AUDIT_SOURCE_DIR}" \
+        "${LINUX_MAINLINE_AUDIT_SOURCE_DIR}" "${KBUILD_AUDIT_SOURCE_DIR}"; do
+        case "${path}" in
+            sources/aosp_common_backport_audit|sources/linux_stable_6.12_audit|\
+            sources/linux_mainline_audit|sources/linux_kbuild_audit) ;;
+            *) fail "审计缓存路径不在固定范围: ${path}" ;;
+        esac
+    done
+    for commit in "${AOSP_CLANG_COMMIT}" "${AOSP_RUST_COMMIT}" "${AOSP_BUILD_TOOLS_COMMIT}"; do
+        [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || fail '工具链来源缓存缺少固定提交'
+    done
+    printf '%s\t%s\n' \
+        aosp "${AOSP_BACKPORT_AUDIT_SOURCE_DIR}" \
+        stable "${LINUX_STABLE_AUDIT_SOURCE_DIR}" \
+        mainline "${LINUX_MAINLINE_AUDIT_SOURCE_DIR}" \
+        kbuild "${KBUILD_AUDIT_SOURCE_DIR}" \
+        clang "work/cache/toolchains/aosp-clang-git-${AOSP_CLANG_COMMIT}" \
+        rust "work/cache/toolchains/aosp-rust-${AOSP_RUST_COMMIT}" \
+        build_tools "work/cache/toolchains/aosp-build-tools-${AOSP_BUILD_TOOLS_COMMIT}"
+}
+
 check_input() {
     python3 - <<'PY'
 import hashlib
@@ -44,7 +67,8 @@ require_run() {
 metadata() {
     require_run
     check_input
-    local build_id checkout_gc
+    local build_id checkout_gc paths name path
+    paths="$(cache_paths)"
     # checkout 关闭自动 gc；只移除已知附加项，不扩大项目 Git 配置白名单。
     checkout_gc="$(git config --local --get-all gc.auto || true)"
     if [[ -n "${checkout_gc}" ]]; then
@@ -64,6 +88,7 @@ metadata() {
     python3 - <<'PY' >> "${GITHUB_OUTPUT}"
 import hashlib
 import os
+from pathlib import Path
 
 def identity(keys):
     return hashlib.sha256('\0'.join(key + '=' + os.environ[key] for key in keys).encode()).hexdigest()
@@ -80,7 +105,76 @@ downloads = identity(('CI_CLANG_REVISION', 'CI_BINDGEN_URL', 'CI_BINDGEN_SHA256'
 print('ccache_prefix=luna-ccache-v1-ubuntu24-x64-' + compiler)
 print('downloads_key=luna-downloads-v1-' + downloads)
 print('manager_key=luna-manager-v1-' + os.environ['KSU_MANAGER_APK_SHA256'])
+
+# 来源缓存只使用精确 key；准备算法和清单变化不能继承旧的历史范围。
+def source_identity(keys, files):
+    digest = hashlib.sha256(identity(sorted(set(keys))).encode())
+    for path in sorted(map(Path, files)):
+        digest.update(b'\0' + path.as_posix().encode() + b'\0' + path.read_bytes())
+    return digest.hexdigest()
+
+manifests = [Path(os.environ['SELECTED_BACKPORT_MANIFEST'])]
+manifests += sorted(Path('patches/backports/kmi6-2026-09-independent').glob('*.tsv'))
+audit_files = ['init.sh', 'tools/backport_manifest.sh', 'tools/independent_backports.sh', *manifests]
+families = ('F2FS_', 'BLKCG_', 'BLK_WBT_', 'MEMCG_RSTAT_', 'TCP_RECV_', 'IPV6_MLD_',
+            'TIMER_BASE_', 'INDEPENDENT_', 'SELECTED_BACKPORT_')
+audit_keys = [key for key in os.environ if key.removeprefix('ENABLE_').startswith(families)]
+audit_keys += ['ENABLE_BACKPORT_AUDIT', 'ENABLE_SELECTED_BACKPORTS', 'BACKPORT_AUDIT_SNAPSHOT']
+sources = {
+    'aosp': ('COMMON_REPO', 'AOSP_BACKPORT_AUDIT_REFS', 'AOSP_BACKPORT_AUDIT_SOURCE_DIR'),
+    # stable 消息还需与 mainline 原始提交互证，两个 key 同时绑定两侧来源。
+    'stable': ('LINUX_STABLE_AUDIT_REPO', 'LINUX_STABLE_AUDIT_REF', 'LINUX_STABLE_AUDIT_COMMIT',
+               'LINUX_STABLE_AUDIT_SOURCE_DIR', 'LINUX_STABLE_STANDALONE_COMMITS',
+               'LINUX_MAINLINE_AUDIT_REPO', 'LINUX_MAINLINE_AUDIT_COMMIT'),
+    'mainline': ('LINUX_MAINLINE_AUDIT_REPO', 'LINUX_MAINLINE_AUDIT_COMMIT',
+                 'LINUX_MAINLINE_AUDIT_SOURCE_DIR', 'LINUX_STABLE_AUDIT_REPO',
+                 'LINUX_STABLE_AUDIT_COMMIT', 'LINUX_STABLE_STANDALONE_COMMITS'),
+    'kbuild': ('KBUILD_AUDIT_REPO', 'KBUILD_AUDIT_REF', 'KBUILD_AUDIT_BASE_COMMIT',
+               'KBUILD_AUDIT_COMMIT', 'KBUILD_AUDIT_SOURCE_DIR'),
+}
+for name, keys in sources.items():
+    print(f'{name}_key=luna-source-v1-{name}-' + source_identity([*audit_keys, *keys], audit_files))
+toolchains = {
+    'clang': ('AOSP_CLANG_REPO', 'AOSP_CLANG_COMMIT', 'CI_CLANG_REVISION',
+              'CI_CLANG_GIT_TREE', 'CI_CLANG_LEAF_TREE_SHA256'),
+    'rust': ('AOSP_RUST_REPO', 'AOSP_RUST_COMMIT', 'CI_RUST_SUBTREE',
+             'CI_RUST_GIT_TREE', 'CI_RUST_LEAF_TREE_SHA256'),
+    'build_tools': ('AOSP_BUILD_TOOLS_REPO', 'AOSP_BUILD_TOOLS_COMMIT', 'CI_BUILD_TOOLS_SUBTREE',
+                    'CI_BUILD_TOOLS_GIT_TREE', 'CI_BUILD_TOOLS_LEAF_TREE_SHA256'),
+}
+for name, keys in toolchains.items():
+    print(f'{name}_key=luna-source-v1-{name}-' + source_identity(keys, ['init.sh']))
 PY
+    while IFS=$'\t' read -r name path; do
+        printf '%s_path=%s\n' "${name}" "${path}" >> "${GITHUB_OUTPUT}"
+    done <<< "${paths}"
+}
+
+cache_sizes() {
+    local name path bytes save paths
+    paths="$(cache_paths)"
+    while IFS=$'\t' read -r name path; do
+        python3 - "${path}" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, 'tools')
+from release_artifacts import checked_path
+path = checked_path(Path.cwd(), sys.argv[1])
+if not path.is_dir():
+    raise SystemExit('已验证来源缓存目录缺失: ' + str(path))
+PY
+        bytes="$(du -sb -- "${path}" | cut -f1)"
+        save=true
+        case "${name}" in
+            aosp|stable|mainline|kbuild)
+                if [[ "$(git -C "${path}" config --get backport.auditHistoryExpanded || true)" == true ]]; then
+                    save=false
+                fi
+                ;;
+        esac
+        printf '[CACHE] %s bytes=%s save=%s path=%s\n' "${name}" "${bytes}" "${save}" "${path}"
+        printf '%s_save=%s\n' "${name}" "${save}" >> "${GITHUB_OUTPUT:?}"
+    done <<< "${paths}"
 }
 
 prepare_run_directory() {
@@ -108,6 +202,7 @@ phase() {
     fi
     printf '::endgroup::\n'
     printf '%s\t%s\t%s\n' "${script}" "${status}" "$(( $(date +%s) - started ))" >> "${CI_RUN_DIR}/logs/stages.tsv"
+    printf '[TIME] %s status=%s seconds=%s\n' "${script}" "${status}" "$(( $(date +%s) - started ))"
     df -h . | tee -a "${CI_RUN_DIR}/logs/space.log"
     return "${status}"
 }
@@ -184,7 +279,7 @@ case "${1:-}" in
         require_run
         prepare_run_directory
         case "$1" in
-            init) phase init ;;
+            init) phase init; cache_sizes ;;
             compile) compile ;;
             export) export_bundle ;;
         esac
