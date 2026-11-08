@@ -1,6 +1,6 @@
 # 当前基线与验收
 
-当前源码基线为官方九月 r11 / Linux 6.12.92 / KMI 6，仅交付 4 KiB；Rust Binder 内置，C Binder 关闭，ROM 同名模块被屏蔽。新 KernelSU 候选尚未经完整构建与实机验收。用户于 2026-11-08 确认 `6.12.92-android16-luna-g1d3c30f1-4k` 在 `OS4.0.6.0.XPCCNXM` 上完成严格实机验收；同日只读核对确认设备运行身份一致。
+当前源码基线为官方九月 r11 / Linux 6.12.92 / KMI 6，仅交付 4 KiB；Rust Binder 内置，C Binder 关闭，ROM 同名模块被屏蔽。KernelSU `730f6446` 新候选已通过完整 CI 并交付 Telegram，状态为 `awaiting-device`，尚未经实机验收。用户于 2026-11-08 确认 `6.12.92-android16-luna-g1d3c30f1-4k` 在 `OS4.0.6.0.XPCCNXM` 上完成严格实机验收；同日只读核对确认设备运行身份一致。
 
 已验收项目提交为 `1d3c30f1945ad2c70bbf084886339649b3017123`，使用 KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`、Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。验收记录绑定该提交与下述 Image 摘要。
 
@@ -9,6 +9,16 @@
 LLVM 23 不在当前基线中：此前实测 `net_ns_type_operations` CRC 从 `1cffd49b` 变为 `5cd5fc70`，gendwarfksyms 类型串存在分隔符差异，不满足固定 OTA 闭包。保留已验证的 LLVM 22 配对；未来升级必须重新证明兼容性。
 
 AutoFDO 的官方单路径增广参数已消除当前输入下 `filemap.o` 的异常编译耗时，实际 C/Rust 参数独立审计。具体策略见 [BUILDING.md](BUILDING.md)。
+
+## 当前待验候选
+
+构建提交为 `7b083693b7957f8036f94d804ca3ddd418c8f2f6`，使用 KernelSU `730f6446`（32718 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`，并新增 USB MIDI IN request UAF 与 F2FS adjusted write range 官方回移。目标仍为小米 17 `pudding` / Android 17 / `OS4.0.6.0.XPCCNXM`。
+
+[Build Luna Kernel #42498495826](https://github.com/LunaKernel/android_kernel_xiaomi_sm8850/actions/runs/42498495826)，attempt 1，事件为 `workflow_dispatch`，分支为 `main`；build 与 notify 均成功。精确 artifact 为 `luna-7b083693-42498495826-1.tar.gz`，下载原始归档 SHA-256 为 `399bd65a7bd87b445163f826f2d55e0a377e5f03dc2ef5e1d91ca894d9decafd`。固定 OTA 的 4090 项 vmlinux 依赖及完整 tuple、活动模块 vermagic、内置 Rust Binder 替代和 stock 同名模块屏蔽门禁通过。
+
+完整产物已通过项目导入器校验并保存于 `kernel_out/luna-xiaomi17-g7b083693-20261109-0010/`；审计与原始 `release.tsv` 位于同名 `work/audit/`。Image SHA-256 为 `941c8d42ee9b3660e40bc2375663aca0aa05ebb7606752c4aa41565f859a990e`，AK3 ZIP SHA-256 为 `457faeb5b0c4bf53d5c5126f60f214b7ca7e82eeed8fc6bbe05bfdc9dd8c6275`。配套官方 Manager APK SHA-256 为 `dfc005ebe0eed0b755872e4af2ebab6edf6aa551abd088e4341669474f745986`。
+
+本轮用户明确授权先 Telegram 交付、后置真机验收。Telegram 已发送 AK3 ZIP（message_id `19`）和官方 Manager（message_id `20`）；当前状态保持 `awaiting-device`，后续真机验收由用户完成。下述历史已验收基准不替代本候选的验收。
 
 ## 已验收基准
 
