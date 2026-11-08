@@ -69,8 +69,7 @@ COMMON_REPO
         (self.root / ".gitignore").write_text("work/\nsources/\nkernel_out/\n")
         (self.root / "patches").mkdir()
         for phase in PHASES:
-            directory = self.root / "patches" if phase in ("patch", "patch_external") else self.root
-            (directory / f"{phase}.sh").write_text(
+            (self.root / "patches" / f"{phase}.sh").write_text(
                 "set -euo pipefail\n"
                 f"printf '%s\\n' {phase} >> \"$MOCK_CALLS\"\n"
                 f"if [[ ${{MOCK_FAIL_PHASE:-}} == {phase} ]]; then exit 7; fi\n"
@@ -259,7 +258,7 @@ COMMON_REPO
     def test_fixed_keys_bind_content_without_binding_scheduling_or_urls(self):
         self.assert_success(self.run_step("metadata", **FIXED_PINS))
         original = self.read_assignments("github.output")
-        self.commit_fixture_change("init.sh", "# scheduling changed\n")
+        self.commit_fixture_change("patches/init.sh", "# scheduling changed\n")
         relocated = {**FIXED_PINS, "BACKPORT_BUNDLE_URL": "https://example.invalid/moved.tar.gz",
                      "CI_TOOLCHAIN_BUNDLE_URL": "https://example.invalid/moved.tar.zst"}
         self.assert_success(self.run_step("metadata", **relocated, GITHUB_RUN_ID="456"))

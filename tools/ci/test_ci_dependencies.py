@@ -103,7 +103,7 @@ class DependencyTests(unittest.TestCase):
         os.environ['F2FS_FOREGROUND_GC_PATCH_SHA256'] = 'e' * 64
         self.data['inputs'] = dependencies.backport_inputs(self.root)
         self.repin_manifest()
-        build = Path(__file__).resolve().parents[2] / 'build.sh'
+        build = Path(__file__).resolve().parents[2] / 'patches/build.sh'
         assignments = '\n'.join(line for line in build.read_text().splitlines()
                                 if line.startswith('F2FS_FOREGROUND_GC_PATCH'))
         result = subprocess.run(['bash', '-c', 'set -eu\nHOST_WORKSPACE_DIR="$1"\n'

@@ -165,7 +165,7 @@ compile() {
     export CCACHE_DIR="${ROOT}/work/cache/ccache" CCACHE_COMPILERCHECK=content
     ccache --zero-stats
     printf 'CI_CCACHE_USED=true\n' >> "${GITHUB_ENV:?}"
-    phase build build.sh
+    phase build patches/build.sh
     # 复用已构建证据核对两项宿主加速；它们不属于设备启动条件。
     [[ -x "${BUILD_DIR}/scripts/kallsyms" && -s "${BUILD_DIR}/scripts/.kallsyms.cmd" ]]
     grep -F 'scripts/kallsyms.c' "${BUILD_DIR}/scripts/.kallsyms.cmd" >/dev/null
@@ -231,7 +231,7 @@ case "${1:-}" in
         case "$1" in
             init)
                 validate_fixed_dependencies
-                phase init init.sh
+                phase init patches/init.sh
                 python3 "${ROOT}/tools/ci_dependencies.py" check-stock-image --workspace "${ROOT}"
                 cache_sizes
                 ;;

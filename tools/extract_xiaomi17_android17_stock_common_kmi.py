@@ -602,7 +602,7 @@ def main() -> None:
         "--common-repo",
         type=Path,
         default=Path("sources/aosp_common_backport_audit"),
-        help="fixed official AOSP audit repository prepared by init.sh",
+        help="fixed official AOSP audit repository prepared by patches/init.sh",
     )
     parser.add_argument("--fsck-erofs", type=Path, default=Path("work/tools/stock-evidence/fsck.erofs"))
     parser.add_argument("--kmod", type=Path, default=Path("work/tools/stock-evidence/depmod"))

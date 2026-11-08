@@ -422,7 +422,7 @@ verify_susfs_source_state() {
     [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
         "${SUSFS_KSU_PATCH_COMMIT}" ] || \
-        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
+        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
     verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
         "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
         "${SUSFS_COMMON_FIX_PATCH_ID}"
@@ -1375,15 +1375,15 @@ build_ipset_userspace() {
     verify_repo_identity "额外模块模板" "${EXTRA_MODULES_DIR}" \
         "${EXTRA_MODULES_REPO:?缺少额外模块 URL pin}" "${EXTRA_MODULES_COMMIT:?缺少额外模块 commit pin}"
     [ "$(tree_sha256 "${EXTRA_MODULES_DIR}/ipset")" = "${IPSET_MODULE_TREE_SHA256:?缺少 IPSet 模板树 pin}" ] || \
-        die "IPSet 模板树完整性校验失败，请重新运行 ./init.sh"
+        die "IPSet 模板树完整性校验失败，请重新运行 ./patches/init.sh"
     ndk_bin="${ANDROID_NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    [ -x "${ndk_bin}/clang" ] || die "Android NDK clang 缺失，请先运行 ./init.sh"
+    [ -x "${ndk_bin}/clang" ] || die "Android NDK clang 缺失，请先运行 ./patches/init.sh"
     cc="${ndk_bin}/clang --target=aarch64-linux-android${ANDROID_NDK_API}"
     if enable_project_ccache; then
         cc="ccache ${cc}"
     fi
-    [ "$(tree_sha256 "${IPSET_DIR}")" = "${IPSET_TREE_SHA256}" ] || die "ipset 源码树完整性校验失败，请重新运行 ./init.sh"
-    [ "$(tree_sha256 "${LIBMNL_DIR}")" = "${LIBMNL_TREE_SHA256}" ] || die "libmnl 源码树完整性校验失败，请重新运行 ./init.sh"
+    [ "$(tree_sha256 "${IPSET_DIR}")" = "${IPSET_TREE_SHA256}" ] || die "ipset 源码树完整性校验失败，请重新运行 ./patches/init.sh"
+    [ "$(tree_sha256 "${LIBMNL_DIR}")" = "${LIBMNL_TREE_SHA256}" ] || die "libmnl 源码树完整性校验失败，请重新运行 ./patches/init.sh"
 
     case "${IPSET_BUILD_DIR:?缺少 IPSet 构建缓存目录}" in
         work/cache/userspace/ipset-sm8850) ;;
@@ -1481,7 +1481,7 @@ build_ipset_userspace() {
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
-HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 load_env_file "${HOST_WORKSPACE_DIR}/.env"
@@ -1629,7 +1629,7 @@ verify_android17_selected_fixes
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_source_state
 KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" check \
     --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \
-    die "官方 KernelSU Manager 缺失或校验失败，请先运行 init.sh"
+    die "官方 KernelSU Manager 缺失或校验失败，请先运行 patches/init.sh"
 [ "${ENABLE_SUSFS}" != "1" ] || verify_susfs_source_state
 [ "${ENABLE_BBG}" != "1" ] || verify_bbg_source_state
 [ "$(sed -n '1p' "${SOC_DIR}/android/ACK_SHA")" = "${XIAOMI_ACK_COMMIT}" ] || die "小米 ACK_SHA commit 已变化"
@@ -1779,26 +1779,26 @@ AVBTOOL_PATH="${CI_TOOLCHAIN_DIR}/build-tools/bin/avbtool"
 FSCK_EROFS_PATH="${CI_TOOLCHAIN_DIR}/build-tools/bin/fsck.erofs"
 CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:?缺少工具链安装树 pin}"
 
-[ -x "${CI_TOOLCHAIN_DIR}/bin/clang" ] || die "工具链未初始化，请先运行 ./init.sh"
-[ -x "${CI_TOOLCHAIN_DIR}/rust/bin/rustc" ] || die "Rust 工具链未初始化，请先运行 ./init.sh"
-[ -x "${CI_TOOLCHAIN_DIR}/bin/bindgen" ] || die "bindgen 未初始化，请先运行 ./init.sh"
-[ -d "${CI_TOOLCHAIN_DIR}/build-tools/bin" ] || die "build-tools 未初始化，请先运行 ./init.sh"
+[ -x "${CI_TOOLCHAIN_DIR}/bin/clang" ] || die "工具链未初始化，请先运行 ./patches/init.sh"
+[ -x "${CI_TOOLCHAIN_DIR}/rust/bin/rustc" ] || die "Rust 工具链未初始化，请先运行 ./patches/init.sh"
+[ -x "${CI_TOOLCHAIN_DIR}/bin/bindgen" ] || die "bindgen 未初始化，请先运行 ./patches/init.sh"
+[ -d "${CI_TOOLCHAIN_DIR}/build-tools/bin" ] || die "build-tools 未初始化，请先运行 ./patches/init.sh"
 [ -x "${AVBTOOL_PATH}" ] || die "固定 build-tools 缺少 avbtool"
 [ -x "${FSCK_EROFS_PATH}" ] || die "固定 build-tools 缺少 fsck.erofs"
-[ -x "${MAGISKBOOT_ARM64_PATH}" ] || die "arm64 magiskboot 未初始化，请先运行 ./init.sh"
+[ -x "${MAGISKBOOT_ARM64_PATH}" ] || die "arm64 magiskboot 未初始化，请先运行 ./patches/init.sh"
 [ "$(sha256sum "${MAGISKBOOT_ARM64_PATH}" | awk '{ print $1 }')" = "${MAGISKBOOT_ARM64_SHA256}" ] || \
-    die "arm64 magiskboot SHA-256 校验失败，请重新运行 ./init.sh"
-[ -x "${AK3_BUSYBOX_PATH}" ] || die "AnyKernel3 arm64 BusyBox 未初始化，请先运行 ./init.sh"
+    die "arm64 magiskboot SHA-256 校验失败，请重新运行 ./patches/init.sh"
+[ -x "${AK3_BUSYBOX_PATH}" ] || die "AnyKernel3 arm64 BusyBox 未初始化，请先运行 ./patches/init.sh"
 [ "$(sha256sum "${AK3_BUSYBOX_PATH}" | awk '{ print $1 }')" = "${AK3_BUSYBOX_SHA256}" ] || \
-    die "AnyKernel3 arm64 BusyBox SHA-256 校验失败，请重新运行 ./init.sh"
+    die "AnyKernel3 arm64 BusyBox SHA-256 校验失败，请重新运行 ./patches/init.sh"
 [[ "${CI_TOOLCHAIN_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "工具链安装树 SHA-256 格式错误"
 [ "$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" = "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
-    die "工具链安装树完整性校验失败，请重新运行 ./init.sh"
+    die "工具链安装树完整性校验失败，请重新运行 ./patches/init.sh"
 verify_android17_stock_system_dlkm_identity
 if [ "${ENABLE_IPSET}" = "1" ]; then
     [[ "${ANDROID_NDK_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK 安装树 SHA-256 格式错误"
     [ "$(tree_sha256 "${ANDROID_NDK_DIR}")" = "${ANDROID_NDK_TREE_SHA256}" ] || \
-        die "Android NDK 安装树完整性校验失败，请重新运行 ./init.sh"
+        die "Android NDK 安装树完整性校验失败，请重新运行 ./patches/init.sh"
 fi
 log_success "构建工具链安装树完整性校验通过"
 

@@ -14,7 +14,7 @@ log_step() { printf '[STEP] %s\n' "$1"; }
 log_success() { printf '[OK] %s\n' "$1"; }
 
 parse_init_args() {
-    [ "$#" = 0 ] || die "用法: ./init.sh"
+    [ "$#" = 0 ] || die "用法: ./patches/init.sh"
 }
 
 validate_init_fetch_jobs() {
@@ -516,7 +516,7 @@ prepare_build_dependencies() {
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
-HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd -P)"
+HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 parse_init_args "$@"
 [ -f "${HOST_WORKSPACE_DIR}/.env" ] || die "缺少受版本控制的 .env"
 validate_init_fetch_jobs

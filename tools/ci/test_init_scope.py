@@ -10,7 +10,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = (ROOT / "init.sh").read_text()
+SOURCE = (ROOT / "patches/init.sh").read_text()
 FIXED_PINS = {
     "BACKPORT_BUNDLE_MANIFEST_SHA256": "1" * 64,
     "BACKPORT_BUNDLE_SHA256": "2" * 64,

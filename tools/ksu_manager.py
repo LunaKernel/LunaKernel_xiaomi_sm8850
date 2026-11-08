@@ -57,7 +57,7 @@ def git(repo, *args):
     result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(repo), *args],
                             env=env, capture_output=True, text=True, timeout=30)
     require(result.returncode == 0,
-            'local KSU Git object unavailable or invalid; run init.sh: ' + result.stderr.strip())
+            'local KSU Git object unavailable or invalid; run patches/init.sh: ' + result.stderr.strip())
     return result.stdout.strip()
 
 

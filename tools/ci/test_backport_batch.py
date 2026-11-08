@@ -199,7 +199,7 @@ class BackportBatchTests(unittest.TestCase):
         self.assertEqual(self.target_diff(), "")
 
     def run_legacy_build_checks(self):
-        source = (ROOT / "build.sh").read_text()
+        source = (ROOT / "patches/build.sh").read_text()
         functions = source[source.index("verify_official_backport_applied() {"):source.index("verify_first_batch_linux_backports() {")]
         commit = self.commits["alpha"]
         fields = self.manifests[0].read_text().splitlines()[1].split("\t")
@@ -222,7 +222,7 @@ class BackportBatchTests(unittest.TestCase):
         self.assertNotEqual(self.run_legacy_build_checks().returncode, 0)
 
     def test_timer_and_dio_build_checks_follow_independent_switches(self):
-        source = (ROOT / "build.sh").read_text()
+        source = (ROOT / "patches/build.sh").read_text()
         function = source[source.index("verify_second_batch_backports() {"):
                           source.index("verify_memcg_rstat_fast_path() {")]
         script = r'''

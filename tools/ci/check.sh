@@ -8,7 +8,7 @@ export PYTHONDONTWRITEBYTECODE=1
 
 git diff --check
 git show --format= --check HEAD
-for script in init.sh build.sh patches/*.sh tools/ci/*.sh; do
+for script in patches/*.sh tools/ci/*.sh; do
     bash -n "${script}"
 done
 python3 - <<'PY'

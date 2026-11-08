@@ -85,7 +85,7 @@ reject_git_object_overrides() {
 verify_repo_identity() {
     local label="$1" repo_dir="$2" expected_url="$3" expected_commit="$4"
     local actual_url actual_commit
-    git -C "${repo_dir}" rev-parse --git-dir >/dev/null 2>&1 || die "${label} 未初始化，请先运行 ./init.sh"
+    git -C "${repo_dir}" rev-parse --git-dir >/dev/null 2>&1 || die "${label} 未初始化，请先运行 ./patches/init.sh"
     reject_git_object_overrides "${label}" "${repo_dir}"
     verify_no_hidden_index_flags "${label}" "${repo_dir}"
     actual_url="$(git -C "${repo_dir}" remote get-url origin 2>/dev/null || true)"
@@ -227,7 +227,7 @@ verify_susfs_integration() {
     [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
         "${SUSFS_KSU_PATCH_COMMIT}" ] || \
-        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
+        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
     git -C "${KSU_DIR}" apply --reverse --check \
         --exclude=kernel/Kconfig \
         --exclude=kernel/policy/app_profile.c \
@@ -593,7 +593,7 @@ verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSF
 [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
     refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
     "${SUSFS_KSU_PATCH_COMMIT}" ] || \
-    die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./init.sh"
+    die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
 verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
     "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
     "${SUSFS_COMMON_FIX_PATCH_ID}"

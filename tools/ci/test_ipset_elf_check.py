@@ -11,7 +11,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = (ROOT / "build.sh").read_text()
+SOURCE = (ROOT / "patches/build.sh").read_text()
 MATCH = re.search(
     r'^    "\$\{ndk_bin\}/llvm-readelf" -l "\$\{binary\}" \| .*\\\n'
     r'        die "ipset Android linker ABI 不匹配"$', SOURCE, re.M)

@@ -8,7 +8,7 @@ verify_backport_bundle() {
 	[ "${VERIFIED_BACKPORT_BUNDLE_WORKSPACE:-}" != "${workspace}" ] || return 0
 	expected_dir="${workspace}/work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}"
 	VERIFIED_BACKPORT_BUNDLE_DIR="$(python3 "${workspace}/tools/ci_dependencies.py" \
-		backports-check --workspace "${workspace}")" || die "固定回移补丁包校验失败，请先运行 ./init.sh"
+		backports-check --workspace "${workspace}")" || die "固定回移补丁包校验失败，请先运行 ./patches/init.sh"
 	[ "${VERIFIED_BACKPORT_BUNDLE_DIR}" = "${expected_dir}" ] || die "回移补丁包目录异常"
 	VERIFIED_BACKPORT_BUNDLE_WORKSPACE="${workspace}"
 }

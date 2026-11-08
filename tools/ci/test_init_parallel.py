@@ -13,7 +13,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = (ROOT / "init.sh").read_text()
+SOURCE = (ROOT / "patches/init.sh").read_text()
 BASH = os.environ.get("INIT_TEST_BASH", "bash")
 
 
