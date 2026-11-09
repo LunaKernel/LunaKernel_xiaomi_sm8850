@@ -2,7 +2,7 @@
 
 适用于 GKI 基线更新、回移清理和外部组件更新。先阅读 [项目约束](PROJECT_RULES.md)、[构建说明](BUILDING.md) 和 [贡献说明](CONTRIBUTING.md)。主仓、[固定依赖仓](https://github.com/LunaKernel/ci-dependencies)及 [extra-modules](https://github.com/LunaKernel/extra-modules)分别维护消费、制作和模块模板。
 
-完整流程为：固定本轮目标 → 更新基线与清理回移 → 更新外部组件 → 制作固定依赖 → 测试 CI 与真机验收 → 正式 CI 与 Telegram 交付。
+完整流程为：固定本轮目标 → 更新基线与清理回移 → 更新外部组件 → 制作固定依赖 → CI 构建与 Telegram 交付 → 用户真机验收。
 
 ## 1. 开始与边界
 
@@ -80,11 +80,9 @@ Manager 选用匹配新 KSU 源码、UAPI 和签名要求的官方 CI 产物，�
 
 验证结果绑定提交与输入。已通过的检查仅在相关输入变化或出现新问题时重跑；定向评审优先检查新增差异。
 
-## 6. 测试 CI 与失败处理
+## 6. CI 构建与 Telegram 交付
 
-派发前确认 `build.yml` 已实现测试模式跳过 notify、正式模式验收绑定及通知重试产物绑定，并完成相关轻量验证。
-
-在 main 手动派发 `build.yml`，使用默认 `mode=test`。测试执行完整构建、审计、打包与产物上传，保留真实失败状态和诊断信息；GitHub 通知设置保持现状。
+在 main 手动派发 `build.yml`，执行完整构建、审计、打包与产物上传。build 通过全部构建与交付门禁后，由 notify 发送已校验的内核 ZIP 和官方 Manager 到 Telegram；真机验收放在交付后，由用户完成。GitHub 通知设置保持现状。
 
 记录精确 run ID、attempt、工作流、事件与完整项目 SHA，持续监控至完成。失败按原因处理：
 
@@ -93,28 +91,17 @@ Manager 选用匹配新 KSU 源码、UAPI 和签名要求的官方 CI 产物，�
 - 参考快照 DRIFT：审查保存的差异，更新参考后重新测试。
 - 目标 OTA 闭包或关键功能不兼容：修复后再进入发布。
 
-成功后记录 run URL、完整提交、关键阶段耗时、缓存命中、精确 artifact 和原始 Image SHA-256，状态为 `awaiting-device`。冻结该完整候选；后续修改形成新提交时，须以新 SHA 重新测试和验收。
+成功后记录 run URL、完整提交、关键阶段耗时、缓存命中、精确 artifact、原始 Image SHA-256 和 Telegram 交付结果。`release.tsv` 中候选状态为 `awaiting-device`，该状态允许 Telegram 推送。后续修改形成新提交时，以新 SHA 重新构建并交付对应候选。
 
-## 7. 真机验收与正式交付
+通知失败时，在 artifact 有效期内仅重试 notify，复用同次成功构建的精确产物。部分发送或响应丢失时先核对交付，避免重复发送。
 
-下载精确测试产物，由用户按 [真机验证规则](PROJECT_RULES.md#6-真机验证)完成验收，绑定测试 run/attempt/artifact、完整项目提交、原始 Image SHA-256 和目标 OTA。缺少真实验收结论时，停在成功测试产物与待验信息。
+## 7. 用户真机验收
 
-核对用户结论后，在同一 `build.yml` 派发正式构建：
+Telegram 交付后，最后由用户按 [真机验证规则](PROJECT_RULES.md#6-真机验证)完成验收，绑定交付 run/attempt/artifact、完整项目提交、原始 Image SHA-256 和目标 OTA。验收前保持 `awaiting-device`。
 
-| 输入 | 值 |
-| --- | --- |
-| `mode` | `release` |
-| `validated_run_id` | 已成功且对应用户验收的测试 run ID，正整数 |
-| `accepted_image_sha256` | 已验收的原始 Image SHA-256，64 位小写十六进制 |
-| `device_acceptance` | 用户确认的简短验收声明，明确设备与 OTA |
+用户确认通过后，在 [验证记录](VALIDATION.md) 中将对应候选记录为 `accepted`，保留构建与产物身份。详细设备日志留在原有证据位置，验收文档单独提交；发现问题时记录结论并针对该候选处理。
 
-详细设备日志留在原有证据位置，公开参数仅填必要声明。验收文档与指导改进在候选冻结前完成，或在交付后单独提交并保留已验收提交引用。
-
-正式 CI 核对测试运行、完整项目提交及固定输入，执行相同完整构建与全部门禁。原始 Image 摘要与验收值一致后，在 `release.tsv` 记录 `accepted` 及验收关联，校验精确 artifact，再发送内核 ZIP 和官方 Manager 到 Telegram。摘要不同则停止交付，查明原因并重新建立测试与验收绑定。归档中的运行时间和目录名不参与 Image 一致性比较。
-
-通知失败时，在 artifact 有效期内仅重试 notify，使用正式 `release.tsv` 已绑定的测试 run/attempt/artifact；测试后来重跑也沿用原绑定。部分发送或响应丢失时先核对交付，避免重复发送。
-
-以测试通过、真机验收通过、正式 CI 成功和 Telegram 交付确认作为流程完成条件。
+CI 成功且 Telegram 交付确认后，自动维护阶段完成；用户真机验收通过并记录后，本轮维护完成。
 
 ## 8. 执行与收尾
 

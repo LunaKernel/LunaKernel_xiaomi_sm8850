@@ -48,13 +48,12 @@ Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索
 
 启动门禁 MUST 只包含有明确机制或目标 OTA 证据、确实影响基本启动与内核核心功能的最小必要检查。新增启动门禁 MUST 说明其对应的启动链路、核心功能或目标模块加载失败机制；性能优化开关、可选组件、日志策略、普通命令行参数和完整配置快照不得因配置偏好被加入启动门禁。项目功能、编译身份、来源完整性及全量快照审计 MUST 独立检查、独立报告，不得冒充启动必需条件；既有模块闭包、安全能力与发布审计要求仍按各自职责执行。
 
-ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的接口及相关类型兼容性。待放行版本 MUST 同时满足：
+ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的接口及相关类型兼容性。CI 交付前 MUST 完成以下构建检查：
 
 - 覆盖固定 OTA 的 `boot`、`vendor_boot`、`vendor_dlkm`、`system_dlkm` 中全部实际使用及可能按硬件、服务或运行时路径加载的内核模块，不限于单次启动已加载子集。
 - 对上述目标模块闭包中的每个依赖，验证符号存在、CRC、provider、导出类型、namespace、依赖顺序、vermagic 和相关 ABI 类型兼容；不得出现 unknown symbol、CRC disagreement、namespace 拒绝、vermagic/CFI/BTF 不兼容或伪造 provider。
 - 保持 arm64、4 KiB、对应 GKI/KMI generation、模块版本机制以及启动、存储、显示、Binder、SELinux/LSM、seccomp、BPF 和设备安全路径所需的关键配置与语义。
-- 项目新增的 built-in 能力或 `.ko` 不得破坏 stock 闭包；新增 `.ko` 必须随对应 `Image` 同次构建，并独立证明可加载、依赖完整及功能正常。
-- 真机完成启动、全部预期模块加载、关键硬件和项目功能验证，并排除 panic、Oops、watchdog、关键模块加载失败及持续性严重错误。
+- 项目新增的 built-in 能力或 `.ko` 不得破坏 stock 闭包；新增 `.ko` 必须随对应 `Image` 同次构建，并独立验证依赖与接口兼容性。实际加载与功能由用户在交付后按第 6 节验证。
 
 目标闭包符号删除、CRC/provider/namespace/相关类型不兼容或关键启动配置破坏均为绝对拒绝项，安全性或性能收益不能豁免。禁止删除验证对象、伪造导出、硬编码跳过、扩大例外或以空模块掩盖失败；唯一固定 `rust_binder.ko` 的内置替代策略见第 5 节。
 
@@ -130,7 +129,9 @@ KernelSU 保持 built-in，不得借门禁重构改变交付边界。后续切�
 
 当前验收基准为项目 `1d3c30f1945ad2c70bbf084886339649b3017123`，release `6.12.92-android16-luna-g1d3c30f1-4k`。用户于 2026-11-08 确认在 `pudding` / `OS4.0.6.0.XPCCNXM` 完成严格实机验收并通过，状态为 `accepted`。身份、构建审计与范围见 [验证记录](VALIDATION.md)。
 
-每个新 Image 的验收绑定项目提交、二进制摘要和 OTA。发布前完成完整构建、目标模块闭包和真机复测，记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。
+每个新 Image 先完成完整构建、目标模块闭包与交付检查，再通过 Telegram 发送，状态为 `awaiting-device`。真机验收最后由用户完成，不阻塞 Telegram 推送；验收绑定项目提交、二进制摘要和 OTA，通过后在 [验证记录](VALIDATION.md) 中记录为 `accepted`。
+
+真机完成启动、全部预期模块加载、关键硬件和项目功能验证，并排除 panic、Oops、watchdog、关键模块加载失败及持续性严重错误。记录 `uname -a`、`/proc/version`、boot completed、slot/verified boot、cmdline、模块加载、Binder、BPF sysctl、dmesg、logcat 与 pstore。
 
 必须分别验证 KernelSU/SUSFS/BBG、SELinux/LSM 和 IPSet。环境隐藏可使属性显示为 green/locked；验收时必须结合 bootconfig 和测试环境说明，不能把预期隐藏行为误判为内核失败。
 

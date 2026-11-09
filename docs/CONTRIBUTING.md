@@ -18,7 +18,7 @@
 
 更新 KernelSU/SUSFS 时先审查兼容补丁残差及已吸收修复，再更新 pin、源码和构建；仅存在于源码但未编译的对象不能算作有效功能。同时核对官方 CI Manager 的源码、UAPI、签名及固定 artifact，不追随 latest 或自行编译替代。
 
-固定 OTA 模块实际消费的接口、相关类型和加载条件必须兼容。全量配置、符号及类型快照的变化须独立审查并更新参考；不得以参考漂移为由放宽目标闭包。发布还需镜像完整性、Image-only 打包检查及 [真机验收](VALIDATION.md)。
+固定 OTA 模块实际消费的接口、相关类型和加载条件必须兼容。全量配置、符号及类型快照的变化须独立审查并更新参考；不得以参考漂移为由放宽目标闭包。交付前完成镜像完整性和 Image-only 打包检查；Telegram 推送后，最后由用户完成 [真机验收](VALIDATION.md)。
 
 main 的 push/PR 运行轻量 CI 检查，完整构建从 main 手动触发。新 Image 构建成功后为 `awaiting-device`。CI 产物与 Telegram 通知配置见 [构建说明](BUILDING.md#github-actions)。
 
