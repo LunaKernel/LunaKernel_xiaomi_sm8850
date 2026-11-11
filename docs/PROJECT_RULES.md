@@ -38,7 +38,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 内核直接修复仅授权 `patches/patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节门禁与差异审计；拒绝收益极小、路径无关、来源不清或证据不足的改动。缺少实机性能数据本身不构成否决，但不得把猜测视为优化。已被基线吸收的修复不得重复回移。
 
-本轮另授权 12 个官方来源提交的小米 vendor hooks 与配套 ABI，按完整前置及共享 ABI 闭包分为 suspend-abort（2）、VMA/legacy reclaim（5）、MGLRU/swappiness（2）、LRU deactivation（3）四组，不拆分或重复承载共享官方提交，新增 14 个 hooks、28 个导出，以预留最新小米 OTA vendor 模块接口；不得仅因当前没有新 consumer 否决该目标，其余 18 项等待正式版。保留旧 hook 签名/布局、原生控制默认值及有效调用点，不内置 Luna 或厂商策略；配套 symbol 仅增上述 28 项，完整 ABI/STG 参考由项目构建生成并验证，不照抄上游 CRC。来源、行为影响及验证进度记录于既有回移表，接口预留不等于已获性能提升或完全无行为变化。
+本轮另授权 12 个官方来源提交的小米 vendor hooks 与配套 ABI，按完整前置及共享 ABI 闭包分为 suspend-abort（2）、VMA/legacy reclaim（5）、MGLRU/swappiness（2）、LRU deactivation（3）四组，不拆分或重复承载共享官方提交，新增 14 个 hooks、28 项 vendor 符号清单（实际增加 42 个 GPL 导出，含 14 个静态调用 key），以预留最新小米 OTA vendor 模块接口；不得仅因当前没有新 consumer 否决该目标，其余 18 项等待正式版。保留旧 hook 签名/布局、原生控制默认值及有效调用点，不内置 Luna 或厂商策略；配套 symbol 仅增上述 28 项，完整 ABI/STG 参考由项目构建生成并验证，不照抄上游 CRC。来源、行为影响及验证进度记录于既有回移表，接口预留不等于已获性能提升或完全无行为变化。
 
 Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索引与参数探测缓存链，由独立清单 670、680 固定，来源对象由依赖仓库审计。须证明生成结果、参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁与早期启动严格对齐。
 
