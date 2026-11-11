@@ -427,20 +427,19 @@ index 34d5b24090bddbf40a5e80532e3286f435a233a5..ac328880433e8df5ed8b70f962bae5e8
 \ No newline at end of file
 +}
 diff --git a/kernel/runtime/boot_event.c b/kernel/runtime/boot_event.c
-index d469c21315c36948a4e715615615e6fb3c65baaa..f54875a65279d9b7380289b0b343546af40c3356 100644
+index d469c21315c36948a4e715615615e6fb3c65baaa..6b93332ebe834c225e5f702b7488f687cae0da96 100644
 --- a/kernel/runtime/boot_event.c
 +++ b/kernel/runtime/boot_event.c
-@@ -1,4 +1,5 @@
+@@ -1,6 +1,8 @@
  #include "feature/selinux_hide.h"
 +#include <linux/atomic.h>
  #include <linux/err.h>
  #include <linux/fs.h>
++#include <linux/jump_label.h>
  #include <linux/namei.h>
-@@ -14,27 +15,22 @@
+ #include <linux/printk.h>
  
- bool ksu_module_mounted __read_mostly = false;
- bool ksu_boot_completed __read_mostly = false;
--extern struct static_key_true ksu_is_input_hook_enabled;
+@@ -18,14 +20,13 @@ extern struct static_key_true ksu_is_input_hook_enabled;
  
  void on_post_fs_data(void)
  {
@@ -457,16 +456,6 @@ index d469c21315c36948a4e715615615e6fb3c65baaa..f54875a65279d9b7380289b0b343546a
      pr_info("on_post_fs_data!\n");
  
      ksu_load_allow_list();
-     ksu_observer_init();
-     // Sanity check for safe mode only needs early-boot input samples.
--    if (static_key_enabled(&ksu_is_input_hook_enabled)) {
--        static_branch_disable(&ksu_is_input_hook_enabled);
--        pr_info("ksu_input_hook is disabled\n");
--    }
-+    ksu_stop_input_hook_runtime();
-     ksu_selinux_hide_handle_post_fs_data();
-     // retry forced features which failed at second stage
-     ksu_feature_apply_forced();
 diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
 index a4fb4138f491c8d9e00ace1fec51387bc931931d..659e34273cc43ab6674265a3a6c9f4e2483eee3b 100644
 --- a/kernel/runtime/ksud_integration.c

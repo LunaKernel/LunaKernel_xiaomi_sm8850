@@ -17,7 +17,7 @@ susfs-common	enabled_features 输出缓冲区清零	retain	fs/susfs.c	copy_from_
 susfs-common	sdcard fsnotify 引用与释放	retain	fs/susfs.c	保留 free_mark、put_mark、失败路径 kpath 清零及 monitor 初始化失败降级
 susfs-common	SUS_MAP 远程访问先查 VMA	retain	mm/memory.c	上游仍初始化 vma=NULL 后测试，GUP 前实际 vma_lookup 必须保留
 susfs-ksu	包观察 mark 释放	retain	kernel/manager/pkg_observer.c	官方 KernelSU 及新 SUSFS 层均无 free_mark
-susfs-ksu	post-fs-data 单次执行	retain	kernel/runtime/boot_event.c	bool done 仍有并发竞态；保留 atomic_cmpxchg
+susfs-ksu	post-fs-data 单次执行	retain	kernel/runtime/boot_event.c	bool done 仍有并发竞态；保留 atomic_cmpxchg；按 42975584587 编译证据保留新官方静态键停止块，不再恢复已移除的 ksu_stop_input_hook_runtime
 susfs-ksu	sulog 内核字符串复制	retain	kernel/sulog/event.c	官方 SUSFS 新兼容补丁仍把 strncpy 指针写入 int；保留 strscpy 与 E2BIG 处理
 susfs-ksu	启动事件分发单次执行	retain	kernel/supercall/dispatch.c	新版仍使用非原子 bool；保留 post-fs-data/boot_complete 原子门闩
 bbg-ksu	授权凭据标记	adapt	kernel/policy/app_profile.c;kernel/selinux/selinux.c	核对兼容层后全部三处 commit_creds，保持授权/app profile/init/adb root 标记
@@ -37,4 +37,4 @@ upstream	SELinux credential 接口探测	native	Makefile;tracing/tracing.c	BBG 0
 integration	r15 与新组件组合精确重放	verified	common;KernelSU;Baseband-guard	官方层和现有残余均无冲突应用；临时 index 正反及完整重放一致，fdinfo 保持 r15 原样；不据此代替完整编译及实机验收
 susfs-common	真实策略代际与 AVC 失效	adapt	security/selinux/ss/services.c	删除 KSU domain 的 policy_commit/set_bools seqno 冻结，四个相关函数分别与 r15 原生实现核对；KSU rules 原生 metadata/advance/reset 保留
 susfs-common	真实 SELinux status sequence	adapt	security/selinux/status.c;security/selinux/selinuxfs.c	真实 policyload/setenforce 恢复原生奇偶 sequence 更新；隐藏应用 fake_status 映射保留
-upstream	priority UID 独立功能与 O_NOATIME	native	kernel/manager/pkg_observer.c;kernel/supercall/dispatch.c;fs/susfs.c;block/ioprio.c;kernel/sys.c	保留新 Kconfig、命令、bitmap、四个 syscall 消费以及包观察与 supercall 两个生产入口；filp_open 原生 O_NOATIME 保留
+upstream	priority UID 独立功能与 O_NOATIME	native	kernel/manager/pkg_observer.c;kernel/supercall/dispatch.c;fs/susfs.c;block/ioprio.c;kernel/sys.c	保留新 Kconfig、命令、bitmap、四个 syscall 消费以及包观察与 supercall 两个生产入口；filp_open 原生 O_NOATIME 保留；42975584587 的 config.current 与上一成功审计逐字比较仅新增 CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y，参考同步为 8260 行/d739d0bd
