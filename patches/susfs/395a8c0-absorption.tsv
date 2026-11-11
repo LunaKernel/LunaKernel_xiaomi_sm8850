@@ -26,7 +26,7 @@ context	proc map/pagewalk 与 SELinux	absorbed	fs/proc/base.c;fs/proc/task_mmu.c
 boundary	已关闭 OPEN_REDIRECT 的重复代码删除	drop	fs/namei.c	不再维护 do_tmpfile/do_o_path/path_openat/vfs_readlink 中的禁用分支删除；四个函数在 OPEN_REDIRECT=n 时活动代码与旧修正版本一致，配置及链接拒绝门禁继续保留
 boundary	fdinfo 官方不适用块	rejected	fs/notify/fdinfo.c	仍错误使用 inotify anon_inode 的路径及三参数 callback；保留原 AOSP 实现
 boundary	OPEN_REDIRECT	blocked	fs/namei.c;fs/susfs.c	两处 nd->name UAF 已修；readlink 仍成功返回 0、短 buffer 返回 ENAMETOOLONG；等待上游完整修复
-upstream	SELinux 单次上下文解析与重载重试	native	kernel/feature/selinux_hide.c	dbb73665 保留 ca346659 的单次解析、原类型 generation 验证与双策略有效性检查；ESTALE 先恢复字符串，metadata 过期回退双解析；换行恢复 stock prepare/abort 路径，SETCURRENT/bounded/DYNTRANSITION/PTRACE 检查仍在；SUSFS 兼容层不覆盖此文件
+upstream	SELinux 单次上下文解析与重载重试	native	kernel/feature/selinux_hide.c	dbb73665 保留 ca346659 的单次解析、原类型 generation 验证与双策略有效性检查；ESTALE 先恢复字符串，metadata 过期回退双解析；换行恢复 stock prepare/abort 路径，SETCURRENT/bounded/DYNTRANSITION/PTRACE 检查仍在；SUSFS 兼容层保留导出代理，Luna 层恢复原生解析与双策略函数体
 upstream	file wrapper 引用平衡	native	kernel/infra/file_wrapper.c	保留 2fe18831 的 fput 修复，infra/file_wrapper.o 实际编译；本轮不改其实现
 upstream	Manager shell 引用与 profile 目录边界	native	manager/app/src/main/java/me/weishu/kernelsu/ui/util/KsuCli.kt;userspace/ksud/src/profile.rs	保留 a23184a0 的 shellQuote 与 module id 检查、dbb73665 的非空/点目录/斜线/NUL/换行校验，所有 get/set/delete 统一经过 profile_path；匹配官方 run 42841909373 Manager
 upstream	preinit runner ELF 对齐	native	kernel/Kbuild	保留 c680b548 的 max-page-size=0x10000 与 noseparate-code；SUSFS 对 Kbuild 仅移除旧 syscall hook object，不覆盖 runner 编译和链接参数；arm64 静态 ELF 与 Image 嵌入仍由完整 CI 审计
