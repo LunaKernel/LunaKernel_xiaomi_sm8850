@@ -12,6 +12,22 @@ AutoFDO 的官方单路径增广参数已消除当前输入下 `filemap.o` 的�
 
 ## 当前待验候选
 
+构建提交为 `d004b436eb09726443dcaf9e2f81a1f4bb0ee2e7`，使用正式 r15 / `4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1`、KernelSU `dbb73665`（32727 / UAPI 6）、SUSFS v2.4.0 `395a8c0c`、BBG `028ff7fd`。本轮精简组件适配，恢复 SUSFS 官方完整 SELinux 隐藏链并保留已确认安全修复；另回移 12 个官方小米 vendor hooks/ABI 提交，新增 14 hooks、28 项 vendor symbol-list、42 个实际 GPL 导出，不内置厂商策略、不宣称实测性能收益。回移共 70 个逻辑项、40 个独立项。
+
+固定制作输入为 `916353e9b3417be4a3315c67c9bf07d31bd9b023`，资产为 [ci-deps-v1-916353e](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-916353e)。官方来源审计、真实发布地址消费、40 组有序 index 闭环、应用幂等和精确源码门禁通过；本地轻量检查通过 104 项测试及 actionlint，[Check #43029807990](https://github.com/LunaKernel/android_kernel_xiaomi_sm8850/actions/runs/43029807990) 成功。
+
+[Build Luna Kernel #43029955349](https://github.com/LunaKernel/android_kernel_xiaomi_sm8850/actions/runs/43029955349)，attempt 1，事件 `workflow_dispatch`，分支 `main`，完整 SHA 为上述构建提交；build 与 notify 均成功。artifact ID 为 `13858869704`，名称 `luna-d004b436-43029955349-1.tar.gz`，大小 54,326,081 字节；原始下载归档为 TAR，SHA-256 与 API digest 均为 `38a59f8d0bab56660ec03113bda2761fe33eebad3c3d17046a9b6a9fc38ca681`。
+
+build job 用时 6 分 32 秒，其中固定输入初始化 34 秒，补丁应用/编译/审计 4 分 39 秒；notify job 用时 12 秒。ccache、固定下载、官方 Manager、干净 common、回移包及工具链安装缓存均恢复成功。
+
+固定 OTA 的 4090 项完整 tuple、103 项模块顺序、vermagic、内置 Rust Binder 替代和 stock 同名模块屏蔽全部通过；配置、全量导出与 STG 参考全部 MATCH，`drift_count=0`。此前运行 `43027118643` 的漂移已逐项审查：42 个新增导出精确对应 14 tracepoint、14 traceiter、14 static-call key，旧导出的 CRC/provider/export class/namespace 和旧 STG 类型记录不变；已据实更新参考，未放宽目标闭包。机制及原始提交见既有质量与吸收清单。
+
+完整六文件交付已通过项目导入器校验，保存于 `kernel_out/luna-xiaomi17-gd004b436-20261111-2132/` 及同名 `work/audit/`、`work/components/`。原始 Image SHA-256 为 `a2471f75abd23d52c47389b036889fdb4f696414f767bbda637d5e77ebe35938`，AK3 ZIP SHA-256 为 `dac583233b35d89c1b065f96002fc899fcbf3799eb9053df0fcc66ad38e78612`；官方 Manager APK SHA-256 为 `cb6d4d95f8e0411e8822cb5e6d02c597bedfa031d5138867e9cd2b69f678030a`。同次 CI 日志保存在对应审计目录。
+
+Telegram 已发送内核 ZIP（message_id `25`）和官方 Manager（message_id `26`），与本地交付身份一致。状态保持 `awaiting-device`，由用户在小米 17 `pudding` / Android 17 / `OS4.0.6.0.XPCCNXM` 上完成真机验收。
+
+## 前轮待验候选（r15）
+
 构建提交为 `17e768beb96781321725ab50c46bb48ea9d54aa0`，基线为正式 `android16-6.12-2026-09_r15` / `4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1`，使用 KernelSU `dbb73665`（32727 / UAPI 6）、SUSFS v2.4.0 `395a8c0c`、BBG `028ff7fd`。MIDI、F2FS adjusted-write 与 FUSE interrupt/resend 已由 r15 完整吸收，删除重复清单及 pin；剩余 66 个逻辑项、36 个独立项。SUSFS 的 SELinux 代理正确接入当前 KSU 完整实现，保留有效 priority UID 功能及既有安全修复。
 
 固定制作输入为 `0325895b318e295198c812a417132364ffb94127`，回移资产为 [ci-deps-v1-0325895](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-0325895)。全部官方来源审计、正式消费者应用/幂等/单项撤销/有序重放和精确差异验证通过；从真实发布地址下载并完成完整 `patches/init.sh`，固定工具链、NDK、Manager、AK3 与 OTA 输入均校验成功。标准轻量检查通过 104 项测试及 actionlint；[main 轻量 CI #42980391459](https://github.com/LunaKernel/android_kernel_xiaomi_sm8850/actions/runs/42980391459) 成功。
