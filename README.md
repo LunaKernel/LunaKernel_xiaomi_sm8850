@@ -26,7 +26,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 
 ## 功能与改进
 
-- KernelSU 内置，version code 32718 / UAPI 6；每次交付配套官方 CI Manager APK。
+- KernelSU 内置，version code 32727 / UAPI 6；每次交付配套官方 CI Manager APK。
 - SUSFS v2.3.0；`OPEN_REDIRECT` 未编译，调试日志默认关闭。
 - Baseband Guard，保护基带及关键块设备写入口。
 - IPSet 7.24 内核支持与独立 KernelSU 用户态模块；额外模块模板由 [extra-modules](https://github.com/LunaKernel/extra-modules) 管理，主仓固定版本并编译交付。

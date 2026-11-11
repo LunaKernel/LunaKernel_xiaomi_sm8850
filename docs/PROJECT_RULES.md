@@ -29,7 +29,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 组件版本和全部来源、摘要以 `.env` 为唯一 pin 来源；集成边界如下：
 
-- KernelSU main `730f6446`：built-in，32718 / UAPI 6。精确重放 SUSFS 兼容层，保留新版 SELinux 修复；不得将其等同于 SUSFS 原配旧树，或把被移出 Kbuild 的 syscall_hook_manager object 计作有效功能。已吸收修复使用上游实现、删除重复层。preinit runner 保持启用，按 arm64 静态用户态 ELF 审计并嵌入 Image，不能套用内核参数。
+- KernelSU main `dbb73665`：built-in，32727 / UAPI 6。精确重放 SUSFS 兼容层，保留新版 SELinux 修复；不得将其等同于 SUSFS 原配旧树，或把被移出 Kbuild 的 syscall_hook_manager object 计作有效功能。已吸收修复使用上游实现、删除重复层。preinit runner 保持启用，按 arm64 静态用户态 ELF 审计并嵌入 Image，不能套用内核参数。
 - SUSFS v2.3.0 `6b60a305`：common 与 KernelSU 兼容补丁取自同一提交；内核能力启用，模块 ZIP 和独立 helper 不交付。保留差异及吸收依据见 `patches/susfs/6b60a30-absorption.tsv`，不保留重复补修或无用上下文层。`OPEN_REDIRECT` 因 readlink 返回值及短 buffer 语义缺陷保持编译期关闭，等待完整上游修复，不维护禁用路径的重复代码删除。日志静态键默认关闭，仅允许显式运行时启用。
 - Baseband Guard `028ff7fd`：保留无缓存块设备身份复核、固定上游判定的破坏性 ioctl/UFS BSG 封堵、io_uring discard/共享可写映射保护、KernelSU 凭据标记和限速拒绝日志。file_permission/mmap_file/file_mprotect 在凭据检查前排除无关操作和非块设备；仅 boot/recovery 分区保护关闭，其余保护启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
@@ -38,7 +38,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索引与参数探测缓存链，由独立清单 670、680 固定，来源对象由依赖仓库审计。须证明生成结果、参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁与早期启动严格对齐。
 
-九月 selected 集合有序且不可拆分（19 个逻辑项、23 个应用提交）；总回移 68 个逻辑项，含 38 个独立项和宿主构建回移。来源、吸收/保留理由和质量证据以 `patches/backports/` 固定 TSV 为准。已吸收层、无用上下文适配和无目标代码收益项不得重复保留，未编译路径不得计作有效功能。
+九月 selected 集合有序且不可拆分（19 个逻辑项、23 个应用提交）；总回移 69 个逻辑项，含 39 个独立项和宿主构建回移。来源、吸收/保留理由和质量证据以 `patches/backports/` 固定 TSV 为准。已吸收层、无用上下文适配和无目标代码收益项不得重复保留，未编译路径不得计作有效功能。
 
 新增独立回移置于 `patches/backports/kmi6-2026-09-independent/`：每份清单一个逻辑项，不可拆的官方前置/补修链同清单，独立 SHA-256 pin。用临时 Git index 证明从固定基础差异单项应用、撤销及固定顺序完整重放；授权不含清单外提交。逐项说明配置、UAPI、syscall、ABI/KMI 影响，不得破坏目标闭包、关键启动配置或用户态语义。
 

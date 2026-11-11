@@ -16,7 +16,7 @@ CI 按初始化、内核回移、外部组件接入、编译与审计的顺序�
 
 `patches/init.sh` 复用并校验固定源码、工具、AK3 模板、OTA 镜像与官方 CI Manager APK；`patches/patch.sh` 应用官方内核回移；`patches/patch_external.sh` 接入已准备的组件，不下载；`patches/build.sh` 编译并执行模块闭包、关键配置和独立快照审计，离线校验并交付配套 APK，不准备源码。补丁脚本必须幂等。
 
-主仓库只消费固定依赖包。`.env` 必须配置回移 manifest 摘要、回移归档 URL/SHA-256、工具链归档 URL/SHA-256，以及工具链安装树摘要。回移与工具链版本为 [ci-deps-v1-3fc59ff](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-3fc59ff)。AK3 模板与 OTA 镜像使用独立的 [build-inputs-v1-d082477](https://github.com/LunaKernel/ci-dependencies/releases/tag/build-inputs-v1-d082477)，资产分别为 `ak3-template.tar.gz` 和 `system_dlkm-os4.0.6.0.img`，URL、SHA-256、模板树摘要及镜像大小由 `.env` 固定。`patches/init.sh` 校验模板归档 SHA-256、安全解包并校验树摘要。
+主仓库只消费固定依赖包。`.env` 必须配置回移 manifest 摘要、回移归档 URL/SHA-256、工具链归档 URL/SHA-256，以及工具链安装树摘要。回移版本为 [ci-deps-v1-6a2ba0f](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-6a2ba0f)，工具链版本为 [ci-deps-v1-3fc59ff](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-3fc59ff)。AK3 模板与 OTA 镜像使用独立的 [build-inputs-v1-d082477](https://github.com/LunaKernel/ci-dependencies/releases/tag/build-inputs-v1-d082477)，资产分别为 `ak3-template.tar.gz` 和 `system_dlkm-os4.0.6.0.img`，URL、SHA-256、模板树摘要及镜像大小由 `.env` 固定。`patches/init.sh` 校验模板归档 SHA-256、安全解包并校验树摘要。
 
 初始化校验包内容、清单绑定与工具链安装树；补丁阶段校验 patch-id、允许路径、实际应用、撤销和有序重放。回移内容缓存位于 `work/cache/dependencies/backports-${BACKPORT_BUNDLE_MANIFEST_SHA256}`，工具链位于 `${BUILD_ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}`，下载归档位于 `work/cache/downloads/ci-dependencies/`。
 
