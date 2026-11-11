@@ -1,6 +1,6 @@
 # 当前基线与验收
 
-当前源码基线为官方九月 r11 / Linux 6.12.92 / KMI 6，仅交付 4 KiB；Rust Binder 内置，C Binder 关闭，ROM 同名模块被屏蔽。KernelSU `dbb73665` 与 FUSE interrupt/resend 修复新候选已通过完整 CI 并交付 Telegram，状态为 `awaiting-device`，尚未经实机验收。用户于 2026-11-08 确认 `6.12.92-android16-luna-g1d3c30f1-4k` 在 `OS4.0.6.0.XPCCNXM` 上完成严格实机验收；同日只读核对确认设备运行身份一致。
+当前源码基线为官方九月 r15 / Linux 6.12.92 / KMI 6，仅交付 4 KiB；Rust Binder 内置，C Binder 关闭，ROM 同名模块被屏蔽。KernelSU `dbb73665` 与 SUSFS v2.4.0 `395a8c0c` 新候选已通过完整 CI 并交付 Telegram，状态为 `awaiting-device`，尚未经实机验收。用户于 2026-11-08 确认 `6.12.92-android16-luna-g1d3c30f1-4k` 在 `OS4.0.6.0.XPCCNXM` 上完成严格实机验收；同日只读核对确认设备运行身份一致。
 
 已验收项目提交为 `1d3c30f1945ad2c70bbf084886339649b3017123`，使用 KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`、Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。验收记录绑定该提交与下述 Image 摘要。
 
@@ -11,6 +11,22 @@ LLVM 23 不在当前基线中：此前实测 `net_ns_type_operations` CRC 从 `1
 AutoFDO 的官方单路径增广参数已消除当前输入下 `filemap.o` 的异常编译耗时，实际 C/Rust 参数独立审计。具体策略见 [BUILDING.md](BUILDING.md)。
 
 ## 当前待验候选
+
+构建提交为 `17e768beb96781321725ab50c46bb48ea9d54aa0`，基线为正式 `android16-6.12-2026-09_r15` / `4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1`，使用 KernelSU `dbb73665`（32727 / UAPI 6）、SUSFS v2.4.0 `395a8c0c`、BBG `028ff7fd`。MIDI、F2FS adjusted-write 与 FUSE interrupt/resend 已由 r15 完整吸收，删除重复清单及 pin；剩余 66 个逻辑项、36 个独立项。SUSFS 的 SELinux 代理正确接入当前 KSU 完整实现，保留有效 priority UID 功能及既有安全修复。
+
+固定制作输入为 `0325895b318e295198c812a417132364ffb94127`，回移资产为 [ci-deps-v1-0325895](https://github.com/LunaKernel/ci-dependencies/releases/tag/ci-deps-v1-0325895)。全部官方来源审计、正式消费者应用/幂等/单项撤销/有序重放和精确差异验证通过；从真实发布地址下载并完成完整 `patches/init.sh`，固定工具链、NDK、Manager、AK3 与 OTA 输入均校验成功。标准轻量检查通过 104 项测试及 actionlint；[main 轻量 CI #42980391459](https://github.com/LunaKernel/android_kernel_xiaomi_sm8850/actions/runs/42980391459) 成功。
+
+[Build Luna Kernel #42980392805](https://github.com/LunaKernel/android_kernel_xiaomi_sm8850/actions/runs/42980392805)，attempt 1，事件 `workflow_dispatch`，分支 `main`，完整 SHA 为上述构建提交；build 与 notify 均成功。精确 artifact ID 为 `13837306974`，名称为 `luna-17e768be-42980392805-1.tar.gz`，大小 54,301,985 字节；原始下载归档为 TAR，SHA-256 与 API digest 均为 `010878cc3705581445f6677448f023aaf62e7193d84c43659acc80955109a2fb`。
+
+build job 用时 5 分 51 秒，其中固定源码/工具初始化 30 秒，补丁应用/编译/门禁 4 分 14 秒（内核构建及审计 3 分 46 秒）；notify job 用时 15 秒。ccache 从 `42978497856-1` 恢复，固定下载、官方 Manager、干净 common、回移包及工具链安装缓存全部恢复成功。
+
+固定 OTA 的 4090 项 vmlinux 依赖及完整 tuple、103 项模块顺序、模块 vermagic、内置 Rust Binder 替代及 stock 同名模块屏蔽全部通过。配置、全量导出与 STG 参考全部 MATCH，`drift_count=0`。此前运行 `42975584587` 暴露的旧输入钩子调用已按新官方静态键路径修复；运行 `42978497856` 中的 VFIO platform 全量漂移已审查，受影响五符号无目标 OTA 消费者。具体机制及证据见既有质量与吸收清单。
+
+完整六文件交付经项目 `release_artifacts.import_archive` 校验导入 `kernel_out/luna-xiaomi17-g17e768be-20261111-1533/`，审计与原始 `release.tsv` 位于同名 `work/audit/`。Image SHA-256 为 `02d86d96aeac84d93b4d8541e3f297b9fff6dfa285e0bded0c6888a67dc4b4c4`，AK3 ZIP SHA-256 为 `6b494bd9a4a60559f5e8c08b046a7ce45e6724b3d036c139936e193a2f1ec286`。官方 Manager 为 `KernelSU_v3.3.1-47-gdbb73665_32727-release.apk`，SHA-256 为 `cb6d4d95f8e0411e8822cb5e6d02c597bedfa031d5138867e9cd2b69f678030a`。
+
+Telegram 已发送 AK3 ZIP（message_id `23`）及官方 Manager（message_id `24`），发送日志与本地交付身份一致。状态保持 `awaiting-device`，由用户在小米 17 `pudding` / Android 17 / `OS4.0.6.0.XPCCNXM` 上完成真机验收。
+
+## 前轮待验候选（r11）
 
 构建提交为 `92d26a486b9a2696b96c6db14b7fda3b2626b92a`，使用 KernelSU `dbb73665`（32727 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`，新增 FUSE interrupt/resend UAF 官方不可拆双提交链。r15 的 F2FS 读取权限缺口与 SUSFS v2.4.0 SELinux 回归尚未修复，继续保留 r11 与 SUSFS v2.3.0；审查依据见既有质量和吸收清单。回移总计 69 个逻辑项、39 个独立项，包含此前 MIDI 与 F2FS adjusted-write 修复。
 
@@ -24,7 +40,7 @@ build job 用时 5 分 27 秒，其中固定源码/工具初始化 38 秒、补�
 
 Telegram 已发送 AK3 ZIP（message_id `21`）及官方 Manager（message_id `22`），notify 日志与本地交付身份一致。状态保持 `awaiting-device`；本候选尚未经真机验收，最后由用户在小米 17 `pudding` / Android 17 / `OS4.0.6.0.XPCCNXM` 上完成，不沿用历史 `accepted` 结论。
 
-## 前轮待验候选
+## 更早待验候选
 
 构建提交为 `7b083693b7957f8036f94d804ca3ddd418c8f2f6`，使用 KernelSU `730f6446`（32718 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`，并新增 USB MIDI IN request UAF 与 F2FS adjusted write range 官方回移。目标仍为小米 17 `pudding` / Android 17 / `OS4.0.6.0.XPCCNXM`。
 
