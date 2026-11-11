@@ -27,18 +27,22 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 
 取证优先级为：固定的小米与 AOSP 上游、官方 AOSP/Linux 历史与 KMI 清单、已验证产物和真机日志。不得从无关整树内核复制实现，不得保留无关作者或项目品牌。实际集成的独立组件必须保留准确来源、固定提交及许可证信息。
 
+审查先辨识固定上游的完整组合与刻意目标，再判断 Luna 差异是否改变应用可观察行为；恢复原生行为或采用新版 API 本身不构成修复。死代码须按官方完整调用链判断，不得以 Luna 自行断开后的无调用为删除依据。局部源码一致、UAPI 相同或编译通过均不足以证明联合行为及隐藏效果等价。有缺陷证据时单独最小修复，区分策略需求与错误修复；证据不足先不扩功能，官方设计与真实安全问题均须具体审查。
+
 组件版本和全部来源、摘要以 `.env` 为唯一 pin 来源；集成边界如下：
 
-- KernelSU main `dbb73665`：built-in，32727 / UAPI 6。精确重放 SUSFS 兼容层，保留新版 SELinux 修复；不得将其等同于 SUSFS 原配旧树，或把被移出 Kbuild 的 syscall_hook_manager object 计作有效功能。已吸收修复使用上游实现、删除重复层。preinit runner 保持启用，按 arm64 静态用户态 ELF 审计并嵌入 Image，不能套用内核参数。
-- SUSFS v2.4.0 `395a8c0c`：common 与 KernelSU 兼容补丁取自同一提交；内核能力启用，模块 ZIP 和独立 helper 不交付。保留差异及吸收依据见 `patches/susfs/395a8c0-absorption.tsv`，不保留重复补修或无用上下文层。`OPEN_REDIRECT` 因 readlink 返回值及短 buffer 语义缺陷保持编译期关闭，等待完整上游修复，不维护禁用路径的重复代码删除。日志静态键默认关闭，仅允许显式运行时启用。
-- Baseband Guard `028ff7fd`：保留无缓存块设备身份复核、固定上游判定的破坏性 ioctl/UFS BSG 封堵、io_uring discard/共享可写映射保护、KernelSU 凭据标记和限速拒绝日志。file_permission/mmap_file/file_mprotect 在凭据检查前排除无关操作和非块设备；仅 boot/recovery 分区保护关闭，其余保护启用。
+- KernelSU main `dbb73665`：built-in，32727 / UAPI 6。采用固定 SUSFS 官方兼容结果，init/setuid/ksud 不另建重复适配；不强制 KSU backup/my_* 活动或真实策略代际。已吸收修复使用上游实现，未编译对象不计有效功能。preinit runner 保持启用，按 arm64 静态用户态 ELF 审计并嵌入 Image，不能套用内核参数。
+- SUSFS v2.4.0 `395a8c0c`：common 与 KernelSU 兼容补丁取自同一提交，保留完整 SELinux 隐藏链，包括 type/AVD 表、sepolicy 生产入口和官方 rules 零代次通知；SUS_TYPE 独立补修 type_value 保存及 add/query 全键比较，namei 使用官方 fake-qstr 算法。sdcard 仅补资源释放，不把 monitor 初始化失败视为已解密；uname 的 EFAULT、KSU atomic/strscpy/pkg free_mark 补修保留。内核能力启用，模块 ZIP 和独立 helper 不交付；残差及依据见 `patches/susfs/395a8c0-absorption.tsv`。`OPEN_REDIRECT` 因 readlink 返回值及短 buffer 语义缺陷保持编译期关闭，等待完整上游修复，不维护禁用路径的重复代码删除。日志静态键默认关闭，仅允许显式运行时启用。
+- Baseband Guard `028ff7fd`：保留无缓存块设备身份复核、破坏性 ioctl/UFS BSG 防护、io_uring discard/共享可写映射保护、KernelSU 凭据标记和限速拒绝日志。保留 boot/recovery 配置白名单项，匹配仍遵循官方活动槽规则；普通 SCSI 复用 common read-safe 表，对受限 KSU cred 跳过 CAP_SYS_RAWIO 全放行并拒绝写操作及 0x42/0x48/0xa4 三个 raw 例外，UFS 专用管理 BSG 端点对该凭据整端拒绝 SG_IO（含 READ_DESC），trusted 保持原生行为。file_permission/mmap_file/file_mprotect 在凭据检查前排除无关操作和非块设备，其余保护启用。
 - IPSet 7.24、libmnl 1.0.5 与 Android NDK r30：固定归档摘要和解压树摘要。
 
 内核直接修复仅授权 `patches/patch.sh` 可精确证明的 AOSP/Linux 官方修复。新增候选 MUST 机制清晰、关联小米 17 实际路径、来自稳定官方历史、无回退或明显回归证据，并通过第 3、5 节门禁与差异审计；拒绝收益极小、路径无关、来源不清或证据不足的改动。缺少实机性能数据本身不构成否决，但不得把猜测视为优化。已被基线吸收的修复不得重复回移。
 
+本轮另授权 12 个官方来源提交的小米 vendor hooks 与配套 ABI，按完整前置及共享 ABI 闭包分为 suspend-abort（2）、VMA/legacy reclaim（5）、MGLRU/swappiness（2）、LRU deactivation（3）四组，不拆分或重复承载共享官方提交，新增 14 个 hooks、28 个导出，以预留最新小米 OTA vendor 模块接口；不得仅因当前没有新 consumer 否决该目标，其余 18 项等待正式版。保留旧 hook 签名/布局、原生控制默认值及有效调用点，不内置 Luna 或厂商策略；配套 symbol 仅增上述 28 项，完整 ABI/STG 参考由项目构建生成并验证，不照抄上游 CRC。来源、行为影响及验证进度记录于既有回移表，接口预留不等于已获性能提升或完全无行为变化。
+
 Kbuild 特例仅授权 `kbuild-next-speedups` 固定快照的 kallsyms token 索引与参数探测缓存链，由独立清单 670、680 固定，来源对象由依赖仓库审计。须证明生成结果、参数顺序等价，保留 6.12 原生 Kconfig 语法、工具链门禁与早期启动严格对齐。
 
-九月 selected 集合有序且不可拆分（19 个逻辑项、23 个应用提交）；总回移 66 个逻辑项，含 36 个独立项和宿主构建回移。来源、吸收/保留理由和质量证据以 `patches/backports/` 固定 TSV 为准。已吸收层、无用上下文适配和无目标代码收益项不得重复保留，未编译路径不得计作有效功能。
+九月 selected 集合有序且不可拆分（19 个逻辑项、23 个应用提交）；总回移 70 个逻辑项，含 40 个独立项和宿主构建回移。来源、吸收/保留理由和质量证据以 `patches/backports/` 固定 TSV 为准。已吸收层、无用上下文适配和无目标代码收益项不得重复保留，未编译路径不得计作有效功能。
 
 新增独立回移置于 `patches/backports/kmi6-2026-09-independent/`：每份清单一个逻辑项，不可拆的官方前置/补修链同清单，独立 SHA-256 pin。用临时 Git index 证明从固定基础差异单项应用、撤销及固定顺序完整重放；授权不含清单外提交。逐项说明配置、UAPI、syscall、ABI/KMI 影响，不得破坏目标闭包、关键启动配置或用户态语义。
 

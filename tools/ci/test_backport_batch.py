@@ -156,10 +156,10 @@ class BackportBatchTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
         self.assertFalse(any("--is-ancestor" in call or "show" in call for call in calls))
         index_calls = [call for call in calls if "apply" in call and "--cached" in call]
-        self.assertEqual(len(index_calls), 9)
-        self.assertEqual(sum("--reverse" in call for call in index_calls), 4)
-        self.assertTrue(any("apply" in call and "--reverse" in call and "--cached" not in call
-                            for call in calls))
+        self.assertEqual(len(index_calls), 14)
+        self.assertEqual(sum("--reverse" in call for call in index_calls), 6)
+        self.assertFalse(any("apply" in call and "--reverse" in call and "--cached" not in call
+                             for call in calls))
         self.assertEqual(self.target_diff(), original)
 
     def test_bundle_wrong_raw_patch_id_is_rejected_before_mutation(self):

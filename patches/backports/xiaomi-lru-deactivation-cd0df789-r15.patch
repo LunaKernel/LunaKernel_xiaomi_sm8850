@@ -1,0 +1,40 @@
+From cd0df7897c2ebcb8ad82860d72c4c2c8d52245dc Mon Sep 17 00:00:00 2001
+From: Oven <liyangouwen@xiaomi.com>
+Date: Fri, 23 Oct 2026 10:40:24 +0800
+Subject: [PATCH] ANDROID: add hook to customize legacy lru deactivation
+
+Add the android_vh_customize_may_deactivate vendor hook in
+prepare_scan_control() so vendor modules can customize the
+sc->may_deactivate decision.
+
+Bug: 576927506
+Change-Id: I66f48260ee07f138fc22d641b44944ff49bf97bd
+Signed-off-by: Oven <liyangouwen@xiaomi.com>
+
+
+Backport: adapt unchanged context to the independent r15 baseline; preserve upstream code changes.
+---
+diff --git a/drivers/android/vendor_hooks.c b/drivers/android/vendor_hooks.c
+--- a/drivers/android/vendor_hooks.c
++++ b/drivers/android/vendor_hooks.c
+@@ -807,2 +807,3 @@
+ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mmc_gpio_cd_irqt);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_customize_may_deactivate);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_netlink_alloc_skb);
+diff --git a/include/trace/hooks/vmscan.h b/include/trace/hooks/vmscan.h
+--- a/include/trace/hooks/vmscan.h
++++ b/include/trace/hooks/vmscan.h
+@@ -196,2 +196,5 @@
+ 	TP_ARGS(lru, sc, folio, bypass));
++DECLARE_HOOK(android_vh_customize_may_deactivate,
++	TP_PROTO(struct lruvec *target_lruvec, struct scan_control *sc),
++	TP_ARGS(target_lruvec, sc));
+ DECLARE_HOOK(android_vh_skip_cma,
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -2518,2 +2518,4 @@
+ 			sc->may_deactivate &= ~DEACTIVATE_FILE;
++
++		trace_android_vh_customize_may_deactivate(target_lruvec, sc);
+ 	} else

@@ -14,9 +14,11 @@
 
 内核改动经 `patches/patch.sh` 接入官方 AOSP/Linux 回移；独立组件与必要兼容层由 `patches/patch_external.sh` 接入。源码、工具、配置身份和参考摘要统一维护于 `.env`。依赖制作和来源审计在 [ci-dependencies](https://github.com/LunaKernel/ci-dependencies) 完成；主仓库负责固定包消费与实际构建。
 
-[`patches/backports/`](../patches/backports/) 固定来源、顺序、吸收证明和质量审查。selected 集合不可拆分；independent 每份清单只含一个逻辑项，不可拆的官方前置/补修链放在同一清单。新增回移须固定完整 commit、日期、patch-id、路径及适配摘要，核实基线缺失、目标路径相关且无明确回退或回归证据，并用临时 Git index 证明单项应用、撤销及完整顺序重放。
+[`patches/backports/`](../patches/backports/) 固定来源、顺序、吸收证明和质量审查。selected 集合不可拆分；independent 每份清单只含一个逻辑项，不可拆的官方前置/补修链放在同一清单。新增回移须固定完整 commit、提交者日期（`git show -s --format=%cs`）、patch-id、路径及适配摘要，核实基线缺失、目标路径相关且无明确回退或回归证据，并用临时 Git index 证明单项应用、撤销及完整顺序重放。
 
-更新 KernelSU/SUSFS 时先审查兼容补丁残差及已吸收修复，再更新 pin、源码和构建；仅存在于源码但未编译的对象不能算作有效功能。同时核对官方 CI Manager 的源码、UAPI、签名及固定 artifact，不追随 latest 或自行编译替代。
+更新外部组件先辨识固定上游完整组合、刻意目标和官方调用链，再审查 Luna 差异对应用可观察行为的影响；恢复原生或新版 API 不自动算修复，自行断开后的无调用不算死代码依据。局部源码一致、UAPI 相同及编译通过不证明联合行为或隐藏效果等价；有缺陷证据时单独最小修复，策略需求另行说明，缺依据先不扩功能，官方设计与安全问题均按具体机制判断。
+
+KernelSU/SUSFS 按 [集成边界](PROJECT_RULES.md#2-来源与改动边界)联合维护完整隐藏链，清理已吸收补修和重复适配；未编译对象不计有效功能，既有清单仅记录实际完成的验证。同时核对官方 CI Manager 的源码、UAPI、签名及固定 artifact，不追随 latest 或自行编译替代。
 
 固定 OTA 模块实际消费的接口、相关类型和加载条件必须兼容。全量配置、符号及类型快照的变化须独立审查并更新参考；不得以参考漂移为由放宽目标闭包。交付前完成镜像完整性和 Image-only 打包检查；Telegram 推送后，最后由用户完成 [真机验收](VALIDATION.md)。
 

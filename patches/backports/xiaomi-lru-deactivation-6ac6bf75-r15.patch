@@ -1,0 +1,65 @@
+From 6ac6bf759b6d0512d54902bbee4bf73ba9b5116c Mon Sep 17 00:00:00 2001
+From: Oven <liyangouwen@xiaomi.com>
+Date: Fri, 23 Oct 2026 10:41:06 +0800
+Subject: [PATCH] ANDROID: use memcg lruvec to determine may_deactivate
+
+Add three vendor hooks in mm/vmscan.c:
+ - android_vh_customize_lruvec_may_deactivate in shrink_lruvec()
+ - android_vh_restore_may_deactivate in shrink_lruvec()
+ - android_vh_snapshot_refaults in snapshot_refaults()
+
+so vendor modules can adjust per-lruvec may_deactivate behaviour and
+update children memcg snapshot refault.
+
+Bug: 576927506
+Change-Id: Ie8893f481579154174a0a932bf729736f8080bdd
+Signed-off-by: Oven <liyangouwen@xiaomi.com>
+
+
+Backport: adapt unchanged context to the independent r15 baseline; preserve upstream code changes.
+---
+diff --git a/drivers/android/vendor_hooks.c b/drivers/android/vendor_hooks.c
+--- a/drivers/android/vendor_hooks.c
++++ b/drivers/android/vendor_hooks.c
+@@ -808,2 +808,5 @@
+ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_customize_may_deactivate);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_customize_lruvec_may_deactivate);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_restore_may_deactivate);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_snapshot_refaults);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_netlink_alloc_skb);
+diff --git a/include/trace/hooks/vmscan.h b/include/trace/hooks/vmscan.h
+--- a/include/trace/hooks/vmscan.h
++++ b/include/trace/hooks/vmscan.h
+@@ -199,2 +199,11 @@
+ 	TP_ARGS(target_lruvec, sc));
++DECLARE_HOOK(android_vh_customize_lruvec_may_deactivate,
++	TP_PROTO(struct lruvec *lruvec, struct scan_control *sc),
++	TP_ARGS(lruvec, sc));
++DECLARE_HOOK(android_vh_restore_may_deactivate,
++	TP_PROTO(unsigned int orig_may_deactivate, struct scan_control *sc),
++	TP_ARGS(orig_may_deactivate, sc));
++DECLARE_HOOK(android_vh_snapshot_refaults,
++	TP_PROTO(struct mem_cgroup *target_memcg, pg_data_t *pgdat),
++	TP_ARGS(target_memcg, pgdat));
+ DECLARE_HOOK(android_vh_skip_cma,
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -5979,2 +5979,3 @@
+ 
++	unsigned int orig_may_deactivate = sc->may_deactivate;
+ 	if (lru_gen_enabled() && !root_reclaim(sc)) {
+@@ -5985,2 +5986,4 @@
+ 	get_scan_count(lruvec, sc, nr);
++
++	trace_android_vh_customize_lruvec_may_deactivate(lruvec, sc);
+ 
+@@ -6085,2 +6088,3 @@
+ out:
++	trace_android_vh_restore_may_deactivate(orig_may_deactivate, sc);
+ 	blk_finish_plug(&plug);
+@@ -6566,2 +6570,4 @@
+ 	target_lruvec->refaults[WORKINGSET_FILE] = refaults;
++
++	trace_android_vh_snapshot_refaults(target_memcg, pgdat);
+ }

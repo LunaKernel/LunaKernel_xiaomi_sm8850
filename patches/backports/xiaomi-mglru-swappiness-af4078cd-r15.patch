@@ -1,0 +1,104 @@
+From af4078cda9d92cff6f0b15d5d02ed99911115482 Mon Sep 17 00:00:00 2001
+From: Ridong Chen <chenridong@xiaomi.corp-partner.google.com>
+Date: Tue, 22 Sep 2026 20:46:18 +0800
+Subject: [PATCH] ANDROID: mm/vmscan: adapt MGLRU swappiness
+
+Add Android vendor hooks to let vendor reclaim code tune MGLRU
+swappiness decisions in the aging and eviction paths.
+
+The hooks allow vendor code to force aging, force scanning below the
+minimum generation threshold, skip scanning a given LRU type, stop
+min_seq advancement, and skip anon/file min_seq balancing. Export the
+tracepoints so vendor modules can register callbacks.
+
+Bug: 564798566
+Change-Id: I163a7ae19f675d739b09f2d637cb411cd522797d
+Signed-off-by: Ridong Chen <chenridong@xiaomi.corp-partner.google.com>
+
+
+Backport: adapt unchanged context to the independent r15 baseline; preserve upstream code changes.
+---
+diff --git a/drivers/android/vendor_hooks.c b/drivers/android/vendor_hooks.c
+--- a/drivers/android/vendor_hooks.c
++++ b/drivers/android/vendor_hooks.c
+@@ -312,2 +312,6 @@
+ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_aging_bypass);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_should_run_aging);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_scan_folios);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_inc_min_seq);
++EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_skip_min_seq_balance);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_shrink_node_memcgs_bypass);
+diff --git a/include/trace/hooks/vmscan.h b/include/trace/hooks/vmscan.h
+--- a/include/trace/hooks/vmscan.h
++++ b/include/trace/hooks/vmscan.h
+@@ -98,2 +98,17 @@
+ 	TP_ARGS(lruvec, max_seq, swappiness, bypass, young));
++DECLARE_HOOK(android_vh_mglru_should_run_aging,
++	TP_PROTO(struct lruvec *lruvec, int priority, int swappiness,
++	bool *force_aging),
++	TP_ARGS(lruvec, priority, swappiness, force_aging));
++DECLARE_HOOK(android_vh_mglru_scan_folios,
++	TP_PROTO(struct lruvec *lruvec, int priority, int type,
++	int swappiness, bool *force_scan, bool *skip_scan),
++	TP_ARGS(lruvec, priority, type, swappiness, force_scan, skip_scan));
++DECLARE_HOOK(android_vh_mglru_inc_min_seq,
++	TP_PROTO(struct lruvec *lruvec, int type, int swappiness,
++	int remaining, bool *stop),
++	TP_ARGS(lruvec, type, swappiness, remaining, stop));
++DECLARE_HOOK(android_vh_mglru_skip_min_seq_balance,
++	TP_PROTO(struct lruvec *lruvec, int swappiness, bool *skip),
++	TP_ARGS(lruvec, swappiness, skip));
+ DECLARE_HOOK(android_vh_shrink_node_memcgs_bypass,
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -4018,2 +4018,3 @@
+ 	int remaining = MAX_LRU_BATCH;
++	bool stop = false;
+ 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
+@@ -4056,3 +4057,5 @@
+ 
+-			if (!--remaining)
++			trace_android_vh_mglru_inc_min_seq(lruvec, type, swappiness,
++						      remaining, &stop);
++			if (!--remaining || stop)
+ 				return false;
+@@ -4071,2 +4074,3 @@
+ 	bool success = false;
++	bool skip = false;
+ 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
+@@ -4092,4 +4096,6 @@
+ 
++	trace_android_vh_mglru_skip_min_seq_balance(lruvec, swappiness, &skip);
++
+ 	/* see the comment on lru_gen_folio */
+-	if (swappiness && swappiness <= MAX_SWAPPINESS) {
++	if (!skip && swappiness && swappiness <= MAX_SWAPPINESS) {
+ 		unsigned long seq = lrugen->max_seq - MIN_NR_GENS;
+@@ -4714,2 +4720,5 @@
+ 	int remaining = MAX_LRU_BATCH;
++	bool force_scan = false;
++	bool skip_scan = false;
++	int swappiness = get_swappiness(lruvec, sc);
+ 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
+@@ -4719,3 +4728,7 @@
+ 
+-	if (get_nr_gens(lruvec, type) == MIN_NR_GENS)
++	trace_android_vh_mglru_scan_folios(lruvec, sc->priority, type, swappiness,
++					   &force_scan, &skip_scan);
++	if (skip_scan)
++		return 0;
++	if (!force_scan && get_nr_gens(lruvec, type) == MIN_NR_GENS)
+ 		return 0;
+@@ -4983,2 +4996,3 @@
+ 	bool young = false;
++	bool force_aging = false;
+ 
+@@ -4988,2 +5002,7 @@
+ 	success = should_run_aging(lruvec, max_seq, swappiness, &nr_to_scan);
++	if (!success) {
++		trace_android_vh_mglru_should_run_aging(lruvec, sc->priority, swappiness,
++							  &force_aging);
++		success |= force_aging;
++	}
+ 

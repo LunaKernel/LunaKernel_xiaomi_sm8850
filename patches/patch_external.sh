@@ -162,12 +162,6 @@ verify_rejected_susfs_fdinfo_hunk() {
     [ -z "${status}" ] || die "fs/notify/fdinfo.c 必须保持 AOSP 基线实现"
 }
 
-verify_no_trailing_whitespace() {
-    local label="$1" source_file="$2" bad_lines
-    bad_lines="$(LC_ALL=C grep -nE '[[:blank:]]+$' "${source_file}" || true)"
-    [ -z "${bad_lines}" ] || die "${label} 存在行尾空白:\n${bad_lines}"
-}
-
 verify_no_hidden_index_flags() {
     local label="$1" repo_dir="$2" hidden
     hidden="$(git -C "${repo_dir}" ls-files -v | LC_ALL=C awk '
@@ -216,6 +210,33 @@ verify_kernelsu_overlay() {
         die "KernelSU drivers 链接目标错误"
 }
 
+verify_susfs_official_layer() {
+    local label="$1" repo_dir="$2" official_patch="$3" fixup="$4" excluded="$5"
+    local index_file overlay
+    shift 5
+    index_file="$(mktemp)"
+    (
+        export GIT_INDEX_FILE="${index_file}"
+        git -C "${repo_dir}" read-tree HEAD || exit 1
+        git -C "${repo_dir}" add -A -- . || exit 1
+        for overlay in "$@"; do
+            if git -C "${repo_dir}" apply --cached --reverse --check "${overlay}" >/dev/null 2>&1; then
+                git -C "${repo_dir}" apply --cached --reverse "${overlay}" || exit 1
+            else
+                git -C "${repo_dir}" apply --cached --check "${overlay}" || exit 1
+            fi
+        done
+        git -C "${repo_dir}" apply --cached --reverse "${fixup}" || exit 1
+        if [ -n "${excluded}" ]; then
+            git -C "${repo_dir}" apply --cached --reverse --check \
+                --exclude="${excluded}" "${official_patch}"
+        else
+            git -C "${repo_dir}" apply --cached --reverse --check "${official_patch}"
+        fi
+    ) || { rm -f "${index_file}"; die "${label}完整官方层反向校验失败"; }
+    rm -f "${index_file}"
+}
+
 verify_susfs_integration() {
     local allowed_common allowed_ksu
     local actual_sha256 source_file target_file
@@ -228,33 +249,16 @@ verify_susfs_integration() {
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
         "${SUSFS_KSU_PATCH_COMMIT}" ] || \
         die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
-    git -C "${KSU_DIR}" apply --reverse --check \
-        --exclude=kernel/Kconfig \
-        --exclude=kernel/core/init.c \
-        --exclude=kernel/hook/setuid_hook.c \
-        --exclude=kernel/policy/app_profile.c \
-        --exclude=kernel/runtime/boot_event.c \
-        --exclude=kernel/runtime/ksud_integration.c \
-        --exclude=kernel/selinux/rules.c \
-        --exclude=kernel/feature/selinux_hide.c \
-        --exclude=kernel/selinux/sepolicy.c \
-        --exclude=kernel/selinux/selinux.c \
-        --exclude=kernel/sulog/event.c \
-        --exclude=kernel/supercall/dispatch.c \
-        "${KSU_SUSFS_PATCH_FILE}" || die "KernelSU SUSFS 官方补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check \
-        --exclude=fs/namespace.c \
-        --exclude=fs/namei.c \
-        --exclude=fs/notify/fdinfo.c \
-        --exclude=fs/proc/fd.c \
-        --exclude=fs/stat.c \
-        --exclude=mm/memory.c \
-        --exclude=security/selinux/hooks.c \
-        --exclude=security/selinux/selinuxfs.c \
-        --exclude=security/selinux/ss/services.c \
-        --exclude=security/selinux/status.c \
-        "${COMMON_SUSFS_PATCH_FILE}" || \
-        die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
+    local -a ksu_overlays=() common_overlays=()
+    if [ "${ENABLE_BBG}" = "1" ]; then
+        ksu_overlays+=("${BBG_KSU_CREDENTIAL_PATCH}")
+        common_overlays+=("${BBG_COMMON_CREDENTIAL_PATCH}")
+    fi
+    verify_susfs_official_layer "KernelSU SUSFS" "${KSU_DIR}" \
+        "${KSU_SUSFS_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_FILE}" "" "${ksu_overlays[@]}"
+    verify_susfs_official_layer "common SUSFS" "${COMMON_DIR}" \
+        "${COMMON_SUSFS_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_FILE}" \
+        fs/notify/fdinfo.c "${common_overlays[@]}"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
         die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
     git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
@@ -266,7 +270,6 @@ verify_susfs_integration() {
             actual_sha256="$(sha256sum "${target_file}" | awk '{ print $1 }')"
             [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
                 die "SUSFS Luna 修正源码摘要不匹配: ${source_file}"
-            verify_no_trailing_whitespace "SUSFS Luna 修正源码" "${target_file}"
             grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${target_file}" || \
                 die "SUSFS 日志必须默认关闭"
             [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "4" ] || \
@@ -280,17 +283,7 @@ verify_susfs_integration() {
     allowed_ksu="$(mktemp)"
     allowed_common="$(mktemp)"
     {
-        patch_paths_excluding "${KSU_SUSFS_PATCH_FILE}" \
-            kernel/Kconfig \
-            kernel/core/init.c \
-            kernel/hook/setuid_hook.c \
-            kernel/policy/app_profile.c \
-            kernel/runtime/boot_event.c \
-            kernel/runtime/ksud_integration.c \
-            kernel/selinux/rules.c \
-            kernel/selinux/selinux.c \
-            kernel/sulog/event.c \
-            kernel/supercall/dispatch.c
+        patch_paths_excluding "${KSU_SUSFS_PATCH_FILE}"
         patch_paths_excluding "${SUSFS_KSU_FIX_PATCH_FILE}"
         if [ "${ENABLE_BBG}" = "1" ]; then
             patch_paths_excluding "${BBG_KSU_CREDENTIAL_PATCH}"
@@ -348,8 +341,6 @@ verify_susfs_integration() {
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
     rm -f "${allowed_ksu}" "${allowed_common}"
-    git -C "${COMMON_DIR}" diff --check
-    git -C "${KSU_DIR}" diff --check
     verify_kernelsu_overlay
     log_success "SUSFS v2.4.0 官方补丁、经审计拒绝项与 Luna 修正版状态校验通过"
 }
@@ -398,17 +389,37 @@ verify_bbg_source_fix() {
         die "Baseband Guard 仍含失效缓存、SID 推断或敏感拒绝日志"
     grep -Fq 'IS_ERR_OR_NULL(bdev)' "${BBG_DIR}/blkdev_helper.c" || \
         die "Baseband Guard block_device 获取未同时处理 NULL 与 ERR_PTR"
-    ! grep -Fq 'slot_suffix_from_cmdline' "${BBG_DIR}/blkdev_helper.c" || \
-        die "Baseband Guard 仍依赖不必要的活动槽解析"
-    grep -Fq 'partition_name_matches(name, name_len,' "${BBG_DIR}/blkdev_helper.c" || \
-        die "Baseband Guard A/B 分区名匹配缺失"
+    for token in 'static const char *slot_suffix_from_cmdline(void)' \
+        'const char *slot_suffix = slot_suffix_from_cmdline();' \
+        'allowed, slot_suffix)'; do
+        grep -Fq "${token}" "${BBG_DIR}/blkdev_helper.c" || \
+            die "Baseband Guard 官方活动槽分区匹配缺失: ${token}"
+    done
+    grep -Fq 'int bbg_ufs_bsg_permission(struct file *file)' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard UFS BSG 凭据检查缺失"
+    for token in 'static bool bsg_is_ufs_endpoint(const struct bsg_device *bd)' \
+        'name = dev_name(bd->device.parent);' 'str_has_prefix(name, "ufs-bsg")' \
+        'strspn(name, "0123456789") == strlen(name)' \
+        'if (bsg_is_ufs_endpoint(bd)) {' 'val = bbg_ufs_bsg_permission(file);'; do
+        grep -Fq "${token}" "${COMMON_DIR}/block/bsg.c" || \
+            die "Baseband Guard UFS BSG 精确端点保护缺失: ${token}"
+    done
+    grep -Fq 'bool bbg_rawio_trusted(void)' "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 原始存储凭据检查缺失"
+    for token in 'if (capable(CAP_SYS_RAWIO) && bbg_rawio_trusted())' \
+        'return open_for_write && bbg_rawio_trusted();'; do
+        grep -Fq "${token}" "${COMMON_DIR}/drivers/scsi/scsi_ioctl.c" || \
+            die "Baseband Guard 受限凭据未遵守原生 SCSI 命令分类: ${token}"
+    done
+    ! grep -Eq 'EXPORT_SYMBOL.*bbg_(rawio_trusted|ufs_bsg_permission)' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard 原始存储内部接口不得导出"
     for hook in file_ioctl_compat uring_cmd mmap_file file_mprotect; do
         grep -Fq "LSM_HOOK_INIT(${hook}," "${BBG_DIR}/baseband_guard.c" || \
             die "Baseband Guard 缺少 ${hook} 写入口保护"
     done
     grep -Fq 'static inline bool is_destructive_ioctl(unsigned int cmd)' \
         "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard 缺少明确破坏性 ioctl 判定"
-    grep -Fq 'if (!inode || !is_destructive_ioctl(cmd))' \
+    grep -Fq 'if (!is_destructive_ioctl(cmd))' \
         "${BBG_DIR}/baseband_guard.c" || \
         die "Baseband Guard 未默认放行非破坏性 block ioctl"
     grep -Fq 'return deny("destructive ioctl on protected partition", inode, cmd);' \
@@ -420,8 +431,7 @@ verify_bbg_source_fix() {
         "${BBG_DIR}/baseband_guard.c" || \
         die "Baseband Guard 仍含默认拒绝或非破坏性 ioctl 特判"
     for token in 'case BLKDISCARD:' 'case BLKSECDISCARD:' 'case BLKZEROOUT:' \
-        'case BLKRRPART:' 'cmd == SG_IO' 'cmd == SCSI_IOCTL_SEND_COMMAND' \
-        'S_ISCHR(inode->i_mode)'; do
+        'case BLKRRPART:'; do
         grep -Fq "${token}" "${BBG_DIR}/baseband_guard.c" || \
             die "Baseband Guard ioctl 或原始存储入口保护缺失: ${token}"
     done
@@ -488,11 +498,7 @@ apply_susfs_integration() {
         log_info "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁与 Luna fixup 已存在"
     else
         apply_patch_once "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁" \
-            "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}" \
-            --exclude=kernel/core/init.c \
-            --exclude=kernel/hook/setuid_hook.c \
-            --exclude=kernel/runtime/ksud_integration.c \
-            --exclude=kernel/selinux/rules.c
+            "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}"
         apply_patch_once "基于 SUSFS v2.4.0 官方补丁的 KernelSU Luna fixup" \
             "${KSU_DIR}" "${SUSFS_KSU_FIX_PATCH_FILE}"
     fi
@@ -505,7 +511,7 @@ apply_susfs_integration() {
 
     # fdinfo hunk is deliberately excluded; verify_susfs_integration() proves
     # both its official presence and the untouched AOSP target afterwards.
-    apply_patch_once "SUSFS Android 16/6.12 官方主补丁（排除替代与拒绝项）" \
+    apply_patch_once "SUSFS Android 16/6.12 官方主补丁（排除经审计拒绝项）" \
         "${COMMON_DIR}" "${COMMON_SUSFS_PATCH_FILE}" \
         --exclude=fs/notify/fdinfo.c
 

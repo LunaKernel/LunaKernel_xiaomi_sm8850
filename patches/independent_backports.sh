@@ -265,22 +265,46 @@ verify_base_diff() {
 	log_success "独立回移可逐项剥离，基础差异与完整重放精确匹配"
 }
 
+verify_ordered_overlay() {
+	local tree="$1" index_file before_patch after_patch manifest i
+	index_file="$(mktemp "${AUDIT_TMP_ROOT}/ordered.XXXXXX")" || return 1
+	before_patch="$(mktemp "${AUDIT_TMP_ROOT}/ordered-before.XXXXXX")" || return 1
+	after_patch="$(mktemp "${AUDIT_TMP_ROOT}/ordered-after.XXXXXX")" || return 1
+	env GIT_INDEX_FILE="${index_file}" git -C "${tree}" read-tree HEAD || return 1
+	tracked_diff "${tree}" > "${before_patch}" || return 1
+	if [ -s "${before_patch}" ]; then
+		env GIT_INDEX_FILE="${index_file}" git -C "${tree}" apply --cached "${before_patch}" || return 1
+	fi
+	for ((i=${#MANIFESTS[@]} - 1; i >= 0; i--)); do
+		select_manifest "${MANIFESTS[i]}"
+		apply_sequence_to_index "${tree}" "${index_file}" reverse || return 1
+	done
+	for manifest in "${MANIFESTS[@]}"; do
+		select_manifest "${manifest}"
+		apply_sequence_to_index "${tree}" "${index_file}" forward || return 1
+	done
+	tracked_index_diff "${tree}" "${index_file}" > "${after_patch}" || return 1
+	cmp -s "${before_patch}" "${after_patch}" || return 1
+	rm -f -- "${index_file}" "${before_patch}" "${after_patch}"
+}
+
 apply_all() {
 	local tree="$1" manifest
 	prepare_all_patches
+	if verify_ordered_overlay "${tree}" >/dev/null 2>&1; then
+		return 0
+	fi
 	for manifest in "${MANIFESTS[@]}"; do
 		select_manifest "${manifest}"
 		apply_set "${tree}" >/dev/null
 	done
+	verify_ordered_overlay "${tree}" || die "独立回移最终有序层无法精确撤销/重放"
 }
 
 verify_applied() {
-	local tree="$1" manifest
+	local tree="$1"
 	prepare_all_patches
-	for manifest in "${MANIFESTS[@]}"; do
-		select_manifest "${manifest}"
-		verify_applied_set "${tree}" >/dev/null
-	done
+	verify_ordered_overlay "${tree}" || die "独立回移有序层未完整应用或内容漂移"
 }
 
 usage() {

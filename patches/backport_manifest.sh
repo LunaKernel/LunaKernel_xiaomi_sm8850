@@ -314,14 +314,14 @@ apply_sequence() {
 		for row in "${MANIFEST_ROWS[@]}"; do
 			row_patch_file "${row}"
 			[ -n "${ROW_PATCH_FILE}" ] || continue
-			git -C "${tree}" apply "${ROW_PATCH_FILE}"
+			git -C "${tree}" apply "${ROW_PATCH_FILE}" || return 1
 		done
 	else
 		for ((index=${#MANIFEST_ROWS[@]} - 1; index >= 0; index--)); do
 			row="${MANIFEST_ROWS[index]}"
 			row_patch_file "${row}"
 			[ -n "${ROW_PATCH_FILE}" ] || continue
-			git -C "${tree}" apply --reverse "${ROW_PATCH_FILE}"
+			git -C "${tree}" apply --reverse "${ROW_PATCH_FILE}" || return 1
 		done
 	fi
 }
@@ -403,7 +403,7 @@ apply_sequence_to_index() {
 			row_patch_file "${row}"
 			[ -n "${ROW_PATCH_FILE}" ] || continue
 			env GIT_INDEX_FILE="${index_file}" git -C "${target_tree}" \
-				apply --cached "${ROW_PATCH_FILE}"
+				apply --cached "${ROW_PATCH_FILE}" || return 1
 		done
 	else
 		for ((index=${#MANIFEST_ROWS[@]} - 1; index >= 0; index--)); do
@@ -411,7 +411,7 @@ apply_sequence_to_index() {
 			row_patch_file "${row}"
 			[ -n "${ROW_PATCH_FILE}" ] || continue
 			env GIT_INDEX_FILE="${index_file}" git -C "${target_tree}" \
-				apply --cached --reverse "${ROW_PATCH_FILE}"
+				apply --cached --reverse "${ROW_PATCH_FILE}" || return 1
 		done
 	fi
 }

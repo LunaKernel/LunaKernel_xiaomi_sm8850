@@ -1,20 +1,21 @@
 # SUSFS 395a8c0c / KernelSU dbb73665; AOSP r15 4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1; BBG 028ff7fd
 layer	logical_item	status	path	evidence
-susfs-common	SUS_PATH namei ENOENT/RCU 生命周期	retain	fs/namei.c	官方仍使用 fake qstr 重查；保留严格 ENOENT、RCU 重试及 dentry 引用清理
+susfs-common	SUS_PATH namei ENOENT/RCU 生命周期	native	fs/namei.c	采用官方 fake-qstr 重查算法，撤回 Luna 直接 ENOENT/RCU 改写；官方刻意目标含隐藏可观察行为，不能以返回 ENOENT 推定算法等价
 susfs-common	proc fd d_path 错误指针	retain	fs/proc/fd.c	上游重排 KSTAT/MOUNT 路径后仍以 !dpath 判断；按新缩进保留 IS_ERR
-susfs-common	fstat 失败时禁止初始化钩子读取 stat	retain	fs/stat.c	上游仍未以 !error 守卫；保留原有错误语义
-susfs-common	日志静态键默认关闭	retain	fs/susfs.c	上游仍 DEFINE_STATIC_KEY_TRUE；保留 FALSE 与 unlikely
+susfs-common	fstat 失败时禁止初始化钩子读取 stat	retain	fs/stat.c	上游仍未以 !error 守卫；保留原有错误语义susfs-common	日志静态键默认关闭	retain	fs/susfs.c	上游仍 DEFINE_STATIC_KEY_TRUE；保留 FALSE 与 unlikely
 susfs-common	用户输入字符串边界与空路径检查	retain	fs/susfs.c	保留 SUS_PATH/KSTAT/MAP/uname/cmdline 输入校验
 susfs-common	字符串完整缓冲区长度	retain	fs/susfs.c	保留 path loop/uname/variant/version 的 sizeof，防止丢失最后一个可用字符
+susfs-common	uname 用户复制失败	retain	fs/susfs.c	保留用户复制失败返回 EFAULT 的独立补修，失败不继续处理输入或报告成功；与 SELinux/namei 隐藏策略分开判断
 susfs-common	路径循环条目去重	retain	fs/susfs.c	上游仍无重复检查；保留 mutex 下列表判重
 susfs-common	SRCU 遍历锁证明	retain	fs/susfs.c	保留 srcu_read_lock_held 显式证明
 susfs-common	KSTAT 标记错误返回	absorbed	fs/susfs.c	b213c54 原生返回 err；删除旧 return 0 补修，错误路径可达
 susfs-common	KSTAT update 未命中释放	absorbed	fs/susfs.c	b1c1dc6 原生 kfree(new_entry) 后返回 ENOENT
 susfs-common	KSTAT 哈希碰撞键验证	adapt	fs/susfs.c	保留两处 inode/dev/is_fuse 全键判断；扩展至新增有效 statfs/proc fd 查询入口
+susfs-common	SUS_TYPE 哈希碰撞全键验证	retain	fs/susfs.c	官方 entry 未存 type_value 且 add/query 未比全键；42/1639/2626 同桶 43，登记隐藏 1639 会误拒合法 42。独立保存 type_value 并在 add/query 比全键，保留 sepolicy ksu_type 生产与 context_to_sid 消费，AVD 已有完整三键不改；实际函数同 shim 对照及官方+fix roundtrip 通过，不覆盖内核 RCU 并发
 susfs-common	cmdline 同步与输出	partial	fs/susfs.c	131c1ef 已修复 seqlock 重试重复输出；删除对应旧前像，保留首次分配及读写 mutex 串行化
 susfs-common	enabled_features 分配失败	absorbed	fs/susfs.c	25be570 原生通过独立 err 变量回写并返回，不再解引用 NULL
 susfs-common	enabled_features 输出缓冲区清零	retain	fs/susfs.c	copy_from_user 后仍未清零；保留 memset，防止用户输入残留进入功能文本
-susfs-common	sdcard fsnotify 引用与释放	retain	fs/susfs.c	保留 free_mark、put_mark、失败路径 kpath 清零及 monitor 初始化失败降级
+susfs-common	sdcard fsnotify 引用与释放	partial	fs/susfs.c	保留 free_mark、put_mark 与失败路径 kpath 清零等资源释放补修；撤回 monitor 初始化失败即设置 decrypted 的扩展，失败不能证明存储已解密
 susfs-common	SUS_MAP 远程访问先查 VMA	retain	mm/memory.c	上游仍初始化 vma=NULL 后测试，GUP 前实际 vma_lookup 必须保留
 susfs-ksu	包观察 mark 释放	retain	kernel/manager/pkg_observer.c	官方 KernelSU 及新 SUSFS 层均无 free_mark
 susfs-ksu	post-fs-data 单次执行	retain	kernel/runtime/boot_event.c	bool done 仍有并发竞态；保留 atomic_cmpxchg；按 42975584587 编译证据保留新官方静态键停止块，不再恢复已移除的 ksu_stop_input_hook_runtime
@@ -22,19 +23,19 @@ susfs-ksu	sulog 内核字符串复制	retain	kernel/sulog/event.c	官方 SUSFS �
 susfs-ksu	启动事件分发单次执行	retain	kernel/supercall/dispatch.c	新版仍使用非原子 bool；保留 post-fs-data/boot_complete 原子门闩
 bbg-ksu	授权凭据标记	adapt	kernel/policy/app_profile.c;kernel/selinux/selinux.c	核对兼容层后全部三处 commit_creds，保持授权/app profile/init/adb root 标记
 context	execve su-session 配套钩子	absorbed	fs/exec.c	3ff9fd3 官方补丁已重置到 6.12.92，完整包含 su-session 与 preinit hook；6b60a305 可直接应用到固定 r15，继续不保留旧上下文补丁
-context	proc map/pagewalk 与 SELinux	absorbed	fs/proc/base.c;fs/proc/task_mmu.c;security/selinux/hooks.c	官方新上下文直接匹配；setprocattr 复用新版 KernelSU 的实现，保留 SETCURRENT、bounded transition、DYNTRANSITION、PTRACE 检查后才 commit_creds；删除旧私有副本
+context	proc map/pagewalk 与 SELinux	absorbed	fs/proc/base.c;fs/proc/task_mmu.c;security/selinux/hooks.c	官方新上下文直接匹配；采用 SUSFS 官方 setprocattr 与完整隐藏组合，不再重接 KSU my_*；不能由 Luna 断开后无调用推断官方代理可删
 boundary	已关闭 OPEN_REDIRECT 的重复代码删除	drop	fs/namei.c	不再维护 do_tmpfile/do_o_path/path_openat/vfs_readlink 中的禁用分支删除；四个函数在 OPEN_REDIRECT=n 时活动代码与旧修正版本一致，配置及链接拒绝门禁继续保留
 boundary	fdinfo 官方不适用块	rejected	fs/notify/fdinfo.c	仍错误使用 inotify anon_inode 的路径及三参数 callback；保留原 AOSP 实现
 boundary	OPEN_REDIRECT	blocked	fs/namei.c;fs/susfs.c	两处 nd->name UAF 已修；readlink 仍成功返回 0、短 buffer 返回 ENAMETOOLONG；等待上游完整修复
-upstream	SELinux 单次上下文解析与重载重试	native	kernel/feature/selinux_hide.c	dbb73665 保留 ca346659 的单次解析、原类型 generation 验证与双策略有效性检查；ESTALE 先恢复字符串，metadata 过期回退双解析；换行恢复 stock prepare/abort 路径，SETCURRENT/bounded/DYNTRANSITION/PTRACE 检查仍在；SUSFS 兼容层保留导出代理，Luna 层恢复原生解析与双策略函数体
+upstream	SELinux 单次上下文解析与重载重试	superseded	kernel/feature/selinux_hide.c	ca346659 属于 KSU 原生方案；固定 SUSFS 395 兼容组合采用其完整隐藏实现，撤回 Luna 恢复 KSU 函数体与强制 backup/my_* 活动的适配；新版实现本身不能证明隐藏等价
 upstream	file wrapper 引用平衡	native	kernel/infra/file_wrapper.c	保留 2fe18831 的 fput 修复，infra/file_wrapper.o 实际编译；本轮不改其实现
 upstream	Manager shell 引用与 profile 目录边界	native	manager/app/src/main/java/me/weishu/kernelsu/ui/util/KsuCli.kt;userspace/ksud/src/profile.rs	保留 a23184a0 的 shellQuote 与 module id 检查、dbb73665 的非空/点目录/斜线/NUL/换行校验，所有 get/set/delete 统一经过 profile_path；匹配官方 run 42841909373 Manager
 upstream	preinit runner ELF 对齐	native	kernel/Kbuild	保留 c680b548 的 max-page-size=0x10000 与 noseparate-code；SUSFS 对 Kbuild 仅移除旧 syscall hook object，不覆盖 runner 编译和链接参数；arm64 静态 ELF 与 Image 嵌入仍由完整 CI 审计
-susfs-ksu	新 KSU 初始化与 SELinux generation	adapt	kernel/core/init.c;kernel/hook/setuid_hook.c;kernel/runtime/ksud_integration.c;kernel/selinux/rules.c	四文件由固定 Luna 层直接适配，官方层排除对应旧上下文；保留 symbol_resolver、ksu_selinux_inode_init、latest_granting、原类型 metadata 与 preinit 初始化链
-integration	SUSFS v2.4.0 SELinux 完整实现	adapt	security/selinux/hooks.c;security/selinux/selinuxfs.c;kernel/feature/selinux_hide.c	三个活动代理重接固定 KSU 的 my_setprocattr/my_write_context/my_write_access；保留单次解析、policydb 指针与 generation、过期双策略回退、ESTALE 输入恢复；删除被替代的 SUSFS 私有代理与无 policy 生命周期的 type/AVD 表，不关闭功能或改变 UAPI
+susfs-ksu	新 KSU 初始化与 SELinux generation	native	kernel/core/init.c;kernel/hook/setuid_hook.c;kernel/runtime/ksud_integration.c;kernel/selinux/rules.c	init/setuid/ksud 直接采用固定 SUSFS 官方兼容结果，删除对应 Luna 重复 diff；rules 采用官方零代次通知，不再维护真实 generation/metadata 补层
+integration	SUSFS v2.4.0 SELinux 完整实现	adapt	security/selinux/hooks.c;security/selinux/selinuxfs.c;security/selinux/ss/services.c;security/selinux/status.c;fs/susfs.c;kernel/selinux/sepolicy.c;kernel/feature/selinux_hide.c	撤回 common 四个 SELinux diff 与 KSU 原生代理重接；恢复官方 type/AVD 表、sepolicy 生产和隐藏消费完整链，SUS_TYPE 全键缺陷独立补修见对应 retain 项；UAPI 相同、局部源码一致或编译通过不证明联合隐藏行为等价
 upstream	priority UID bitmap 回收同步	native	fs/susfs.c	6b60a305 两处新增 synchronize_rcu 原样保留；现有用户输入、SRCU、fsnotify 及日志残余仍未被吸收
 upstream	SELinux credential 接口探测	native	Makefile;tracing/tracing.c	BBG 028ff7fd 新兼容探测保留；现有 Luna 块设备保护与凭据标记修复仍未被吸收
-integration	r15 与新组件组合精确重放	verified	common;KernelSU;Baseband-guard	官方层和现有残余均无冲突应用；临时 index 正反及完整重放一致，fdinfo 保持 r15 原样；不据此代替完整编译及实机验收
-susfs-common	真实策略代际与 AVC 失效	adapt	security/selinux/ss/services.c	删除 KSU domain 的 policy_commit/set_bools seqno 冻结，四个相关函数分别与 r15 原生实现核对；KSU rules 原生 metadata/advance/reset 保留
-susfs-common	真实 SELinux status sequence	adapt	security/selinux/status.c;security/selinux/selinuxfs.c	真实 policyload/setenforce 恢复原生奇偶 sequence 更新；隐藏应用 fake_status 映射保留
+integration	r15 与新组件组合精确重放	verified-local	common;KernelSU;Baseband-guard	2026-11-11：固定 76 份官方补丁包真实消费、SUSFS 完整官方层反向检查、common/KSU/BBG 精确差异、独立回移逐项剥离与完整重放、整层临时 index 正反及两次入口幂等均通过；build.sh 实际源码门禁与 104 项轻量测试通过；未执行新完整编译、OTA 模块闭包或实机验收
+susfs-common	真实策略代际与 AVC 失效	drop	security/selinux/ss/services.c;kernel/selinux/rules.c	撤回强制恢复真实代际的 Luna 层，保留 SUSFS 官方 policy_commit/set_bools 隐藏与 rules 零代次通知；恢复原生不能自动视为修复
+susfs-common	真实 SELinux status sequence	drop	security/selinux/status.c;security/selinux/selinuxfs.c	撤回恢复真实 sequence 的 Luna 层，采用 SUSFS 官方 status 与 fake_status 完整隐藏行为；不以 status API 原生化替代隐藏语义审查
 upstream	priority UID 独立功能与 O_NOATIME	native	kernel/manager/pkg_observer.c;kernel/supercall/dispatch.c;fs/susfs.c;block/ioprio.c;kernel/sys.c	保留新 Kconfig、命令、bitmap、四个 syscall 消费以及包观察与 supercall 两个生产入口；filp_open 原生 O_NOATIME 保留；42975584587 的 config.current 与上一成功审计逐字比较仅新增 CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y，参考同步为 8260 行/d739d0bd

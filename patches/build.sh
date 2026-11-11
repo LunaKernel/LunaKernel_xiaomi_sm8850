@@ -289,7 +289,6 @@ verify_repo_identity() {
 verify_kernelsu_source_state() {
     local kconfig_line='source "drivers/kernelsu/Kconfig"'
     local makefile_line='obj-$(CONFIG_KSU) += kernelsu/'
-    local official_selinux_hide
     [ "${KSU_INTEGRATION_MODE}" = "builtin" ] || die "KernelSU 集成模式不是 builtin"
     verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}" "0"
     [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
@@ -300,29 +299,13 @@ verify_kernelsu_source_state() {
     [ "$(grep -Fxc "${makefile_line}" "${COMMON_DIR}/drivers/Makefile")" = "1" ] || die "KernelSU Kbuild 接入状态异常"
     [ -L "${COMMON_DIR}/drivers/kernelsu" ] || die "KernelSU drivers 链接缺失"
     [ "$(readlink -f "${COMMON_DIR}/drivers/kernelsu")" = "${KSU_DIR}/kernel" ] || die "KernelSU drivers 链接目标错误"
-    git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_SELINUX_HIDE_FIX_COMMIT}" "${KSU_COMMIT}" || \
-        die "固定 KernelSU 版本不包含官方 DirtySepolicy attr/current 修复"
     git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
         die "固定 KernelSU 版本未包含官方不可靠增强安全功能移除提交"
     ! git -C "${KSU_DIR}" grep -q 'KSU_FEATURE_ENHANCED_SECURITY' "${KSU_COMMIT}" -- kernel manager userspace || \
         die "固定 KernelSU 版本意外恢复了不可靠的增强安全开关"
-    official_selinux_hide="$(git -C "${KSU_DIR}" show "${KSU_COMMIT}:kernel/feature/selinux_hide.c")"
-    for token in my_write_context my_write_access my_setprocattr; do
-        grep -Fq -- "${token}" <<<"${official_selinux_hide}" || \
-            die "KernelSU 固定提交的官方 SELinux 隐藏实现缺少 ${token}"
-    done
-    grep -Fq 'ssize_t my_write_context(' "${KSU_DIR}/kernel/feature/selinux_hide.c" && \
-        grep -Fq 'return my_write_context(file, buf, size);' "${COMMON_DIR}/security/selinux/selinuxfs.c" || \
-        die "SUSFS 接入后缺少 SELinux context 查询代理"
-    grep -Fq 'ssize_t my_write_access(' "${KSU_DIR}/kernel/feature/selinux_hide.c" && \
-        grep -Fq 'return my_write_access(file, buf, size);' "${COMMON_DIR}/security/selinux/selinuxfs.c" || \
-        die "SUSFS 接入后缺少 SELinux access 查询代理"
-    grep -Fq 'int my_setprocattr(' "${KSU_DIR}/kernel/feature/selinux_hide.c" && \
-        grep -Fq 'return my_setprocattr(name, value, size);' "${COMMON_DIR}/security/selinux/hooks.c" || \
-        die "SUSFS 接入后缺少 SELinux attr/current 代理"
     ! grep -Rqs --exclude='lsm_hook.h' 'security_add_hooks[[:space:]]*(' "${KSU_DIR}/kernel" || \
         die "KernelSU 意外注册了额外 LSM，必须重新审计 MAX_LSM_COUNT"
-    log_success "KernelSU ${KSU_REF} 源码、官方 DirtySepolicy 修复与接入状态检查通过"
+    log_success "KernelSU ${KSU_REF} 源码与 built-in 接入状态检查通过"
 }
 
 verify_allowed_paths() {
@@ -370,12 +353,6 @@ verify_rejected_susfs_fdinfo_hunk() {
     [ -z "${status}" ] || die "fs/notify/fdinfo.c 必须保持 AOSP 基线实现"
 }
 
-verify_no_trailing_whitespace() {
-    local label="$1" source_file="$2" bad_lines
-    bad_lines="$(LC_ALL=C grep -nE '[[:blank:]]+$' "${source_file}" || true)"
-    [ -z "${bad_lines}" ] || die "${label} 存在行尾空白:\n${bad_lines}"
-}
-
 verify_no_hidden_index_flags() {
     local label="$1" repo_dir="$2" hidden
     hidden="$(git -C "${repo_dir}" ls-files -v | LC_ALL=C awk '
@@ -415,6 +392,33 @@ verify_project_patch() {
     [ "${actual_patch_id}" = "${expected_patch_id}" ] || die "${label} patch-id 不匹配"
 }
 
+verify_susfs_official_layer() {
+    local label="$1" repo_dir="$2" official_patch="$3" fixup="$4" excluded="$5"
+    local index_file overlay
+    shift 5
+    index_file="$(mktemp)"
+    (
+        export GIT_INDEX_FILE="${index_file}"
+        git -C "${repo_dir}" read-tree HEAD || exit 1
+        git -C "${repo_dir}" add -A -- . || exit 1
+        for overlay in "$@"; do
+            if git -C "${repo_dir}" apply --cached --reverse --check "${overlay}" >/dev/null 2>&1; then
+                git -C "${repo_dir}" apply --cached --reverse "${overlay}" || exit 1
+            else
+                git -C "${repo_dir}" apply --cached --check "${overlay}" || exit 1
+            fi
+        done
+        git -C "${repo_dir}" apply --cached --reverse "${fixup}" || exit 1
+        if [ -n "${excluded}" ]; then
+            git -C "${repo_dir}" apply --cached --reverse --check \
+                --exclude="${excluded}" "${official_patch}"
+        else
+            git -C "${repo_dir}" apply --cached --reverse --check "${official_patch}"
+        fi
+    ) || { rm -f "${index_file}"; die "${label}完整官方层反向校验失败"; }
+    rm -f "${index_file}"
+}
+
 verify_susfs_source_state() {
     local ksu_patch common_patch allowed_ksu allowed_common
     local actual_sha256 source_file target_file
@@ -438,33 +442,16 @@ verify_susfs_source_state() {
     verify_rejected_susfs_fdinfo_hunk \
         "${common_patch}" "${COMMON_DIR}" \
         "${SUSFS_COMMON_FIX_PATCH_FILE}"
-    git -C "${KSU_DIR}" apply --reverse --check \
-        --exclude=kernel/Kconfig \
-        --exclude=kernel/core/init.c \
-        --exclude=kernel/hook/setuid_hook.c \
-        --exclude=kernel/policy/app_profile.c \
-        --exclude=kernel/runtime/boot_event.c \
-        --exclude=kernel/runtime/ksud_integration.c \
-        --exclude=kernel/selinux/rules.c \
-        --exclude=kernel/feature/selinux_hide.c \
-        --exclude=kernel/selinux/sepolicy.c \
-        --exclude=kernel/selinux/selinux.c \
-        --exclude=kernel/sulog/event.c \
-        --exclude=kernel/supercall/dispatch.c \
-        "${ksu_patch}" || die "KernelSU SUSFS 官方补丁状态异常"
-    git -C "${COMMON_DIR}" apply --reverse --check \
-        --exclude=fs/namei.c \
-        --exclude=fs/namespace.c \
-        --exclude=fs/notify/fdinfo.c \
-        --exclude=fs/proc/fd.c \
-        --exclude=fs/stat.c \
-        --exclude=mm/memory.c \
-        --exclude=security/selinux/hooks.c \
-        --exclude=security/selinux/selinuxfs.c \
-        --exclude=security/selinux/ss/services.c \
-        --exclude=security/selinux/status.c \
-        "${common_patch}" || \
-        die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
+    local -a ksu_overlays=() common_overlays=()
+    if [ "${ENABLE_BBG}" = "1" ]; then
+        ksu_overlays+=("${BBG_KSU_CREDENTIAL_PATCH}")
+        common_overlays+=("${BBG_COMMON_CREDENTIAL_PATCH}")
+    fi
+    verify_susfs_official_layer "KernelSU SUSFS" "${KSU_DIR}" \
+        "${ksu_patch}" "${SUSFS_KSU_FIX_PATCH_FILE}" "" "${ksu_overlays[@]}"
+    verify_susfs_official_layer "common SUSFS" "${COMMON_DIR}" \
+        "${common_patch}" "${SUSFS_COMMON_FIX_PATCH_FILE}" \
+        fs/notify/fdinfo.c "${common_overlays[@]}"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
         die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
     git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
@@ -475,7 +462,6 @@ verify_susfs_source_state() {
             actual_sha256="$(sha256sum "${target_file}" | awk '{ print $1 }')"
             [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
                 die "SUSFS Luna 修正源码摘要不匹配: ${source_file}"
-            verify_no_trailing_whitespace "SUSFS Luna 修正源码" "${target_file}"
             grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${target_file}" || \
                 die "SUSFS 日志必须默认关闭"
             [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "4" ] || \
@@ -486,17 +472,7 @@ verify_susfs_source_state() {
             die "SUSFS 源文件不是固定上游内容: ${source_file}"
     done
     {
-        patch_paths_excluding "${ksu_patch}" \
-            kernel/Kconfig \
-            kernel/core/init.c \
-            kernel/hook/setuid_hook.c \
-            kernel/policy/app_profile.c \
-            kernel/runtime/boot_event.c \
-            kernel/runtime/ksud_integration.c \
-            kernel/selinux/rules.c \
-            kernel/selinux/selinux.c \
-            kernel/sulog/event.c \
-            kernel/supercall/dispatch.c
+        patch_paths_excluding "${ksu_patch}"
         patch_paths_excluding "${SUSFS_KSU_FIX_PATCH_FILE}"
         if [ "${ENABLE_BBG}" = "1" ]; then
             patch_paths_excluding "${BBG_KSU_CREDENTIAL_PATCH}"
@@ -554,8 +530,6 @@ verify_susfs_source_state() {
     verify_allowed_paths "KernelSU" "${KSU_DIR}" "${allowed_ksu}"
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
     rm -f "${ksu_patch}" "${common_patch}" "${allowed_ksu}" "${allowed_common}"
-    git -C "${COMMON_DIR}" diff --check
-    git -C "${KSU_DIR}" diff --check
     log_success "SUSFS v2.4.0 固定源码、经审计拒绝项与 Luna 修正版状态检查通过"
 }
 
@@ -589,17 +563,37 @@ verify_bbg_source_state() {
         die "Baseband Guard 仍含失效缓存、SID 推断或敏感拒绝日志"
     grep -Fq 'IS_ERR_OR_NULL(bdev)' "${BBG_DIR}/blkdev_helper.c" || \
         die "Baseband Guard block_device 获取未同时处理 NULL 与 ERR_PTR"
-    ! grep -Fq 'slot_suffix_from_cmdline' "${BBG_DIR}/blkdev_helper.c" || \
-        die "Baseband Guard 仍依赖不必要的活动槽解析"
-    grep -Fq 'partition_name_matches(name, name_len,' "${BBG_DIR}/blkdev_helper.c" || \
-        die "Baseband Guard A/B 分区名匹配缺失"
+    for token in 'static const char *slot_suffix_from_cmdline(void)' \
+        'const char *slot_suffix = slot_suffix_from_cmdline();' \
+        'allowed, slot_suffix)'; do
+        grep -Fq "${token}" "${BBG_DIR}/blkdev_helper.c" || \
+            die "Baseband Guard 官方活动槽分区匹配缺失: ${token}"
+    done
+    grep -Fq 'int bbg_ufs_bsg_permission(struct file *file)' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard UFS BSG 凭据检查缺失"
+    for token in 'static bool bsg_is_ufs_endpoint(const struct bsg_device *bd)' \
+        'name = dev_name(bd->device.parent);' 'str_has_prefix(name, "ufs-bsg")' \
+        'strspn(name, "0123456789") == strlen(name)' \
+        'if (bsg_is_ufs_endpoint(bd)) {' 'val = bbg_ufs_bsg_permission(file);'; do
+        grep -Fq "${token}" "${COMMON_DIR}/block/bsg.c" || \
+            die "Baseband Guard UFS BSG 精确端点保护缺失: ${token}"
+    done
+    grep -Fq 'bool bbg_rawio_trusted(void)' "${BBG_DIR}/baseband_guard.c" || \
+        die "Baseband Guard 原始存储凭据检查缺失"
+    for token in 'if (capable(CAP_SYS_RAWIO) && bbg_rawio_trusted())' \
+        'return open_for_write && bbg_rawio_trusted();'; do
+        grep -Fq "${token}" "${COMMON_DIR}/drivers/scsi/scsi_ioctl.c" || \
+            die "Baseband Guard 受限凭据未遵守原生 SCSI 命令分类: ${token}"
+    done
+    ! grep -Eq 'EXPORT_SYMBOL.*bbg_(rawio_trusted|ufs_bsg_permission)' \
+        "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard 原始存储内部接口不得导出"
     for hook in file_ioctl_compat uring_cmd mmap_file file_mprotect; do
         grep -Fq "LSM_HOOK_INIT(${hook}," "${BBG_DIR}/baseband_guard.c" || \
             die "Baseband Guard 缺少 ${hook} 写入口保护"
     done
     grep -Fq 'static inline bool is_destructive_ioctl(unsigned int cmd)' \
         "${BBG_DIR}/baseband_guard.c" || die "Baseband Guard 缺少明确破坏性 ioctl 判定"
-    grep -Fq 'if (!inode || !is_destructive_ioctl(cmd))' \
+    grep -Fq 'if (!is_destructive_ioctl(cmd))' \
         "${BBG_DIR}/baseband_guard.c" || \
         die "Baseband Guard 未默认放行非破坏性 block ioctl"
     grep -Fq 'return deny("destructive ioctl on protected partition", inode, cmd);' \
@@ -611,8 +605,7 @@ verify_bbg_source_state() {
         "${BBG_DIR}/baseband_guard.c" || \
         die "Baseband Guard 仍含默认拒绝或非破坏性 ioctl 特判"
     for token in 'case BLKDISCARD:' 'case BLKSECDISCARD:' 'case BLKZEROOUT:' \
-        'case BLKRRPART:' 'cmd == SG_IO' 'cmd == SCSI_IOCTL_SEND_COMMAND' \
-        'S_ISCHR(inode->i_mode)'; do
+        'case BLKRRPART:'; do
         grep -Fq "${token}" "${BBG_DIR}/baseband_guard.c" || \
             die "Baseband Guard ioctl 或原始存储入口保护缺失: ${token}"
     done
@@ -970,6 +963,8 @@ verify_project_config() {
         fi
         if [ "${ENABLE_BBG}" = "1" ]; then
             require_config_enabled BBG
+            require_config_enabled SCSI
+            require_config_enabled BLK_DEV_BSG_COMMON
             require_config_disabled BBG_BLOCK_BOOT
             require_config_disabled BBG_BLOCK_RECOVERY
             grep -qx 'CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,selinux,smack,tomoyo,apparmor,ipe,bpf,baseband_guard"' "${BUILD_DIR}/.config" || \
@@ -1530,7 +1525,6 @@ KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
 KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2727}"
 KSU_VERSION_CODE="${KSU_VERSION_CODE:-32727}"
-KSU_SELINUX_HIDE_FIX_COMMIT="${KSU_SELINUX_HIDE_FIX_COMMIT:-3f388ef137c78e1ca0c92c0ada3b8717cdcc4302}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"

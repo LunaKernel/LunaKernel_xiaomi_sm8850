@@ -1,0 +1,50 @@
+From 3ed3bf6d3da2dc526fd5f868d97cc699b1bc0f65 Mon Sep 17 00:00:00 2001
+From: zhangbo56 <zhangbo56@xiaomi.com>
+Date: Mon, 21 Sep 2026 22:28:08 +0800
+Subject: [PATCH] ANDROID: gki: update xiaomi symbol list and abi for new vendor hooks
+
+Add the following symbols to the xiaomi symbol list and update
+abi.stg for the new vendor hooks:
+
+- android_vh_arm64_user_fault_lock_vma
+- android_vh_arm64_do_page_fault_retry_vma_lock
+- android_vh_can_reclaim_anon_pages
+- android_vh_reclaim_target_lruvec_exit
+- android_vh_scan_page_skip_current_prio
+
+Bug: 544914962
+Bug: 562404165
+Bug: 563119166
+Change-Id: I01d566ca3d1c9492f8447c0ec1f3ef80536d45a0
+Signed-off-by: zhangbo56 <zhangbo56@xiaomi.com>
+
+
+Backport: retain only the matching Xiaomi symbol-list additions; regenerate ABI reference metadata from the target build.
+---
+diff --git a/gki/aarch64/symbols/xiaomi b/gki/aarch64/symbols/xiaomi
+index 83a82cf9436774f278a9ab22cca09ef016c49670..498e754961b85dfc082703185f5c074c8f2a4f01 100644
+--- a/gki/aarch64/symbols/xiaomi
++++ b/gki/aarch64/symbols/xiaomi
+@@ -560,12 +560,22 @@ __traceiter_android_vh_remove_mapping
+ __traceiter_android_vh_remove_mapping_failed
+ __traceiter_android_vh_filemap_get_folio_end
+ __traceiter_android_vh_unlock_mmap_bypass
++__traceiter_android_vh_arm64_user_fault_lock_vma
++__traceiter_android_vh_arm64_do_page_fault_retry_vma_lock
++__traceiter_android_vh_can_reclaim_anon_pages
++__traceiter_android_vh_reclaim_target_lruvec_exit
++__traceiter_android_vh_scan_page_skip_current_prio
+ __traceiter_android_vh_do_new_mount_fc
+ __traceiter_android_vh_put_super
+ __tracepoint_android_vh_remove_mapping
+ __tracepoint_android_vh_remove_mapping_failed
+ __tracepoint_android_vh_filemap_get_folio_end
+ __tracepoint_android_vh_unlock_mmap_bypass
++__tracepoint_android_vh_arm64_user_fault_lock_vma
++__tracepoint_android_vh_arm64_do_page_fault_retry_vma_lock
++__tracepoint_android_vh_can_reclaim_anon_pages
++__tracepoint_android_vh_reclaim_target_lruvec_exit
++__tracepoint_android_vh_scan_page_skip_current_prio
+ __tracepoint_android_vh_do_new_mount_fc
+ __tracepoint_android_vh_put_super
+ LZ4_compress_default

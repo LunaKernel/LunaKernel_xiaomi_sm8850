@@ -1,0 +1,30 @@
+From a62176bef9c1fad6f79ed03ba6ac0ad0c41d68ab Mon Sep 17 00:00:00 2001
+From: xulichao1 <xulichao1@xiaomi.corp-partner.google.com>
+Date: Wed, 16 Sep 2026 17:07:53 +0800
+Subject: [PATCH] ANDROID: GKI: update symbol list for xiaomi
+
+1.function symbol(s) added
+  '__traceiter_android_vh_try_to_freeze_abort'
+
+2.variable symbol(s) added
+  '__tracepoint_android_vh_try_to_freeze_abort'
+
+Bug: 533307721
+Change-Id: Ia34d126778fd6226d5f44c7f48b285e09c13036a
+Signed-off-by: xulichao1 <xulichao1@xiaomi.corp-partner.google.com>
+
+
+Backport: retain only the matching Xiaomi symbol-list additions; regenerate ABI reference metadata from the target build.
+---
+diff --git a/gki/aarch64/symbols/xiaomi b/gki/aarch64/symbols/xiaomi
+index c3bb9446a3b9eb3ed22092dc190d45728e750036..83a82cf9436774f278a9ab22cca09ef016c49670 100644
+--- a/gki/aarch64/symbols/xiaomi
++++ b/gki/aarch64/symbols/xiaomi
+@@ -675,3 +675,7 @@ __tracepoint_android_vh_folio_end_writeback
+ __traceiter_android_vh_folio_end_writeback
+ __tracepoint_android_vh_folio_start_writeback
+ __traceiter_android_vh_folio_start_writeback
++
++# required by mi-power.ko
++__traceiter_android_vh_try_to_freeze_abort
++__tracepoint_android_vh_try_to_freeze_abort

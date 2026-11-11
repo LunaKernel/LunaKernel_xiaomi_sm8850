@@ -1,0 +1,36 @@
+From d3205ab6c8c77353226d3ac479d3fc722934bf64 Mon Sep 17 00:00:00 2001
+From: Ridong Chen <chenridong@xiaomi.corp-partner.google.com>
+Date: Thu, 22 Oct 2026 21:25:37 +0800
+Subject: [PATCH] ANDROID: gki: update xiaomi symbol list and abi for new vendor hooks
+
+Add the following symbols to the xiaomi symbol list and update
+abi.stg for the new MGLRU swappiness vendor hooks:
+
+- android_vh_mglru_should_run_aging
+- android_vh_mglru_scan_folios
+- android_vh_mglru_inc_min_seq
+- android_vh_mglru_skip_min_seq_balance
+
+Bug: 564798566
+Change-Id: Ib106d5652dfbae0cca207402305316a4ac11c3cd
+Signed-off-by: Ridong Chen <chenridong@xiaomi.corp-partner.google.com>
+
+
+Backport: retain only the matching Xiaomi symbol-list additions; regenerate ABI reference metadata from the target build.
+---
+diff --git a/gki/aarch64/symbols/xiaomi b/gki/aarch64/symbols/xiaomi
+--- a/gki/aarch64/symbols/xiaomi
++++ b/gki/aarch64/symbols/xiaomi
+@@ -672,2 +672,12 @@
+ 
++
++# MGLRU swappiness vendor hooks
++__traceiter_android_vh_mglru_should_run_aging
++__tracepoint_android_vh_mglru_should_run_aging
++__traceiter_android_vh_mglru_scan_folios
++__tracepoint_android_vh_mglru_scan_folios
++__traceiter_android_vh_mglru_inc_min_seq
++__tracepoint_android_vh_mglru_inc_min_seq
++__traceiter_android_vh_mglru_skip_min_seq_balance
++__tracepoint_android_vh_mglru_skip_min_seq_balance
+ # folio writeback hooks

@@ -1,0 +1,3 @@
+# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
+001	xiaomi_suspend_abort	direct	aosp	android16-6.12	3c08b23181b226275b91cc684e84a5f8f0fd2beb	2026-09-17	e5bf8cf2847f2cc203b2f57dc87cdf208e3941c6	drivers/android/vendor_hooks.c,include/trace/hooks/power.h,kernel/power/process.c	-	-	-
+002	xiaomi_suspend_abort	adapt	aosp	android16-6.12	a62176bef9c1fad6f79ed03ba6ac0ad0c41d68ab	2026-09-17	2c507c47362d341007b215cdd9b38212bdfa396e	gki/aarch64/abi.stg,gki/aarch64/symbols/xiaomi	patches/backports/xiaomi-suspend-abort-a62176be-r15.patch	d294447ee66c4a609f39bff382e0478a79c4939b276f0aa3e1e4525f417980a1	3bbc7ccef713f22b3431ac50d839a56bbd4a1998

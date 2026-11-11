@@ -1,5 +1,5 @@
 diff --git a/baseband_guard.c b/baseband_guard.c
-index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29b812ce89 100644
+index f95d9fa2865501095d8d4a19bbff09a48b2b2810..5800f56cde6129b1e1d3790c7eaa76c9c9dd78a1 100644
 --- a/baseband_guard.c
 +++ b/baseband_guard.c
 @@ -4,125 +4,57 @@
@@ -7,6 +7,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29
  #include <linux/binfmts.h>
  #include <linux/namei.h>
 +#include <linux/blkdev.h>
++#include <linux/baseband_guard.h>
  #include <linux/blk_types.h>
  #include <linux/slab.h>
  #include <linux/string.h>
@@ -18,7 +19,6 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29
  #include <linux/dcache.h>
  #include <linux/hashtable.h>
 +#include <uapi/linux/blkdev.h>
-+#include <scsi/scsi_ioctl.h>
 +#include <scsi/sg.h>
 +
 +#ifdef CONFIG_IO_URING
@@ -155,7 +155,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29
  	return -EPERM;
  }
  
-@@ -130,40 +62,37 @@ static int bb_file_permission(struct file *file, int mask)
+@@ -130,40 +62,50 @@ static int bb_file_permission(struct file *file, int mask)
  {
  	struct inode *inode;
  
@@ -208,33 +208,25 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29
 +	return deny("setattr on protected partition", inode, 0);
  }
  
++bool bbg_rawio_trusted(void)
++{
++	return current_process_trusted();
++}
++
++int bbg_ufs_bsg_permission(struct file *file)
++{
++	if (likely(current_process_trusted()))
++		return 0;
++
++	return deny("raw UFS BSG ioctl", file_inode(file), SG_IO);
++}
++
  static inline bool is_destructive_ioctl(unsigned int cmd)
-@@ -197,20 +126,24 @@ static int bb_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
- {
- 	struct inode *inode;
- 
--	if (!file) return 0;
--	inode = file_inode(file);
--	if (likely(!S_ISBLK(inode->i_mode))) return 0;
--
--	if (!is_destructive_ioctl(cmd))
--		return 0;
--
+@@ -207,10 +149,10 @@ static int bb_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
  	if (likely(current_process_trusted()))
  		return 0;
-+	if (file) {
-+		inode = file_inode(file);
-+		if (inode && (S_ISBLK(inode->i_mode) ||
-+			      S_ISCHR(inode->i_mode)) && cmd == SG_IO)
-+			return deny("raw storage ioctl", inode, cmd);
-+	}
  
 -	if (allow_has(inode->i_rdev) || reverse_allow_match_and_cache(inode->i_rdev))
-+	inode = bbg_block_inode(file);
-+	if (inode && cmd == SCSI_IOCTL_SEND_COMMAND)
-+		return deny("raw storage ioctl", inode, cmd);
-+	if (!inode || !is_destructive_ioctl(cmd))
-+		return 0;
 +	if (bbg_file_allowed(file))
  		return 0;
  
@@ -243,7 +235,7 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29
  }
  
  #ifdef BB_HAS_IOCTL_COMPAT
-@@ -220,26 +153,81 @@ static int bb_file_ioctl_compat(struct file *file, unsigned int cmd, unsigned lo
+@@ -220,26 +162,81 @@ static int bb_file_ioctl_compat(struct file *file, unsigned int cmd, unsigned lo
  }
  #endif
  
@@ -332,59 +324,17 @@ index f95d9fa2865501095d8d4a19bbff09a48b2b2810..b008eb6261cc6a37d1a5cc6fe0530d29
  };
  
  static int __init bbg_init(void)
-@@ -266,5 +254,3 @@ DEFINE_LSM(baseband_guard) = {
+@@ -266,5 +263,3 @@ DEFINE_LSM(baseband_guard) = {
  MODULE_DESCRIPTION("protect All Block & Power by TG@qdykernel");
  MODULE_AUTHOR("秋刀鱼 & https://t.me/qdykernel");
  MODULE_LICENSE("GPL v2");
 -
 -
 diff --git a/blkdev_helper.c b/blkdev_helper.c
-index ffeacc6fdfa90599a135cac8d572180ee0560390..d7d8d2df039b58102f9b77aac6a72e509fad6228 100644
+index ffeacc6fdfa90599a135cac8d572180ee0560390..73159e023c1d7251ca132347a0b7b45c5779cf24 100644
 --- a/blkdev_helper.c
 +++ b/blkdev_helper.c
-@@ -6,18 +6,6 @@
- #include "baseband_guard.h"
- #include "blkdev_helper.h"
- 
--extern char *saved_command_line; 
--static const char *slot_suffix_from_cmdline(void)
--{
--	const char *p = saved_command_line;
--	if (!p) return NULL;
--	p = strstr(p, "androidboot.slot_suffix=");
--	if (!p) return NULL;
--	p += strlen("androidboot.slot_suffix=");
--	if (p[0] == '_' && (p[1] == 'a' || p[1] == 'b')) return (p[1] == 'a') ? "_a" : "_b";
--	return NULL;
--}
--
- static bool partition_name_matches(const char *partition_name,
- 				   size_t partition_len,
- 				   const char *base_name,
-@@ -41,7 +29,6 @@ static bool partition_name_matches(const char *partition_name,
- 
- static bool partition_name_in_allowlist(const char *name, size_t max_len)
- {
--	const char *slot_suffix = slot_suffix_from_cmdline();
- 	size_t name_len;
- 	size_t i;
- 
-@@ -65,14 +52,6 @@ static bool partition_name_in_allowlist(const char *name, size_t max_len)
- 		    !memcmp(name, allowed, name_len))
- 			return true;
- 
--		if (slot_suffix) {
--			if (partition_name_matches(name, name_len,
--						   allowed, slot_suffix))
--				return true;
--
--			continue;
--		}
--
- 		if (partition_name_matches(name, name_len,
- 					   allowed, "_a"))
- 			return true;
-@@ -85,6 +64,12 @@ static bool partition_name_in_allowlist(const char *name, size_t max_len)
+@@ -85,6 +85,12 @@ static bool partition_name_in_allowlist(const char *name, size_t max_len)
  	return false;
  }
  
@@ -397,7 +347,7 @@ index ffeacc6fdfa90599a135cac8d572180ee0560390..d7d8d2df039b58102f9b77aac6a72e50
  #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0) || defined(BBG_COMPAT_HAS_BLOCK_DEVICE_API)
  
  /*
-@@ -95,11 +80,26 @@ static bool partition_name_in_allowlist(const char *name, size_t max_len)
+@@ -95,11 +101,26 @@ static bool partition_name_in_allowlist(const char *name, size_t max_len)
   *   -> bd_meta_info
   *   -> volname
   */
@@ -427,7 +377,7 @@ index ffeacc6fdfa90599a135cac8d572180ee0560390..d7d8d2df039b58102f9b77aac6a72e50
  
  	if (!dev)
  		return false;
-@@ -108,13 +108,7 @@ bool is_allowed_partition_dev_resolve(dev_t dev)
+@@ -108,13 +129,7 @@ bool is_allowed_partition_dev_resolve(dev_t dev)
  	if (IS_ERR_OR_NULL(bdev))
  		return false;
  
@@ -442,7 +392,7 @@ index ffeacc6fdfa90599a135cac8d572180ee0560390..d7d8d2df039b58102f9b77aac6a72e50
  	blkdev_put_no_open(bdev);
  	return allowed;
  }
-@@ -131,7 +125,7 @@ bool is_allowed_partition_dev_resolve(dev_t dev)
+@@ -131,7 +146,7 @@ bool is_allowed_partition_dev_resolve(dev_t dev)
   *   -> info
   *   -> volname
   */
@@ -451,7 +401,7 @@ index ffeacc6fdfa90599a135cac8d572180ee0560390..d7d8d2df039b58102f9b77aac6a72e50
  {
  	struct gendisk *disk;
  	struct hd_struct *part;
-@@ -145,6 +139,10 @@ bool is_allowed_partition_dev_resolve(dev_t dev)
+@@ -145,6 +160,10 @@ bool is_allowed_partition_dev_resolve(dev_t dev)
  	disk = get_gendisk(dev, &partno);
  	if (!disk)
  		return false;
@@ -462,7 +412,7 @@ index ffeacc6fdfa90599a135cac8d572180ee0560390..d7d8d2df039b58102f9b77aac6a72e50
  
  	if (partno <= 0)
  		goto out_put_disk;
-@@ -167,4 +165,13 @@ out_put_disk:
+@@ -167,4 +186,13 @@ out_put_disk:
  	return allowed;
  }
  
@@ -490,7 +440,7 @@ index a5e49bc0959fe33d11fcf17587e68d1fd68cc4a9..cfe378f0ecd93f4eb378d0e334f25c6e
 +bool is_allowed_block_device(const struct block_device *bdev);
 +bool is_allowed_block_device_dev(dev_t dev);
 diff --git a/tracing/tracing.c b/tracing/tracing.c
-index 95fc2e9572c2c2b7cda17ff4361a10fa0d3d1b81..20927a904d1d87b2ef208a9f3b68eff30cc4963f 100644
+index 5aa42ea8b990a5a39ededaed15c141af311cc4ad..8d2bfcb5d0c694f7a604b78f60f1f6d697bedc06 100644
 --- a/tracing/tracing.c
 +++ b/tracing/tracing.c
 @@ -2,13 +2,10 @@

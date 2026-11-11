@@ -1,0 +1,41 @@
+From bc537c78955c9e22326fa13e2982b9e06a3d9f23 Mon Sep 17 00:00:00 2001
+From: Oven <liyangouwen@xiaomi.com>
+Date: Fri, 23 Oct 2026 11:50:03 +0800
+Subject: [PATCH] ANDROID: ABI: update xiaomi symbol list
+
+4 function symbol(s) added
+  'int __traceiter_android_vh_customize_lruvec_may_deactivate(void*, struct lruvec*, struct scan_control*)'
+  'int __traceiter_android_vh_customize_may_deactivate(void*, struct lruvec*, struct scan_control*)'
+  'int __traceiter_android_vh_restore_may_deactivate(void*, unsigned int, struct scan_control*)'
+  'int __traceiter_android_vh_snapshot_refaults(void*, struct mem_cgroup*, pg_data_t*)'
+
+4 variable symbol(s) added
+  'struct tracepoint __tracepoint_android_vh_customize_lruvec_may_deactivate'
+  'struct tracepoint __tracepoint_android_vh_customize_may_deactivate'
+  'struct tracepoint __tracepoint_android_vh_restore_may_deactivate'
+  'struct tracepoint __tracepoint_android_vh_snapshot_refaults'
+
+Bug: 576927506
+Change-Id: I6ce07e313a8c5c49cae0fcdfe28a5e666830ac6b
+Signed-off-by: Oven <liyangouwen@xiaomi.com>
+
+
+Backport: retain only the matching Xiaomi symbol-list additions; regenerate ABI reference metadata from the target build.
+---
+diff --git a/gki/aarch64/symbols/xiaomi b/gki/aarch64/symbols/xiaomi
+--- a/gki/aarch64/symbols/xiaomi
++++ b/gki/aarch64/symbols/xiaomi
+@@ -670,2 +670,13 @@
+ __traceiter_android_vh_mm_direct_reclaim_end
++
++# tune deactivation
++__tracepoint_android_vh_customize_may_deactivate
++__traceiter_android_vh_customize_may_deactivate
++__tracepoint_android_vh_customize_lruvec_may_deactivate
++__traceiter_android_vh_customize_lruvec_may_deactivate
++__tracepoint_android_vh_restore_may_deactivate
++__traceiter_android_vh_restore_may_deactivate
++__tracepoint_android_vh_snapshot_refaults
++__traceiter_android_vh_snapshot_refaults
++
+ try_to_free_pages
