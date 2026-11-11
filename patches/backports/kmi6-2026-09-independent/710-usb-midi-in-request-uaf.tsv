@@ -1,2 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	usb_midi_in_request_uaf	direct	aosp	android16-6.12-2026-09_r13	5eaaf89e924b6948fd1f7fe847f774499d37a2e9	2026-10-30	48d5e5b1b2336a9c6559157b2dfb8e5659a52bda	drivers/usb/gadget/function/f_midi.c	-	-	-

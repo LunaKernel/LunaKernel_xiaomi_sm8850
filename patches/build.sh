@@ -423,10 +423,10 @@ verify_susfs_source_state() {
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
         "${SUSFS_KSU_PATCH_COMMIT}" ] || \
         die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
-    verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 common Luna 修正版" \
+    verify_project_patch "基于 SUSFS v2.4.0 官方补丁的 common Luna 修正版" \
         "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
         "${SUSFS_COMMON_FIX_PATCH_ID}"
-    verify_project_patch "基于 SUSFS v2.3.0 官方补丁的 KernelSU Luna 修正版" \
+    verify_project_patch "基于 SUSFS v2.4.0 官方补丁的 KernelSU Luna 修正版" \
         "${SUSFS_KSU_FIX_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_SHA256}" \
         "${SUSFS_KSU_FIX_PATCH_ID}"
     ksu_patch="$(mktemp)"
@@ -446,6 +446,8 @@ verify_susfs_source_state() {
         --exclude=kernel/runtime/boot_event.c \
         --exclude=kernel/runtime/ksud_integration.c \
         --exclude=kernel/selinux/rules.c \
+        --exclude=kernel/feature/selinux_hide.c \
+        --exclude=kernel/selinux/sepolicy.c \
         --exclude=kernel/selinux/selinux.c \
         --exclude=kernel/sulog/event.c \
         --exclude=kernel/supercall/dispatch.c \
@@ -457,6 +459,10 @@ verify_susfs_source_state() {
         --exclude=fs/proc/fd.c \
         --exclude=fs/stat.c \
         --exclude=mm/memory.c \
+        --exclude=security/selinux/hooks.c \
+        --exclude=security/selinux/selinuxfs.c \
+        --exclude=security/selinux/ss/services.c \
+        --exclude=security/selinux/status.c \
         "${common_patch}" || \
         die "SUSFS 官方 Android 16/6.12 common 主补丁剩余部分状态异常"
     git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
@@ -472,7 +478,7 @@ verify_susfs_source_state() {
             verify_no_trailing_whitespace "SUSFS Luna 修正源码" "${target_file}"
             grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${target_file}" || \
                 die "SUSFS 日志必须默认关闭"
-            [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "2" ] || \
+            [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "4" ] || \
                 die "SUSFS 日志静态分支提示异常"
             continue
         fi
@@ -550,7 +556,7 @@ verify_susfs_source_state() {
     rm -f "${ksu_patch}" "${common_patch}" "${allowed_ksu}" "${allowed_common}"
     git -C "${COMMON_DIR}" diff --check
     git -C "${KSU_DIR}" diff --check
-    log_success "SUSFS v2.3.0 固定源码、经审计拒绝项与 Luna 修正版状态检查通过"
+    log_success "SUSFS v2.4.0 固定源码、经审计拒绝项与 Luna 修正版状态检查通过"
 }
 
 verify_bbg_source_state() {
@@ -1511,7 +1517,7 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/MiCode/Xiaomi_Kernel_OpenSource.g
 KERNEL_COMMIT="${KERNEL_COMMIT:-45705be1220b4cfa8100516ad86711656c0b634e}"
 SOC_DIR="$(resolve_workspace_path "${SOC_SOURCE_DIR:-sources/xiaomi_sm8850_soc}")"
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-aa556307b679df7ced0cc644068a529280dbc412}"
+COMMON_COMMIT="${COMMON_COMMIT:-4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1}"
 COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"
@@ -1529,9 +1535,9 @@ KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-6b60a305d418148bd311f4fc9bddedc82d99e1fc}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-395a8c0c88d348e9fe7c14f66a456fde4653287c}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-6b60a305d418148bd311f4fc9bddedc82d99e1fc}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-395a8c0c88d348e9fe7c14f66a456fde4653287c}"
 SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
 SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
@@ -1677,7 +1683,7 @@ ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="${ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRI
 KERNEL_LOCALVERSION="-android16-luna-g${LUNA_PROJECT_SHORT}-4k"
 KERNEL_BUILD_USER="${KERNEL_BUILD_USER:-luna}"
 KERNEL_BUILD_HOST="${KERNEL_BUILD_HOST:-luna-build}"
-KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-10-28 05:44:21 -0700}"
+KERNEL_BUILD_TIMESTAMP="${KERNEL_BUILD_TIMESTAMP:-2026-11-09 02:53:58 -0800}"
 KERNEL_BUILD_VERSION="${KERNEL_BUILD_VERSION:-1}"
 AK3_BOOT_PARTITION_SIZE="${AK3_BOOT_PARTITION_SIZE:-100663296}"
 AK3_UPSTREAM_COMMIT="${AK3_UPSTREAM_COMMIT:-}"

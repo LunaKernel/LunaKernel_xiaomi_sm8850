@@ -1,3 +1,0 @@
-# order	group	action	source	ref	commit	date	patch-id	paths	project-patch	project-sha256	project-patch-id
-001	fuse_interrupt_resend_uaf	direct	aosp	android16-6.12-2026-09_r15	7ca890fb2188c4bc42e9efbb14f60e71e27e7958	2026-11-09	f7b9ed8c3c3790c039dc07e2c6ae9fa17dd4c596	fs/fuse/dev.c	-	-	-
-002	fuse_interrupt_resend_uaf	direct	aosp	android16-6.12-2026-09_r15	4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1	2026-11-09	c949c156badbfd2f2cd9c2ff52e7dc1f1cd18c41	fs/fuse/dev.c	-	-	-

@@ -47,7 +47,7 @@ CI 按初始化、内核回移、外部组件接入、编译与审计的顺序�
 
 固定 AOSP Clang r596125 / 22.0.2、Rust 1.97.0-dev（LLVM 22.1.6）、bindgen 0.72.1、kernel build-tools、宿主 bc，以及 IPSet 使用的 NDK r30 / API 35。Clang、Rust 各自保留独立 LLVM 库。依赖仓库制作时验证官方 Git 对象和检出树，主仓库构建时验证固定内容、安装树摘要及实际工具身份。
 
-common 使用官方 `android16-6.12-2026-09_r11`（Linux 6.12.92 / KMI generation 6），仅构建和交付 4 KiB 页面版本。
+common 使用官方 `android16-6.12-2026-09_r15`（Linux 6.12.92 / KMI generation 6），仅构建和交付 4 KiB 页面版本。
 
 C 使用固定 `-march` 和 `-mtune=oryon-1`；Rust 使用 `target-cpu=generic`、`tune-cpu=oryon-1` 与固定 ISA 列表，全部参数见 `.env`。保留 O2、CFI、Rust inline helpers、`LTO_NONE` 及原生 SIMD/分支保护约束。Rust 使用 softfloat，特性列表以 `-strict-align,-neon` 结束，允许普通内存非对齐访问；早期启动 C 保持严格对齐。
 

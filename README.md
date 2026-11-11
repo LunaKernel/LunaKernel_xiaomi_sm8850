@@ -12,7 +12,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 | 实机验收系统 | HyperOS 4 `OS4.0.6.0.XPCCNXM` / Android 17 |
 | 静态模块闭包 | `OS4.0.6.0.XPCCNXM` |
 | 内核 | Linux 6.12.92、4 KiB |
-| AOSP 基线 | `android16-6.12-2026-09_r11` / KMI generation 6 |
+| AOSP 基线 | `android16-6.12-2026-09_r15` / KMI generation 6 |
 | 安装方式 | AnyKernel3，仅替换 boot 中的 `Image` |
 
 已验收 Image 与系统版本见[验证记录](docs/VALIDATION.md)。刷写前请备份当前 boot，并确保能够进入 Fastboot 或 Recovery 恢复。
@@ -20,14 +20,14 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 ## 上游
 
 - 小米 SoC/vendor 公开基线：[MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource)，`popsicle-w-oss`。
-- 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-09_r11`。
+- 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-09_r15`。
 
 `android16` 是 GKI/KMI 分支名；目标 ROM 为 Android 17。源码、组件与工具链的完整提交和摘要统一固定于 [`.env`](.env)。
 
 ## 功能与改进
 
 - KernelSU 内置，version code 32727 / UAPI 6；每次交付配套官方 CI Manager APK。
-- SUSFS v2.3.0；`OPEN_REDIRECT` 未编译，调试日志默认关闭。
+- SUSFS v2.4.0；`OPEN_REDIRECT` 未编译，调试日志默认关闭。
 - Baseband Guard，保护基带及关键块设备写入口。
 - IPSet 7.24 内核支持与独立 KernelSU 用户态模块；额外模块模板由 [extra-modules](https://github.com/LunaKernel/extra-modules) 管理，主仓固定版本并编译交付。
 - Rust Binder 内置，屏蔽 ROM 同名模块；保留 seccomp、CFI、BPF JIT、FUSE BPF、pKVM guest、BBR v1 与 FQ 等能力。
