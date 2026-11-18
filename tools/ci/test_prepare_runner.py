@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""只执行宿主空间准备的 Python 段，所有磁盘查询和删除均使用桩。"""
+"""离线检查宿主准备策略；磁盘操作和 apt 命令均使用桩。"""
 
 import contextlib
 import io
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import call, patch
@@ -49,6 +50,41 @@ class PrepareRunnerTests(unittest.TestCase):
                 removed, error = self.run_space_check([40], **options)
                 self.assertEqual(removed, [])
                 self.assertIsNotNone(error)
+
+
+class RunnerPackagesTests(unittest.TestCase):
+    def test_cached_indices_and_refresh_fallback(self):
+        function = SCRIPT[SCRIPT.index('install_runner_packages() {'):
+                          SCRIPT.index('packages_started=')]
+        stub = r'''
+set -eu
+timeout() { shift 2; "$@"; }
+sudo() {
+    shift 4
+    printf '%s\n' "$1" >&2
+    case "$1" in
+        update) return "$UPDATE_STATUS" ;;
+        install)
+            if [[ " $* " == *" Acquire::Retries=0 "* ]]; then
+                return "$FIRST_STATUS"
+            fi
+            return "$SECOND_STATUS"
+            ;;
+    esac
+}
+FIRST_STATUS=$1 UPDATE_STATUS=$2 SECOND_STATUS=$3
+'''
+        for statuses, calls, code in (
+            ((0, 9, 9), ['install'], 0),
+            ((7, 0, 0), ['install', 'update', 'install'], 0),
+            ((7, 9, 0), ['install', 'update'], 9),
+            ((7, 0, 9), ['install', 'update', 'install'], 9),
+        ):
+            with self.subTest(statuses=statuses):
+                result = subprocess.run(['bash', '-c', stub + function + '\ninstall_runner_packages\n',
+                                         'test', *map(str, statuses)], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertEqual(result.stderr.splitlines(), calls)
 
 
 if __name__ == "__main__":

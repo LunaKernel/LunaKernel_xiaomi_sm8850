@@ -40,13 +40,24 @@ if free < minimum:
 PY
 printf '[INFO] SDK 空间准备耗时=%s 秒\n' "$(( $(date +%s) - prepare_started ))"
 
+install_runner_packages() {
+    local -a apt=(sudo -n env DEBIAN_FRONTEND=noninteractive apt-get)
+    local -a packages=(build-essential flex bison libdw-dev libelf-dev zlib1g-dev libssl-dev
+        pkg-config ccache python3 git curl ca-certificates patch file
+        bzip2 xz-utils zip unzip p7zip-full zstd)
+    if timeout --kill-after=15s 10m "${apt[@]}" install -y --no-install-recommends \
+        -o Acquire::Retries=0 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+        "${packages[@]}"; then
+        printf '[INFO] 使用 runner 现有 apt 索引准备宿主依赖\n'
+        return
+    fi
+    printf '[INFO] 现有 apt 索引安装失败，刷新索引后重试\n'
+    timeout --kill-after=15s 5m "${apt[@]}" update -q -o Acquire::Languages=none
+    timeout --kill-after=15s 10m "${apt[@]}" install -y --no-install-recommends "${packages[@]}"
+}
+
 packages_started="$(date +%s)"
-timeout --kill-after=15s 5m sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -q
-timeout --kill-after=15s 10m sudo -n env DEBIAN_FRONTEND=noninteractive \
-    apt-get install -y --no-install-recommends \
-    build-essential flex bison libdw-dev libelf-dev zlib1g-dev libssl-dev \
-    pkg-config ccache python3 git curl ca-certificates patch file \
-    bzip2 xz-utils zip unzip p7zip-full zstd
+install_runner_packages
 
 for tool in bash git curl make gcc cc ld flex bison python3 pkg-config ccache \
     tar gzip bzip2 xz unzip zip 7z patch sha256sum timeout nm; do
