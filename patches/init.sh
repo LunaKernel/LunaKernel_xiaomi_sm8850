@@ -513,7 +513,7 @@ prepare_userspace_sources() {
 }
 
 prepare_build_dependencies() {
-    run_init_tasks setup_toolchain prepare_userspace_sources
+    run_init_tasks prepare_userspace_sources prepare_kernel_sources setup_toolchain
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
@@ -679,62 +679,66 @@ declare -A TC_GIT_BLOB=(
     [stock-libc++.so]="${STOCK_LIBCXX_GIT_BLOB}"
 )
 
-ensure_repo "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_BRANCH}" "${KERNEL_COMMIT}"
-ensure_repo "Android 16 GKI common" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_BRANCH}" "${COMMON_COMMIT}" "${ENABLE_KERNELSU}"
-[ "${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH:?缺少官方 AutoFDO 路径 pin}" = gki/aarch64/afdo/kernel.afdo ] || die "AutoFDO 必须使用固定 common 自带的 arm64 profile"
-[[ "${AOSP_AUTOFDO_PROFILE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || die "官方 AutoFDO SHA-256 pin 无效"
-AUTOFDO_PROFILE="${COMMON_DIR}/${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH}"
-[ -f "${AUTOFDO_PROFILE}" ] && [ ! -L "${AUTOFDO_PROFILE}" ] || die "官方 AutoFDO profile 缺失或为符号链接"
-[ "$(sha256sum "${AUTOFDO_PROFILE}" | awk '{ print $1 }')" = "${AOSP_AUTOFDO_PROFILE_SHA256}" ] || die "官方 AutoFDO profile SHA-256 不匹配"
-log_success "固定 common 自带的官方 AutoFDO profile 摘要检查通过"
-if [ "${ENABLE_KERNELSU}" = "1" ]; then
-    ensure_repo "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_REF}" "${KSU_COMMIT}" "${ENABLE_SUSFS}" full
-    if [ -f "$(git -C "${KSU_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
-        log_step "在初始化阶段补齐 KernelSU Git 历史以固定 KSU_VERSION"
-        git_network -C "${KSU_DIR}" fetch --unshallow --filter=blob:none --no-tags origin "${KSU_COMMIT}"
+prepare_kernel_sources() {
+    local AUTOFDO_PROFILE KSU_MANAGER_APK BACKPORT_BUNDLE_DIR
+    ensure_repo "Xiaomi popsicle soc-repo" "${SOC_DIR}" "${KERNEL_REPO}" "${KERNEL_BRANCH}" "${KERNEL_COMMIT}"
+    ensure_repo "Android 16 GKI common" "${COMMON_DIR}" "${COMMON_REPO}" "${COMMON_BRANCH}" "${COMMON_COMMIT}" "${ENABLE_KERNELSU}"
+    [ "${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH:?缺少官方 AutoFDO 路径 pin}" = gki/aarch64/afdo/kernel.afdo ] || die "AutoFDO 必须使用固定 common 自带的 arm64 profile"
+    [[ "${AOSP_AUTOFDO_PROFILE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || die "官方 AutoFDO SHA-256 pin 无效"
+    AUTOFDO_PROFILE="${COMMON_DIR}/${AOSP_AUTOFDO_PROFILE_RELATIVE_PATH}"
+    [ -f "${AUTOFDO_PROFILE}" ] && [ ! -L "${AUTOFDO_PROFILE}" ] || die "官方 AutoFDO profile 缺失或为符号链接"
+    [ "$(sha256sum "${AUTOFDO_PROFILE}" | awk '{ print $1 }')" = "${AOSP_AUTOFDO_PROFILE_SHA256}" ] || die "官方 AutoFDO profile SHA-256 不匹配"
+    log_success "固定 common 自带的官方 AutoFDO profile 摘要检查通过"
+    if [ "${ENABLE_KERNELSU}" = "1" ]; then
+        ensure_repo "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_REF}" "${KSU_COMMIT}" "${ENABLE_SUSFS}" full
+        if [ -f "$(git -C "${KSU_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
+            log_step "在初始化阶段补齐 KernelSU Git 历史以固定 KSU_VERSION"
+            git_network -C "${KSU_DIR}" fetch --unshallow --filter=blob:none --no-tags origin "${KSU_COMMIT}"
+        fi
+        [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
+        git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
+            die "固定 KernelSU 版本未包含官方增强安全功能移除提交"
+        [[ "${KSU_MANAGER_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die "KernelSU Manager commit pin 无效"
+        if ! env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" cat-file -e "${KSU_MANAGER_COMMIT}^{commit}" 2>/dev/null; then
+            git_network -C "${KSU_DIR}" fetch --filter=blob:none --no-tags origin "${KSU_MANAGER_COMMIT}"
+        fi
+        KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" prepare \
+            --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \
+            die "官方 KernelSU Manager 准备失败"
+        log_success "官方 KernelSU Manager 已准备: ${KSU_MANAGER_APK}"
     fi
-    [ "$(git -C "${KSU_DIR}" rev-list --count HEAD)" = "${KSU_GIT_VERSION_COUNT}" ] || die "KernelSU Git 历史计数不匹配"
-    git -C "${KSU_DIR}" merge-base --is-ancestor "${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT}" "${KSU_COMMIT}" || \
-        die "固定 KernelSU 版本未包含官方增强安全功能移除提交"
-    [[ "${KSU_MANAGER_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || die "KernelSU Manager commit pin 无效"
-    if ! env GIT_NO_LAZY_FETCH=1 git -C "${KSU_DIR}" cat-file -e "${KSU_MANAGER_COMMIT}^{commit}" 2>/dev/null; then
-        git_network -C "${KSU_DIR}" fetch --filter=blob:none --no-tags origin "${KSU_MANAGER_COMMIT}"
+    if [ "${ENABLE_SUSFS}" = "1" ]; then
+        [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"
+        ensure_repo "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_REF}" "${SUSFS_COMMIT}"
+        if ! git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}^{commit}" 2>/dev/null; then
+            log_step "获取与 KernelSU ${KSU_REF} 兼容的官方 SUSFS 补丁提交"
+            git_network -C "${SUSFS_DIR}" fetch --depth 1 origin "${SUSFS_KSU_PATCH_COMMIT}"
+        fi
+        git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" 2>/dev/null || \
+            die "SUSFS KernelSU 兼容补丁不存在: ${SUSFS_KSU_PATCH_COMMIT}"
+        git -C "${SUSFS_DIR}" update-ref \
+            refs/backport-audit/susfs-kernelsu-patch "${SUSFS_KSU_PATCH_COMMIT}"
+        [ "$(git -C "${SUSFS_DIR}" rev-parse refs/backport-audit/susfs-kernelsu-patch)" = \
+            "${SUSFS_KSU_PATCH_COMMIT}" ] || die "SUSFS KernelSU 兼容补丁保活引用异常"
     fi
-    KSU_MANAGER_APK="$(python3 "${HOST_WORKSPACE_DIR}/tools/ksu_manager.py" prepare \
-        --workspace "${HOST_WORKSPACE_DIR}" --ksu-dir "${KSU_DIR}")" || \
-        die "官方 KernelSU Manager 准备失败"
-    log_success "官方 KernelSU Manager 已准备: ${KSU_MANAGER_APK}"
-fi
-if [ "${ENABLE_SUSFS}" = "1" ]; then
-    [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"
-    ensure_repo "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_REF}" "${SUSFS_COMMIT}"
-    if ! git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}^{commit}" 2>/dev/null; then
-        log_step "获取与 KernelSU ${KSU_REF} 兼容的官方 SUSFS 补丁提交"
-        git_network -C "${SUSFS_DIR}" fetch --depth 1 origin "${SUSFS_KSU_PATCH_COMMIT}"
+    if [ "${ENABLE_BBG}" = "1" ]; then
+        ensure_repo "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_REF}" "${BBG_COMMIT}" "1"
+        if [ -f "$(git -C "${BBG_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
+            log_step "在初始化阶段补齐 Baseband Guard 历史，禁止构建期联网"
+            git_network -C "${BBG_DIR}" fetch --unshallow origin
+        fi
     fi
-    git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" 2>/dev/null || \
-        die "SUSFS KernelSU 兼容补丁不存在: ${SUSFS_KSU_PATCH_COMMIT}"
-    git -C "${SUSFS_DIR}" update-ref \
-        refs/backport-audit/susfs-kernelsu-patch "${SUSFS_KSU_PATCH_COMMIT}"
-    [ "$(git -C "${SUSFS_DIR}" rev-parse refs/backport-audit/susfs-kernelsu-patch)" = \
-        "${SUSFS_KSU_PATCH_COMMIT}" ] || die "SUSFS KernelSU 兼容补丁保活引用异常"
-fi
-if [ "${ENABLE_BBG}" = "1" ]; then
-    ensure_repo "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_REF}" "${BBG_COMMIT}" "1"
-    if [ -f "$(git -C "${BBG_DIR}" rev-parse --absolute-git-dir)/shallow" ]; then
-        log_step "在初始化阶段补齐 Baseband Guard 历史，禁止构建期联网"
-        git_network -C "${BBG_DIR}" fetch --unshallow origin
-    fi
-fi
-python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-inputs \
-    --workspace "${HOST_WORKSPACE_DIR}" || die "固定 AK3 模板或 OTA 镜像准备失败"
+    python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-inputs \
+        --workspace "${HOST_WORKSPACE_DIR}" || die "固定 AK3 模板或 OTA 镜像准备失败"
 
-BACKPORT_BUNDLE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-backports \
-    --workspace "${HOST_WORKSPACE_DIR}")" || die "固定回移包准备失败"
-[ -d "${BACKPORT_BUNDLE_DIR}" ] || die "固定回移包目录缺失: ${BACKPORT_BUNDLE_DIR}"
-log_success "固定回移包已准备并通过验证: ${BACKPORT_BUNDLE_DIR}"
+    BACKPORT_BUNDLE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" prepare-backports \
+        --workspace "${HOST_WORKSPACE_DIR}")" || die "固定回移包准备失败"
+    [ -d "${BACKPORT_BUNDLE_DIR}" ] || die "固定回移包目录缺失: ${BACKPORT_BUNDLE_DIR}"
+    log_success "固定回移包已准备并通过验证: ${BACKPORT_BUNDLE_DIR}"
 
-verify_source_baseline
+    verify_source_baseline
+}
+
 prepare_build_dependencies
 prepare_magiskboot
 prepare_anykernel_tools

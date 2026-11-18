@@ -27,8 +27,9 @@ def function(name):
     return match.group()
 
 
-BUNDLE_BODY = SOURCE[SOURCE.index('BACKPORT_BUNDLE_DIR="$(python3'):
-                     SOURCE.index('\nverify_source_baseline\n')]
+KERNEL_SOURCES = function("prepare_kernel_sources")
+BUNDLE_BODY = KERNEL_SOURCES[KERNEL_SOURCES.index('BACKPORT_BUNDLE_DIR="$(python3'):
+                             KERNEL_SOURCES.index('\n    verify_source_baseline\n')]
 FUNCTIONS = function("parse_init_args")
 PREAMBLE = r'''
 set -euo pipefail
@@ -220,13 +221,14 @@ python3() {
         script = PREAMBLE + definitions + r'''
 run_init_tasks() { printf 'shared|%s\n' "$*"; }
 prepare_userspace_sources() { printf 'userspace\n'; }
+prepare_kernel_sources() { printf 'kernel sources\n'; }
 setup_toolchain() { printf 'toolchain\n'; }
 prepare_build_dependencies
 '''
         result = self.run_script(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), [
-            "shared|setup_toolchain prepare_userspace_sources",
+            "shared|prepare_userspace_sources prepare_kernel_sources setup_toolchain",
         ])
 
     def ndk_script(self, extra=""):
