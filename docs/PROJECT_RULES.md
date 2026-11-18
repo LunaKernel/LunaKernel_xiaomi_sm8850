@@ -81,7 +81,7 @@ ABI/KMI 硬门禁仅针对固定小米 17 同一 OTA 模块闭包实际消费的
 
 主仓库仅消费 fixed 依赖。五项包 pin（`BACKPORT_BUNDLE_MANIFEST_SHA256`、`BACKPORT_BUNDLE_SHA256`、`BACKPORT_BUNDLE_URL`、`CI_TOOLCHAIN_BUNDLE_SHA256`、`CI_TOOLCHAIN_BUNDLE_URL`）必须完整有效。归档、manifest、实际内容和工具链安装树分别按固定摘要验证。现有 v1 包绑定的来源输入字段保持兼容。AK3 模板归档和原样 OTA 镜像独立发布于 [build-inputs-v1-d082477](https://github.com/LunaKernel/ci-dependencies/releases/tag/build-inputs-v1-d082477)，由 `.env` 固定 URL、SHA-256、模板树摘要和镜像大小。
 
-CI 缓存 ccache、固定下载、Manager APK、干净 common、回移内容目录和工具链安装树；key 绑定内容身份与格式。依赖在 init 校验成功后、patch 前保存；common 必须无已跟踪差异、未跟踪或忽略文件，ccache 使用 `compiler_check=content`。目录与完整流程见 [构建说明](BUILDING.md)。
+CI 缓存 ccache、独立 NDK ZIP、小型固定下载、Manager APK、干净 common、回移内容目录和工具链安装树；key 绑定内容身份与格式。依赖在 init 校验成功后、patch 前保存；common 必须无已跟踪差异、未跟踪或忽略文件，ccache 使用 `compiler_check=content`。目录与完整流程见 [构建说明](BUILDING.md)。
 
 依赖制作、官方来源审计与候选调查维护于 [LunaKernel/ci-dependencies](https://github.com/LunaKernel/ci-dependencies)。制作以固定主项目提交提供 pins、清单和适配补丁，验证官方 Git 来源与提交关系，记录制作提交、来源、许可证和内容摘要，输出版本化归档。主仓库保留本次源码、补丁应用、工具身份与目标 OTA 构建检查。
 

@@ -37,7 +37,7 @@ CI 按初始化、内核回移、外部组件接入、编译与审计的顺序�
 完整流程使用 GitHub 托管 `ubuntu-24.04`，分为 build、notify 两个 job：
 
 - **build**：`tools/ci/prepare_runner.sh` 准备宿主，先检查空间，仅在不足时按固定白名单逐项清理无关 SDK，达到 50 GiB 即停止，安装依赖后再次检查；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
-- **缓存**：5 GiB ccache、固定下载、官方 Manager APK、干净 common 源码、回移内容目录和工具链安装树。依赖 key 绑定内容身份与缓存格式，init 验证成功后、patch 前保存。common 缓存要求工作树完全干净；ccache 使用 `compiler_check=content`。
+- **缓存**：5 GiB ccache、独立的 NDK ZIP、小型固定下载、官方 Manager APK、干净 common 源码、回移内容目录和工具链安装树。回移和工具链只缓存已解包内容，不重复缓存原始归档。依赖 key 绑定内容身份与缓存格式，init 验证成功后、patch 前保存。common 缓存要求工作树完全干净；ccache 使用 `compiler_check=content`，实际编译命中统计同时写入日志和任务摘要。
 - **交付**：校验六个交付文件及 `.build-artifacts`、`release.tsv` 后导出为保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`。
 - **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明包含 `SHA256` 与 `Build`。通知失败时，可在 artifact 有效期内单独重跑 notify，复用同次构建产物。
 

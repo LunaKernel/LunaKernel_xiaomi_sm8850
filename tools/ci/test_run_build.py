@@ -44,13 +44,16 @@ class RunBuildTests(unittest.TestCase):
         # 只生成公开测试 pin，不读取项目真实 .env 或实际镜像。
         keys = """
 CI_TOOLCHAIN_TREE_SHA256 ANDROID_NDK_TREE_SHA256 SM8850_C_ARCH SM8850_TUNE_CPU
-AOSP_AUTOFDO_PROFILE_SHA256 CI_CLANG_REVISION AOSP_BUILD_TOOLS_REPO STOCK_AUDIT_TOOLS_COMMIT
-STOCK_FSCK_EROFS_SHA256 STOCK_KMOD_SHA256 STOCK_LIBCXX_SHA256 ANDROID_NDK_URL
-ANDROID_NDK_SHA256 IPSET_URL IPSET_SHA512 LIBMNL_URL LIBMNL_SHA256 KSU_MANAGER_APK_SHA256
-COMMON_REPO
+AOSP_AUTOFDO_PROFILE_SHA256 CI_CLANG_REVISION STOCK_FSCK_EROFS_SHA256 STOCK_KMOD_SHA256
+STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REPO
 """.split()
         pins = dict.fromkeys(keys, "fixture")
         pins.update({
+            "ENABLE_IPSET": "1",
+            "ANDROID_NDK_VERSION": "r30",
+            "ANDROID_NDK_SHA256": "f" * 64,
+            "IPSET_VERSION": "7.24",
+            "LIBMNL_VERSION": "1.0.5",
             "AK3_TEMPLATE_URL": "https://example.invalid/ak3-template.tar.gz",
             "AK3_TEMPLATE_SHA256": "8" * 64,
             "AK3_TEMPLATE_TREE_SHA256": "9" * 64,
@@ -145,7 +148,16 @@ COMMON_REPO
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def read_assignments(self, name):
-        return dict(line.split("=", 1) for line in (self.temp / name).read_text().splitlines())
+        values = {}
+        lines = iter((self.temp / name).read_text().splitlines())
+        for line in lines:
+            if '<<' in line:
+                key, delimiter = line.split('<<', 1)
+                values[key] = '\n'.join(iter(lambda: next(lines), delimiter))
+            else:
+                key, value = line.split('=', 1)
+                values[key] = value
+        return values
 
     def commit_fixture_change(self, path, text):
         with (self.root / path).open("a") as stream:
@@ -211,7 +223,8 @@ COMMON_REPO
 
     def test_input_pins_fail_before_init_and_download_keys_bind_content(self):
         self.assert_success(self.run_step('metadata'))
-        original = self.read_assignments('github.output')['downloads_key']
+        baseline = self.read_assignments('github.output')
+        original = baseline['downloads_key']
         for key in ('AK3_TEMPLATE_URL', 'AK3_TEMPLATE_SHA256', 'AK3_TEMPLATE_TREE_SHA256',
                     'ANDROID17_STOCK_SYSTEM_DLKM_URL', 'ANDROID17_STOCK_SYSTEM_DLKM_SIZE'):
             with self.subTest(missing=key):
@@ -229,9 +242,23 @@ COMMON_REPO
         for key in ('AK3_TEMPLATE_SHA256', 'ANDROID17_STOCK_SYSTEM_DLKM_SHA256'):
             self.commit_fixture_change('.env', f'\n{key}=' + 'a' * 64 + '\n')
             self.assert_success(self.run_step('metadata'))
-            current = self.read_assignments('github.output')['downloads_key']
-            self.assertNotEqual(original, current)
-            original = current
+            output = self.read_assignments('github.output')
+            self.assertNotEqual(original, output['downloads_key'])
+            self.assertEqual(baseline['ndk_key'], output['ndk_key'])
+            original = output['downloads_key']
+        self.commit_fixture_change('.env', '\nANDROID_NDK_SHA256=' + 'b' * 64 + '\n')
+        self.assert_success(self.run_step('metadata'))
+        output = self.read_assignments('github.output')
+        self.assertNotEqual(baseline['ndk_key'], output['ndk_key'])
+        self.assertEqual(original, output['downloads_key'])
+
+    def test_disabled_ipset_has_no_ndk_or_userspace_downloads(self):
+        self.commit_fixture_change('.env', '\nENABLE_IPSET=0\n')
+        self.assert_success(self.run_step('metadata'))
+        output = self.read_assignments('github.output')
+        self.assertNotIn('ndk_key', output)
+        self.assertNotIn('ndk_path', output)
+        self.assertNotIn('/sources/', output['downloads_paths'])
 
     def test_fixed_cache_paths_and_sizes_do_not_require_source_caches(self):
         # fixture 不创建来源目录；fixed 缓存不能依赖它们。
@@ -240,7 +267,17 @@ COMMON_REPO
         output = self.read_assignments("github.output")
         self.assertEqual({key: value for key, value in output.items() if key.endswith("_path")}, {
             "common_path": COMMON_SOURCE, "backports_path": backports, "toolchain_path": TOOLCHAIN_PATH,
+            "ndk_path": "work/cache/downloads/sources/android-ndk-r30-linux.zip",
         })
+        self.assertCountEqual(output['downloads_paths'].splitlines(), [
+            'work/cache/downloads/toolchain-fixture/stock-fsck.erofs',
+            'work/cache/downloads/toolchain-fixture/stock-depmod',
+            'work/cache/downloads/toolchain-fixture/stock-libc++.so',
+            'work/cache/downloads/ci-dependencies/' + '8' * 64 + '.tar',
+            'work/cache/downloads/ota/os4.0.6.0/system_dlkm.img',
+            'work/cache/downloads/sources/ipset-7.24.tar.bz2',
+            'work/cache/downloads/sources/libmnl-1.0.5.tar.bz2',
+        ])
         self.assertEqual(output["backports_key"], "luna-backports-v1-ubuntu24-x64-" + "1" * 64)
         self.assertEqual(output["toolchain_key"], "luna-toolchain-v1-ubuntu24-x64-" + "e" * 64)
         for name in SOURCE_CACHES:
@@ -263,15 +300,15 @@ COMMON_REPO
                      "CI_TOOLCHAIN_BUNDLE_URL": "https://example.invalid/moved.tar.zst"}
         self.assert_success(self.run_step("metadata", **relocated, GITHUB_RUN_ID="456"))
         changed = self.read_assignments("github.output")
-        for key in ("backports_key", "toolchain_key", "common_key", "downloads_key", "ccache_prefix"):
+        cache_keys = ('backports_key', 'toolchain_key', 'common_key', 'downloads_key', 'ndk_key', 'ccache_prefix')
+        for key in cache_keys:
             self.assertEqual(original[key], changed[key])
-        # 压缩归档改变只影响下载缓存，不改变已解包内容的身份。
+        # 只重新打包不改变安装树，也不影响已独立的下载缓存。
         repacked = {**FIXED_PINS, "BACKPORT_BUNDLE_SHA256": "4" * 64,
                     "CI_TOOLCHAIN_BUNDLE_SHA256": "5" * 64}
         self.assert_success(self.run_step("metadata", **repacked))
         changed = self.read_assignments("github.output")
-        self.assertNotEqual(original["downloads_key"], changed["downloads_key"])
-        for key in ("backports_key", "toolchain_key", "common_key"):
+        for key in cache_keys:
             self.assertEqual(original[key], changed[key])
         replacement = {**FIXED_PINS, "BACKPORT_BUNDLE_MANIFEST_SHA256": "6" * 64}
         self.assert_success(self.run_step("metadata", **replacement))
@@ -434,7 +471,8 @@ COMMON_REPO
         self.assert_success(self.run_step("compile"))
         self.assert_calls(list(PHASES))
         result = self.run_step(
-            "summary", MOCK_CCACHE_FAIL="1", CI_COMPILE_RESULT="success", CI_UPLOAD_RESULT="success",
+            "summary", CI_CCACHE_USED="true", MOCK_CCACHE_FAIL="1",
+            CI_COMPILE_RESULT="success", CI_UPLOAD_RESULT="success",
             CI_ARTIFACT_URL="https://github.com/example/luna/actions/runs/123/artifacts/456")
         self.assert_success(result)
         summary = (self.temp / "summary.md").read_text()
@@ -444,7 +482,14 @@ COMMON_REPO
         self.assertIn("- [完整交付集合]", summary)
         self.assertIn("待实机验收", summary)
         self.assertIn("| build | 0 |", summary)
+        self.assertIn("无法读取 ccache 统计", summary)
         self.assertNotIn("invalid option", result.stderr)
+        result = self.run_step("summary", CI_CCACHE_USED="true", CI_NDK_HIT="true")
+        self.assert_success(result)
+        self.assertIn("fixture ccache --show-stats", result.stdout)
+        summary = (self.temp / "summary.md").read_text()
+        self.assertIn("fixture ccache --show-stats", summary)
+        self.assertIn("NDK=true", summary)
 
     def prepare_release(self):
         manager = "KernelSU_v3.3.1-29-gab05a062_32709-release.apk"

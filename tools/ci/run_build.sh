@@ -76,21 +76,43 @@ metadata() {
     python3 - <<'PY' >> "${GITHUB_OUTPUT}"
 import hashlib
 import os
+import re
 
 def identity(keys):
     return hashlib.sha256('\0'.join(key + '=' + os.environ[key] for key in keys).encode()).hexdigest()
 
+def path_pin(key):
+    value = os.environ[key]
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', value):
+        raise SystemExit('下载缓存路径 pin 无效: ' + key)
+    return value
+
 compiler = identity(('CI_TOOLCHAIN_TREE_SHA256', 'ANDROID_NDK_TREE_SHA256',
                      'SM8850_C_ARCH', 'SM8850_TUNE_CPU', 'AOSP_AUTOFDO_PROFILE_SHA256'))
-download_keys = ('CI_CLANG_REVISION', 'AOSP_BUILD_TOOLS_REPO',
-                 'STOCK_AUDIT_TOOLS_COMMIT', 'STOCK_FSCK_EROFS_SHA256',
-                 'STOCK_KMOD_SHA256', 'STOCK_LIBCXX_SHA256',
-                 'ANDROID_NDK_URL', 'ANDROID_NDK_SHA256', 'IPSET_URL', 'IPSET_SHA512',
-                 'LIBMNL_URL', 'LIBMNL_SHA256',
-                 'BACKPORT_BUNDLE_SHA256', 'CI_TOOLCHAIN_BUNDLE_SHA256',
-                 'AK3_TEMPLATE_SHA256', 'ANDROID17_STOCK_SYSTEM_DLKM_SHA256')
 print('ccache_prefix=luna-ccache-v1-ubuntu24-x64-' + compiler)
-print('downloads_key=luna-downloads-v1-' + identity(download_keys))
+
+# 工具链和回移已有解包缓存，不再缓存其原始归档。
+downloads = 'work/cache/downloads'
+stock_tools = downloads + '/toolchain-' + path_pin('CI_CLANG_REVISION')
+download_paths = [
+    *(stock_tools + '/' + name for name in ('stock-fsck.erofs', 'stock-depmod', 'stock-libc++.so')),
+    downloads + '/ci-dependencies/' + os.environ['AK3_TEMPLATE_SHA256'] + '.tar',
+    os.environ['ANDROID17_STOCK_SYSTEM_DLKM_IMAGE'],
+]
+download_keys = ('CI_CLANG_REVISION', 'STOCK_FSCK_EROFS_SHA256', 'STOCK_KMOD_SHA256',
+                 'STOCK_LIBCXX_SHA256', 'AK3_TEMPLATE_SHA256', 'ANDROID17_STOCK_SYSTEM_DLKM_SHA256')
+if os.environ['ENABLE_IPSET'] == '1':
+    sources = downloads + '/sources'
+    ndk_version = path_pin('ANDROID_NDK_VERSION')
+    if not re.fullmatch(r'[0-9a-f]{64}', os.environ['ANDROID_NDK_SHA256']):
+        raise SystemExit('NDK 下载缓存摘要无效')
+    print(f'ndk_path={sources}/android-ndk-{ndk_version}-linux.zip')
+    print('ndk_key=luna-ndk-archive-v1-' + identity(('ANDROID_NDK_VERSION', 'ANDROID_NDK_SHA256')))
+    download_paths += [f"{sources}/ipset-{path_pin('IPSET_VERSION')}.tar.bz2",
+                       f"{sources}/libmnl-{path_pin('LIBMNL_VERSION')}.tar.bz2"]
+    download_keys += ('IPSET_VERSION', 'IPSET_SHA512', 'LIBMNL_VERSION', 'LIBMNL_SHA256')
+print('downloads_key=luna-downloads-v2-' + identity(download_keys))
+print('downloads_paths<<paths', *download_paths, 'paths', sep='\n')
 print('manager_key=luna-manager-v1-' + os.environ['KSU_MANAGER_APK_SHA256'])
 
 # common 的缓存格式与内容身份独立于 init 调度，恢复后仍由 init 验证干净树。
@@ -203,11 +225,20 @@ PY
 
 summary() {
     [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] || return 0
+    local stats='未运行 ccache'
+    if [[ "${CI_CCACHE_USED:-}" == true ]]; then
+        if ! stats="$(CCACHE_DIR="${ROOT}/work/cache/ccache" ccache --show-stats 2>/dev/null)"; then
+            stats='无法读取 ccache 统计'
+        fi
+        printf '[CACHE] 编译统计\n%s\n' "${stats}"
+    fi
     {
         printf '### Luna CI 构建\n\n- 提交：`%s`\n- 构建：`%s`\n' "${GITHUB_SHA:-unknown}" "${LUNA_BUILD_ID:-未生成}"
         printf -- '- 构建检查：`%s`；产物上传：`%s`\n' "${CI_COMPILE_RESULT:-未运行}" "${CI_UPLOAD_RESULT:-未运行}"
-        printf -- '- ccache 恢复键：`%s`；下载精确命中=%s；Manager 精确命中=%s\n' \
-            "${CI_CCACHE_HIT:-未恢复}" "${CI_DOWNLOADS_HIT:-false}" "${CI_MANAGER_HIT:-false}"
+        printf -- '- ccache 恢复键：`%s`\n' "${CI_CCACHE_HIT:-未恢复}"
+        printf -- '- 依赖精确命中：NDK=%s，小型下载=%s，Manager=%s，common=%s，backports=%s，工具链=%s\n' \
+            "${CI_NDK_HIT:-false}" "${CI_DOWNLOADS_HIT:-false}" "${CI_MANAGER_HIT:-false}" \
+            "${CI_COMMON_HIT:-false}" "${CI_BACKPORTS_HIT:-false}" "${CI_TOOLCHAIN_HIT:-false}"
         if [[ -n "${CI_ARTIFACT_URL:-}" ]]; then
             printf -- '- [完整交付集合](%s)，保留 30 天；待实机验收。\n' "${CI_ARTIFACT_URL}"
         fi
@@ -215,8 +246,7 @@ summary() {
             printf '\n| 阶段 | 退出码 | 秒 |\n|---|---:|---:|\n'
             awk -F '\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' "${CI_RUN_DIR}/logs/stages.tsv"
         fi
-        printf '\n```text\n'
-        CCACHE_DIR="${ROOT}/work/cache/ccache" ccache --show-stats 2>/dev/null || true
+        printf '\n```text\n%s\n' "${stats}"
         df -h .
         printf '```\n'
     } >> "${GITHUB_STEP_SUMMARY}"
