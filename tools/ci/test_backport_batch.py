@@ -145,19 +145,19 @@ class BackportBatchTests(unittest.TestCase):
             f"print({str(self.bundle)!r})\n")
         self.write_pins()
 
-    def test_bundle_combined_verification_reuses_helper_without_sources(self):
+    def test_bundle_base_diff_replays_once_without_sources(self):
         self.assert_success(self.run_tool("apply", self.target))
         original = self.target_diff()
         self.bundle_trace.write_text("")
         self.trace.write_text("")
-        self.assert_success(self.run_tool("verify-applied-base-diff", self.target,
+        self.assert_success(self.run_tool("verify-base-diff", self.target,
                                           hashlib.sha256(b"").hexdigest()))
         self.assertEqual(len(self.bundle_trace.read_text().splitlines()), 1)
         calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
         self.assertFalse(any("--is-ancestor" in call or "show" in call for call in calls))
         index_calls = [call for call in calls if "apply" in call and "--cached" in call]
-        self.assertEqual(len(index_calls), 14)
-        self.assertEqual(sum("--reverse" in call for call in index_calls), 6)
+        self.assertEqual(len(index_calls), 9)
+        self.assertEqual(sum("--reverse" in call for call in index_calls), 4)
         self.assertFalse(any("apply" in call and "--reverse" in call and "--cached" not in call
                              for call in calls))
         self.assertEqual(self.target_diff(), original)

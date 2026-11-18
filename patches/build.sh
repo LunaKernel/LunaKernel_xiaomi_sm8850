@@ -376,7 +376,7 @@ verify_final_source_deltas() {
     verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
     ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
     bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" \
-        verify-applied-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
+        verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
     [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
         die "KernelSU 精确差异指纹不匹配: ${ksu_sha256}"
     log_success "GKI common 基础差异、独立回移层与 KernelSU 精确差异指纹匹配"
