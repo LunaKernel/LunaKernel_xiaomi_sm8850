@@ -38,7 +38,7 @@ CI 按初始化、内核回移、外部组件接入、编译与审计的顺序�
 
 - **build**：`tools/ci/prepare_runner.sh` 准备宿主，先检查空间，仅在不足时按固定白名单逐项清理无关 SDK，达到 50 GiB 即停止。先用 runner 现有 apt 索引安装依赖，失败才刷新索引并重试，安装后再次检查空间。宿主 `.deb` 缓存按本轮 APT 安装计划的文件名、大小和 SHA-256 精确匹配；恢复后逐包校验再交给 APT，缺失或无效的包由 APT 正常下载，不缓存索引、配置或安装状态；`tools/ci/run_build.sh` 通过 `metadata`、`init`、`compile`、`export`、`summary` 子命令调度现有流程。init 与 compile 共用 330 分钟预算，源码、工具、目标 OTA、配置、ABI/STG 和交付门禁全部保留。
 - **缓存**：5 GiB ccache、小型固定下载、官方 Manager APK、干净 common 源码、回移内容目录和工具链安装树。回移和工具链只缓存已解包内容，不重复缓存原始归档。依赖 key 绑定内容身份与缓存格式，init 验证成功后、patch 前保存。common 缓存要求工作树完全干净；ccache 使用 `compiler_check=content`，优先精确恢复已成功编译的同提交缓存，未命中时按工具链等编译输入的公共前缀回退；只在成功编译且未命中精确缓存时保存。实际编译命中统计同时写入日志和任务摘要。
-- **交付**：校验四个交付文件及 `.build-artifacts`、`release.tsv` 后导出为保留相对路径的 `tar.gz`，上传为 Actions artifact，保留 30 天。新产物状态为 `awaiting-device`。
+- **交付**：校验本次构建记录后，仅上传 AK3 ZIP、官方 Manager APK 与 `delivery.json`（提交、构建身份和两件附件的 SHA-256）作为交付 artifact。审计 ZIP 独立留存，不进入通知附件；两种 artifact 均保留 30 天。新产物状态为 `awaiting-device`。
 - **notify**：`tools/ci/notify_telegram.py` 使用仓库 Actions secrets `TG_BOT_TOKEN`、`CHAT_ID`，发送已校验的内核 ZIP 和官方 Manager APK，附件说明包含 `SHA256` 与 `Build`。通知失败时，可在 artifact 有效期内单独重跑 notify，复用同次构建产物。
 
 两个 Telegram secrets 仅供 notify 使用。发送成功但响应丢失时，重试可能产生重复文件消息。
@@ -78,7 +78,7 @@ luna-xiaomi17-g<8位提交>-YYYYMMDD.zip
 Image-luna-xiaomi17-g<8位提交>-YYYYMMDD
 ```
 
-官方 CI Manager APK 与 Image、内核 ZIP 同目录。审计 ZIP、日志和 `.build-artifacts` 位于 `work/audit/<同名目录>/`。四个交付文件由清单绑定 SHA-256 和相对路径，`release.tsv` 指定配套 APK；历史六文件归档仍按原清单完整导入。
+官方 CI Manager APK 与 Image、内核 ZIP 同目录。审计 ZIP、日志和 `.build-artifacts` 位于 `work/audit/<同名目录>/`。构建记录中的四个文件由清单绑定 SHA-256 和相对路径，`release.tsv` 指定配套 APK。独立 Image 不再作为 CI 交付件；需要时可从 AK3 ZIP 取出 `Image`。历史完整归档仍按原清单导入。
 
 AnyKernel3 模板源码（官方基线、Luna 补丁及许可证）维护于依赖仓的 [`ak3_template/`](https://github.com/LunaKernel/ci-dependencies/tree/build-inputs-v1-d082477/ak3_template)。`patches/build.sh` 使用 init 已校验的模板、BusyBox 和 MagiskBoot 组装刷机包，仅替换 Image，保留当前槽、分区容量和镜像大小检查。KernelSU/SUSFS 保持内核集成，不打包 SUSFS 模块或独立 helper。
 

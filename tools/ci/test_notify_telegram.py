@@ -23,25 +23,13 @@ class NotifyTests(unittest.TestCase):
         self.build_id = "luna-xiaomi17-gaaaaaaaa-20261108-1200"
         self.stem = "luna-xiaomi17-gaaaaaaaa-20261108"
         self.manager = "KernelSU_v3.3.1-29-gab05a062_32709-release.apk"
-        kernel, audit, self.component = notify.release_artifacts.release_directories(self.build_id)
-        self.zip = kernel + "/" + self.stem + ".zip"
-        self.apk = kernel + "/" + self.manager
-        self.files = {
-            kernel + "/Image-" + self.stem: b"kernel fixture",
-            self.zip: b"zip fixture",
-            self.apk: b"apk fixture",
-            audit + "/" + self.stem + "-audit.zip": b"audit fixture",
-        }
+        self.zip = self.stem + ".zip"
+        self.apk = self.manager
+        self.files = {self.zip: b"zip fixture", self.apk: b"apk fixture"}
         for name, content in self.files.items():
-            path = self.root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
-        self.manifest = self.root / audit / ".build-artifacts"
-        self.state = self.root / audit / "release.tsv"
+            (self.root / name).write_bytes(content)
+        self.manifest = self.root / "delivery.json"
         self.write_manifest()
-        self.state.write_text("field\tvalue\nbuild_id\t" + self.build_id +
-                              "\nproject_commit\t" + self.commit +
-                              "\nvalidation_status\tawaiting-device\nksu_manager_apk\t" + self.manager + "\n")
         self.env = {
             "KSU_MANAGER_APK_NAME": self.manager,
             "KSU_MANAGER_APK_SHA256": notify.release_artifacts.sha256(self.root / self.apk),
@@ -60,9 +48,13 @@ class NotifyTests(unittest.TestCase):
         self.sleep = self.sleep_patch.start()
         self.addCleanup(self.sleep_patch.stop)
 
-    def write_manifest(self):
-        self.manifest.write_text("".join(notify.release_artifacts.sha256(self.root / name) +
-                                         "  " + name + "\n" for name in self.files))
+    def write_manifest(self, **overrides):
+        self.manifest.write_text(json.dumps({
+            "build_id": self.build_id, "project_commit": self.commit,
+            "validation_status": "awaiting-device",
+            "sha256": {name: notify.release_artifacts.sha256(self.root / name) for name in self.files},
+            **overrides,
+        }))
 
     def arguments(self):
         return ["--workspace", str(self.root), "--build-id", self.build_id,
@@ -105,23 +97,23 @@ class NotifyTests(unittest.TestCase):
         self.assert_local_failure()
 
     def test_full_commit_is_checked_beyond_short_prefix(self):
-        self.state.write_text(self.state.read_text().replace(self.commit, "a" * 8 + "b" * 32))
+        self.write_manifest(project_commit="a" * 8 + "b" * 32)
         self.assert_local_failure()
 
     def test_new_ci_output_cannot_claim_device_acceptance(self):
-        self.state.write_text(self.state.read_text().replace("awaiting-device", "accepted"))
+        self.write_manifest(validation_status="accepted")
         self.assert_local_failure()
 
-    def test_extra_component_in_manifest_is_rejected(self):
-        name = self.component + "/ipset-arm64-v7.24"
-        (self.root / self.component).mkdir(parents=True)
-        self.files[name] = b"extra"
-        (self.root / name).write_bytes(b"extra")
-        self.write_manifest()
+    def test_extra_attachment_is_rejected(self):
+        (self.root / "Image").write_bytes(b"extra")
         self.assert_local_failure()
 
-    def test_unsafe_manifest_path_is_rejected(self):
-        self.manifest.write_text(self.manifest.read_text() + "0" * 64 + "  ../outside\n")
+    def test_unexpected_manifest_path_is_rejected(self):
+        self.write_manifest(sha256={self.apk: self.env["KSU_MANAGER_APK_SHA256"], "../outside": "0" * 64})
+        self.assert_local_failure()
+
+    def test_invalid_attachment_is_rejected(self):
+        (self.root / self.zip).write_bytes(b"corrupt")
         self.assert_local_failure()
 
     def test_symlink_is_rejected(self):

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -29,7 +30,7 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def checked_documents(workspace, build_id, project_commit):
+def delivery_identity(build_id, project_commit):
     require(re.fullmatch(r"[0-9a-f]{40}", project_commit), "项目提交必须是完整 SHA")
     manager = os.environ.get("KSU_MANAGER_APK_NAME", "")
     manager_sha = os.environ.get("KSU_MANAGER_APK_SHA256", "")
@@ -39,39 +40,73 @@ def checked_documents(workspace, build_id, project_commit):
     require(fingerprint.startswith("Xiaomi/pudding/pudding:") and
             fingerprint.endswith("/OS4.0.6.0.XPCCN:user/release-keys"), "OTA 与固定 system_dlkm 身份不一致")
 
-    names = release_artifacts.verify(workspace, build_id)
-    kernel_dir, audit_dir, _ = release_artifacts.release_directories(build_id)
+    release_artifacts.release_directories(build_id)
     match = release_artifacts.BUILD_ID.fullmatch(build_id)
+    require(project_commit[:8] == match[1], "构建编号与项目提交不符")
     stem = "luna-xiaomi17-g" + match[1] + "-" + match[2]
-    kernel_zip = kernel_dir + "/" + stem + ".zip"
-    manager_path = kernel_dir + "/" + manager
-    expected = {
-        kernel_dir + "/Image-" + stem,
-        kernel_zip,
-        manager_path,
-        audit_dir + "/" + stem + "-audit.zip",
-    }
+    return stem, manager, manager_sha
+
+
+def check_size(path):
+    require(path.is_file() and 0 < path.stat().st_size <= MAX_UPLOAD_BYTES,
+            "Telegram 文件缺失、为空或超过 50 MB: " + path.name)
+
+
+def export_delivery(workspace, build_id, project_commit, destination):
+    stem, manager, manager_sha = delivery_identity(build_id, project_commit)
+    kernel_dir, audit_dir, _ = release_artifacts.release_directories(build_id)
+    kernel_zip = stem + ".zip"
+    audit = audit_dir + "/" + stem + "-audit.zip"
     state_path = audit_dir + "/release.tsv"
     manifest_path = audit_dir + "/.build-artifacts"
-    require(set(names) == expected | {state_path, manifest_path}, "CI 交付必须包含固定的完整四文件集合")
-    state = dict(line.split("\t", 1) for line in
-                 release_artifacts.checked_path(workspace, state_path).read_text().splitlines()[1:])
+    sources = {name: kernel_dir + "/" + name for name in (kernel_zip, manager)}
+    expected = set(sources.values()) | {kernel_dir + "/Image-" + stem, audit, state_path, manifest_path}
+    require(set(release_artifacts.verify(workspace, build_id)) == expected, "内部构建记录不完整或含额外文件")
+    state = dict(line.split("\t", 1) for line in (workspace / state_path).read_text().splitlines()[1:])
     require(state["project_commit"] == project_commit, "发布完整项目提交与本次 CI 不符")
     require(state["validation_status"] == "awaiting-device", "本次 CI 产物必须标记 awaiting-device")
     require(state.get("ksu_manager_apk") == manager, "发布 Manager 文件名与 pin 不符")
     records = {}
-    for line in release_artifacts.checked_path(workspace, manifest_path).read_text().splitlines():
+    for line in (workspace / manifest_path).read_text().splitlines():
         digest, relative = release_artifacts.RECORD.fullmatch(line).groups()
         records[relative] = digest
-    require(records[manager_path] == manager_sha, "发布 Manager SHA-256 与官方 pin 不符")
+    hashes = {name: records[relative] for name, relative in sources.items()}
+    require(hashes[manager] == manager_sha, "发布 Manager SHA-256 与官方 pin 不符")
+    for relative in sources.values():
+        check_size(workspace / relative)
 
+    destination.mkdir()
+    for name, relative in sources.items():
+        shutil.copyfile(workspace / relative, destination / name)
+    (destination / "delivery.json").write_text(json.dumps({
+        "build_id": build_id, "project_commit": project_commit,
+        "validation_status": "awaiting-device", "sha256": hashes,
+    }, sort_keys=True) + "\n", encoding="utf-8")
+    return audit
+
+
+def checked_documents(workspace, build_id, project_commit):
+    stem, manager, manager_sha = delivery_identity(build_id, project_commit)
+    names = (stem + ".zip", manager)
+    require(workspace.is_dir() and not workspace.is_symlink() and
+            {entry.name for entry in workspace.iterdir()} == {*names, "delivery.json"},
+            "交付归档必须只包含 AK3、官方 Manager 和摘要清单")
+    manifest = release_artifacts.checked_path(workspace, "delivery.json")
+    require(manifest.is_file() and manifest.stat().st_size <= 4096, "交付清单格式错误")
+    metadata = json.loads(manifest.read_text(encoding="utf-8"))
+    require(isinstance(metadata, dict) and metadata.keys() == {
+                "build_id", "project_commit", "validation_status", "sha256"} and
+            metadata["build_id"] == build_id and metadata["project_commit"] == project_commit and
+            metadata["validation_status"] == "awaiting-device", "交付身份或验收状态错误")
+    hashes = metadata["sha256"]
+    require(isinstance(hashes, dict) and hashes.keys() == set(names) and hashes[manager] == manager_sha,
+            "交付附件名或官方 Manager 摘要不符")
     documents = []
-    for relative in (kernel_zip, manager_path):
-        path = release_artifacts.checked_path(workspace, relative)
-        require(0 < path.stat().st_size <= MAX_UPLOAD_BYTES, "Telegram 文件为空或超过 50 MB: " + path.name)
-        caption = f"SHA256: {records[relative]}\nBuild: {build_id}"
-        require(len(caption) <= 1024, "Telegram caption 超过长度限制")
-        documents.append((path, caption))
+    for name in names:
+        path = release_artifacts.checked_path(workspace, name)
+        check_size(path)
+        require(hashes[name] == release_artifacts.sha256(path), "交付附件摘要不匹配: " + name)
+        documents.append((path, f"SHA256: {hashes[name]}\nBuild: {build_id}"))
     return documents
 
 
@@ -155,12 +190,18 @@ def main(argv=None):
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--build-id", required=True)
     parser.add_argument("--project-commit", required=True)
-    parser.add_argument("--check-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check-only", action="store_true")
+    mode.add_argument("--export-dir", type=Path)
     args = parser.parse_args(argv)
-    documents = checked_documents(args.workspace.resolve(strict=True), args.build_id,
-                                  args.project_commit)
+    if args.export_dir is not None:
+        audit = export_delivery(args.workspace, args.build_id, args.project_commit, args.export_dir)
+        print(f"delivery_path={args.export_dir}")
+        print(f"audit_path={audit}")
+        return
+    documents = checked_documents(args.workspace, args.build_id, args.project_commit)
     if args.check_only:
-        print("[OK] CI 四文件、项目身份、官方 Manager 与 TG 文件大小检查通过")
+        print("[OK] AK3 与官方 Manager 的交付身份和摘要通过")
         return
     # 两个文件全部通过本地检查后，才访问 secret 并开始发送。
     token = os.environ.get("TG_BOT_TOKEN", "")

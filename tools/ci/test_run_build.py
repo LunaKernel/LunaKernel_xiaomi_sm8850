@@ -2,6 +2,7 @@
 """用临时 Git 仓库验证 CI 编排；阶段入口均为桩，不下载或编译。"""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -461,7 +462,7 @@ STOCK_LIBCXX_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REPO
         # 这些以 '-' 起始的 printf 必须传入 '--'，否则摘要会把成功任务变成失败。
         self.assertIn("- 构建检查：`success`；产物上传：`success`", summary)
         self.assertIn("- ccache 恢复键：", summary)
-        self.assertIn("- [完整交付集合]", summary)
+        self.assertIn("- [AK3 与官方 Manager]", summary)
         self.assertIn("待实机验收", summary)
         self.assertIn("| build | 0 |", summary)
         self.assertIn("无法读取 ccache 统计", summary)
@@ -504,36 +505,28 @@ STOCK_LIBCXX_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REPO
             path.write_bytes(data)
         return files
 
-    def test_export_contains_only_complete_verified_delivery_and_preserves_sources(self):
+    def test_export_contains_only_ak3_manager_and_manifest(self):
         files = self.prepare_release()
-        audit = self.root / "work/audit" / self.env["LUNA_BUILD_ID"]
-        (audit / "unlisted.log").write_text("not a release artifact\n")
         self.assert_success(self.run_step("export"))
-        bundle = self.root / self.read_assignments("github.output")["bundle_path"]
-        with tarfile.open(bundle) as archive:
-            members = archive.getmembers()
-            self.assertCountEqual([member.name for member in members], files)
-            self.assertTrue(all(member.isfile() for member in members))
-            for member in members:
-                self.assertEqual(archive.extractfile(member).read(), files[member.name])
-        restored = self.temp / "restored"
-        restored.mkdir()
-        result = subprocess.run([
-            "python3", "-c",
-            "import sys; from pathlib import Path; from release_artifacts import import_archive; "
-            "import_archive(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3])",
-            str(bundle), str(restored), self.env["LUNA_BUILD_ID"],
-        ], cwd=self.root / "tools", env=self.env, capture_output=True, text=True, timeout=10)
-        self.assert_success(result)
+        outputs = self.read_assignments("github.output")
+        delivery = self.root / outputs["delivery_path"]
+        payload = {Path(name).name: data for name, data in files.items()
+                   if name.startswith("kernel_out/") and name.endswith((".zip", ".apk"))}
+        self.assertCountEqual([path.name for path in delivery.iterdir()], [*payload, "delivery.json"])
+        self.assertEqual((self.root / outputs["audit_path"]).read_bytes(), b"audit fixture")
+        for name, data in payload.items():
+            self.assertEqual((delivery / name).read_bytes(), data)
+        self.assertEqual(json.loads((delivery / "delivery.json").read_text()), {
+            "build_id": self.env["LUNA_BUILD_ID"], "project_commit": self.env["LUNA_PROJECT_COMMIT"],
+            "validation_status": "awaiting-device",
+            "sha256": {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()},
+        })
         for name, data in files.items():
             self.assertEqual((self.root / name).read_bytes(), data)
-            self.assertEqual((restored / name).read_bytes(), data)
-        self.assertFalse((self.root / self.env["CI_RUN_DIR"] / "export").exists())
-        digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
         result = self.run_step("export")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("拒绝覆盖", result.stderr)
-        self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), digest)
+        for name, data in payload.items():
+            self.assertEqual((delivery / name).read_bytes(), data)
 
     def test_export_rejects_corrupt_artifacts_and_missing_manager_record(self):
         files = self.prepare_release()
@@ -553,7 +546,7 @@ STOCK_LIBCXX_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REPO
         result = self.run_step("export")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("缺少", result.stderr)
-        self.assertFalse(list((self.root / self.env["CI_RUN_DIR"]).glob("*.tar.gz")))
+        self.assertFalse((self.root / self.env["CI_RUN_DIR"] / "delivery").exists())
         self.assertFalse((self.temp / "github.output").exists())
 
     def test_import_preserves_legacy_components(self):

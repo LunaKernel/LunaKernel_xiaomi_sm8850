@@ -191,28 +191,12 @@ compile() {
     printf '[OK] Kbuild 670/680 的源码、宿主工具和实际参数证据通过\n'
 }
 
-export_bundle() {
-    python3 tools/ci/notify_telegram.py --check-only --workspace "${ROOT}" \
-        --build-id "${LUNA_BUILD_ID:?}" --project-commit "${LUNA_PROJECT_COMMIT:?}"
-    local bundle
-    bundle="${CI_RUN_DIR}/luna-${LUNA_PROJECT_COMMIT:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
-    [[ ! -e "${bundle}" && ! -L "${bundle}" ]] || fail '拒绝覆盖已有 CI 传输归档'
-    python3 - "${ROOT}" "${LUNA_BUILD_ID}" "${bundle}" <<'PY'
-import gzip
-import sys
-import tarfile
-from pathlib import Path
-sys.path.insert(0, 'tools')
-from release_artifacts import verify
-
-root, build_id, target = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
-names = verify(root, build_id)
-with target.open('xb') as raw, gzip.GzipFile(fileobj=raw, mode='wb', compresslevel=1) as zipped:
-    with tarfile.open(fileobj=zipped, mode='w') as archive:
-        for name in names:
-            archive.add(root / name, arcname=name, recursive=False)
-PY
-    printf 'bundle_path=%s\n' "${bundle}" >> "${GITHUB_OUTPUT:?}"
+export_delivery() {
+    local outputs
+    outputs="$(python3 tools/ci/notify_telegram.py --workspace "${ROOT}" \
+        --build-id "${LUNA_BUILD_ID:?}" --project-commit "${LUNA_PROJECT_COMMIT:?}" \
+        --export-dir "${CI_RUN_DIR}/delivery")"
+    printf '%s\n' "${outputs}" >> "${GITHUB_OUTPUT:?}"
 }
 
 summary() {
@@ -232,7 +216,7 @@ summary() {
             "${CI_DOWNLOADS_HIT:-false}" "${CI_MANAGER_HIT:-false}" \
             "${CI_COMMON_HIT:-false}" "${CI_BACKPORTS_HIT:-false}" "${CI_TOOLCHAIN_HIT:-false}"
         if [[ -n "${CI_ARTIFACT_URL:-}" ]]; then
-            printf -- '- [完整交付集合](%s)，保留 30 天；待实机验收。\n' "${CI_ARTIFACT_URL}"
+            printf -- '- [AK3 与官方 Manager](%s)，保留 30 天；待实机验收。\n' "${CI_ARTIFACT_URL}"
         fi
         if [[ -n "${CI_RUN_DIR:-}" && -f "${CI_RUN_DIR}/logs/stages.tsv" ]]; then
             printf '\n| 阶段 | 退出码 | 秒 |\n|---|---:|---:|\n'
@@ -258,7 +242,7 @@ case "${1:-}" in
                 cache_sizes
                 ;;
             compile) compile ;;
-            export) export_bundle ;;
+            export) export_delivery ;;
         esac
         ;;
     summary) summary ;;
