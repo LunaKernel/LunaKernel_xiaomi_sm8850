@@ -89,7 +89,9 @@ def path_pin(key):
 
 compiler = identity(('CI_TOOLCHAIN_TREE_SHA256', 'ANDROID_NDK_TREE_SHA256',
                      'SM8850_C_ARCH', 'SM8850_TUNE_CPU', 'AOSP_AUTOFDO_PROFILE_SHA256'))
-print('ccache_prefix=luna-ccache-v1-ubuntu24-x64-' + compiler)
+ccache_prefix = 'luna-ccache-v1-ubuntu24-x64-' + compiler
+print('ccache_prefix=' + ccache_prefix)
+print('ccache_key=' + ccache_prefix + '-commit-' + os.environ['GITHUB_SHA'])
 
 # 工具链和回移已有解包缓存，不再缓存其原始归档。
 downloads = 'work/cache/downloads'

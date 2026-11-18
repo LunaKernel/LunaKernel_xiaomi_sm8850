@@ -303,6 +303,10 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
         cache_keys = ('backports_key', 'toolchain_key', 'common_key', 'downloads_key', 'ndk_key', 'ccache_prefix')
         for key in cache_keys:
             self.assertEqual(original[key], changed[key])
+        self.assertNotEqual(original['ccache_key'], changed['ccache_key'])
+        self.assertEqual(changed['ccache_key'], changed['ccache_prefix'] + '-commit-' + self.env['GITHUB_SHA'])
+        self.assert_success(self.run_step('metadata', GITHUB_RUN_ID='789', GITHUB_RUN_ATTEMPT='2'))
+        self.assertEqual(changed['ccache_key'], self.read_assignments('github.output')['ccache_key'])
         # 只重新打包不改变安装树，也不影响已独立的下载缓存。
         repacked = {**FIXED_PINS, "BACKPORT_BUNDLE_SHA256": "4" * 64,
                     "CI_TOOLCHAIN_BUNDLE_SHA256": "5" * 64}
@@ -369,8 +373,9 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
         self.assert_success(self.run_step("metadata"))
         changed = self.read_assignments("github.output")
         self.assertNotEqual(original["common_key"], changed["common_key"])
+        self.assertEqual(original['ccache_prefix'], changed['ccache_prefix'])
         for key in original:
-            if key.endswith("_key") and key != "common_key":
+            if key.endswith('_key') and key not in ('common_key', 'ccache_key'):
                 self.assertEqual(original[key], changed[key])
         self.commit_fixture_change(".env", "\nCOMMON_SOURCE_DIR=sources\n")
         result = self.run_step("metadata")
