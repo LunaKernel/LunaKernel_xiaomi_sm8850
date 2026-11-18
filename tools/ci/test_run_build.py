@@ -420,10 +420,9 @@ COMMON_REPO
             with self.subTest(phase=phase):
                 self.check_phase_stop(phase)
 
-    def test_timeout_stops_at_each_phase(self):
-        for phase in PHASES:
-            with self.subTest(phase=phase):
-                self.check_phase_stop(phase, timeout=True)
+    def test_real_timeout_preserves_exit_code_and_stops_compile(self):
+        # 所有阶段共享 phase()；逐阶段的非零退出由上一测试覆盖。
+        self.check_phase_stop('patch_external', timeout=True)
 
     def test_expired_deadline_does_not_start_phase(self):
         result = self.run_step("compile", CI_BUILD_DEADLINE=str(int(time.time()) - 1))
