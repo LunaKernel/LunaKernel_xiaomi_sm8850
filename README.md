@@ -12,7 +12,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 | 实机验收系统 | HyperOS 4 `OS4.0.6.0.XPCCNXM` / Android 17 |
 | 静态模块闭包 | `OS4.0.6.0.XPCCNXM` |
 | 内核 | Linux 6.12.92、4 KiB |
-| AOSP 基线 | `android16-6.12-2026-09_r15` / KMI generation 6 |
+| AOSP 基线 | `android16-6.12-2026-09_r16` / KMI generation 6 |
 | 安装方式 | AnyKernel3，仅替换 boot 中的 `Image` |
 
 已验收 Image 与系统版本见[验证记录](docs/VALIDATION.md)。刷写前请备份当前 boot，并确保能够进入 Fastboot 或 Recovery 恢复。
@@ -20,7 +20,7 @@ Luna Kernel 是为小米 17（`pudding`）HyperOS 4 / Android 17 打造的 4 KiB
 ## 上游
 
 - 小米 SoC/vendor 公开基线：[MiCode/Xiaomi_Kernel_OpenSource](https://github.com/MiCode/Xiaomi_Kernel_OpenSource)，`popsicle-w-oss`。
-- 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-09_r15`。
+- 实际 GKI Image 源码：[AOSP kernel/common](https://android.googlesource.com/kernel/common)，`android16-6.12-2026-09_r16`。
 
 `android16` 是 GKI/KMI 分支名；目标 ROM 为 Android 17。源码、组件与工具链的完整提交和摘要统一固定于 [`.env`](.env)。
 

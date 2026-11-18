@@ -564,7 +564,7 @@ load_env_file "${HOST_WORKSPACE_DIR}/.env"
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 
 COMMON_REPO="${COMMON_REPO:-https://android.googlesource.com/kernel/common}"
-COMMON_COMMIT="${COMMON_COMMIT:-4d7e81fff9326105dd9fc69cd7b7a07f7164fbd1}"
+COMMON_COMMIT="${COMMON_COMMIT:-7cc7455426123221ba503e4251c3e829baf3a56c}"
 COMMON_DIR="$(resolve_workspace_path "${COMMON_SOURCE_DIR:-sources/aosp_common_6.12.92_kmi6_2026-09}")"
 TEGRA_MC_KMI_PATCH_FILE="${HOST_WORKSPACE_DIR}/${TEGRA_MC_KMI_PATCH:-patches/kmi/tegra-mc-opaque-pointer-kmi-r21.patch}"
 TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef59b4f6485c9ee8545c5a3270f2f58258082a9a792}"

@@ -1,6 +1,6 @@
 # 当前基线与验收
 
-当前源码基线为官方九月 r15 / Linux 6.12.92 / KMI 6，仅交付 4 KiB；Rust Binder 内置，C Binder 关闭，ROM 同名模块被屏蔽。KernelSU `dbb73665` 与 SUSFS v2.4.0 `395a8c0c` 新候选已通过完整 CI 并交付 Telegram，状态为 `awaiting-device`，尚未经实机验收。用户于 2026-11-08 确认 `6.12.92-android16-luna-g1d3c30f1-4k` 在 `OS4.0.6.0.XPCCNXM` 上完成严格实机验收；同日只读核对确认设备运行身份一致。
+源码基线为官方九月 r16（Linux 6.12.92 / KMI 6 / 4 KiB）。以下验收结论仅适用于各自记录的构建产物。
 
 已验收项目提交为 `1d3c30f1945ad2c70bbf084886339649b3017123`，使用 KSU `51c21786`（32712 / UAPI 6）、SUSFS `6b60a30`、BBG `028ff7f`、Clang r596125 / LLVM 22 与 Rust 1.97.0-dev。验收记录绑定该提交与下述 Image 摘要。
 
