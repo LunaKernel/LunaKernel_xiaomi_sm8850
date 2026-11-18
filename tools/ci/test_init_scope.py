@@ -220,7 +220,6 @@ python3() {
         ))
         script = PREAMBLE + definitions + r'''
 run_init_tasks() { printf 'shared|%s\n' "$*"; }
-prepare_userspace_sources() { printf 'userspace\n'; }
 prepare_kernel_sources() { printf 'kernel sources\n'; }
 setup_toolchain() { printf 'toolchain\n'; }
 prepare_build_dependencies
@@ -228,63 +227,9 @@ prepare_build_dependencies
         result = self.run_script(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), [
-            "shared|prepare_userspace_sources prepare_kernel_sources setup_toolchain",
+            "shared|prepare_kernel_sources setup_toolchain",
         ])
 
-    def ndk_script(self, extra=""):
-        return PREAMBLE + function("prepare_android_ndk") + r'''
-ENVIRONMENT_DIR="$HOST_WORKSPACE_DIR/env"
-ANDROID_NDK_VERSION=fixture ANDROID_NDK_API=35
-ANDROID_NDK_DIR="$ENVIRONMENT_DIR/toolchain/android-ndk-fixture"
-SOURCE_DOWNLOAD_DIR="$HOST_WORKSPACE_DIR/downloads"
-ANDROID_NDK_URL=https://fixture ANDROID_NDK_SHA1=sha1 ANDROID_NDK_SHA256=sha256
-ANDROID_NDK_TREE_SHA256=expected-tree
-TREE_RESULT=expected-tree
-tree_sha256() { printf 'tree|%s\n' "$1" >&2; printf '%s\n' "$TREE_RESULT"; }
-sha1sum() { printf 'sha1\n' >&2; printf 'sha1  fixture\n'; }
-sha256sum() { printf 'sha256\n' >&2; printf 'sha256  fixture\n'; }
-curl() {
-    local destination
-    while [ "$#" -gt 0 ]; do
-        if [ "$1" = -o ]; then shift; destination="$1"; fi
-        shift
-    done
-    printf 'download\n' >&2
-    : > "$destination"
-}
-unzip() {
-    printf 'extract\n' >&2
-    local compiler="$4/android-ndk-fixture/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
-    mkdir -p "$(dirname "$compiler")"
-    touch "$compiler"
-    chmod 0755 "$compiler"
-}
-''' + extra + '\nprepare_android_ndk\n'
-
-    def test_installed_ndk_does_not_need_archive_or_download(self):
-        installed = self.root / "env/toolchain/android-ndk-fixture"
-        installed.mkdir(parents=True)
-        result = self.run_script(self.ndk_script())
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("tree|", result.stderr)
-        for forbidden in ("download", "sha1\n", "sha256\n", "extract"):
-            self.assertNotIn(forbidden, result.stderr)
-
-    def test_new_ndk_archive_is_hashed_once_before_extraction(self):
-        result = self.run_script(self.ndk_script())
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr.splitlines().count("sha1"), 1)
-        self.assertEqual(result.stderr.splitlines().count("sha256"), 1)
-        self.assertLess(result.stderr.index("sha256\n"), result.stderr.index("extract\n"))
-
-    def test_modified_ndk_fails_before_archive_access(self):
-        installed = self.root / "env/toolchain/android-ndk-fixture"
-        installed.mkdir(parents=True)
-        installed.with_name(installed.name + ".project-tree-sha256").write_text("expected-tree\n")
-        result = self.run_script(self.ndk_script("TREE_RESULT=changed-tree"))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("download", result.stderr)
-        self.assertNotIn("extract", result.stderr)
 
 
 if __name__ == "__main__":

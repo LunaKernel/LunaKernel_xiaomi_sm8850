@@ -406,114 +406,8 @@ prepare_anykernel_tools() {
     log_success "AnyKernel3 arm64 BusyBox 校验通过"
 }
 
-prepare_source_archive() {
-    local label="$1" url="$2" archive="$3" checksum_tool="$4" expected_checksum="$5" source_dir="$6" extracted_name="$7" expected_tree="$8"
-    local actual_checksum actual_tree marker
-    [[ "${expected_tree}" =~ ^[0-9a-f]{64}$ ]] || die "${label} 源码树 SHA-256 格式错误"
-    mkdir -p "${SOURCE_DOWNLOAD_DIR}" "$(dirname "${source_dir}")"
-    if [ ! -f "${archive}" ]; then
-        log_step "下载 ${label} 官方源码"
-        curl -fSL --retry 3 -C - -o "${archive}.part" "${url}"
-        actual_checksum="$(${checksum_tool} "${archive}.part" | awk '{ print $1 }')"
-        [ "${actual_checksum}" = "${expected_checksum}" ] || die "${label} 下载文件校验失败: ${actual_checksum}"
-        mv "${archive}.part" "${archive}"
-    fi
-    actual_checksum="$(${checksum_tool} "${archive}" | awk '{ print $1 }')"
-    [ "${actual_checksum}" = "${expected_checksum}" ] || die "${label} 源码归档校验失败: ${actual_checksum}"
-    marker="${source_dir}/.project-source-checksum"
-    if [ ! -d "${source_dir}" ]; then
-        log_step "解压 ${label} 官方源码"
-        tar -xjf "${archive}" -C "$(dirname "${source_dir}")"
-        [ "$(basename "${source_dir}")" = "${extracted_name}" ] || die "${label} 解压目录配置异常"
-        printf '%s\n' "${expected_checksum}" > "${marker}"
-    fi
-    [ -f "${source_dir}/configure" ] || die "${label} 源码缺少 configure"
-    [ -f "${marker}" ] || die "${label} 源码目录缺少初始化校验标记，请移走该目录后重试"
-    [ "$(sed -n '1p' "${marker}")" = "${expected_checksum}" ] || die "${label} 源码目录校验标记不匹配"
-    actual_tree="$(tree_sha256 "${source_dir}")"
-    [ "${actual_tree}" = "${expected_tree}" ] || die "${label} 源码树完整性校验失败: ${actual_tree}"
-    log_success "${label} 官方源码树完整性校验通过"
-}
-
-prepare_android_ndk() {
-    local archive actual_sha1 actual_sha256 actual_tree marker marker_value staging candidate backup
-    archive="${SOURCE_DOWNLOAD_DIR}/android-ndk-${ANDROID_NDK_VERSION}-linux.zip"
-    mkdir -p "${SOURCE_DOWNLOAD_DIR}" "$(dirname "${ANDROID_NDK_DIR}")"
-    marker="${ANDROID_NDK_DIR}.project-tree-sha256"
-    if [ -d "${ANDROID_NDK_DIR}" ]; then
-        actual_tree="$(tree_sha256 "${ANDROID_NDK_DIR}")"
-        if [ "${actual_tree}" = "${ANDROID_NDK_TREE_SHA256}" ]; then
-            printf '%s\n' "${ANDROID_NDK_TREE_SHA256}" > "${marker}"
-            log_success "Android NDK ${ANDROID_NDK_VERSION} 安装树完整性校验通过"
-            return
-        fi
-        marker_value="$(sed -n '1p' "${marker}" 2>/dev/null || true)"
-        [ "${marker_value}" != "${ANDROID_NDK_TREE_SHA256}" ] || \
-            die "Android NDK 安装树在初始化后被修改: ${actual_tree}"
-        log_step "Android NDK pin 已变化或缺少旧树指纹，使用已校验归档重建"
-    fi
-
-    candidate="${archive}"
-    if [ ! -f "${archive}" ]; then
-        candidate="${archive}.part"
-        log_step "下载 Android NDK ${ANDROID_NDK_VERSION}"
-        curl -fSL --retry 3 -C - -o "${candidate}" "${ANDROID_NDK_URL}"
-    fi
-    actual_sha1="$(sha1sum "${candidate}" | awk '{ print $1 }')"
-    [ "${actual_sha1}" = "${ANDROID_NDK_SHA1}" ] || die "Android NDK SHA-1 不匹配: ${actual_sha1}"
-    actual_sha256="$(sha256sum "${candidate}" | awk '{ print $1 }')"
-    [ "${actual_sha256}" = "${ANDROID_NDK_SHA256}" ] || die "Android NDK SHA-256 不匹配: ${actual_sha256}"
-    [ "${candidate}" = "${archive}" ] || mv "${candidate}" "${archive}"
-
-    staging="$(mktemp -d "$(dirname "${ANDROID_NDK_DIR}")/.android-ndk-install.XXXXXX")"
-    if ! unzip -q "${archive}" -d "${staging}"; then
-        rm -rf -- "${staging}"
-        die "Android NDK ${ANDROID_NDK_VERSION} 解压失败"
-    fi
-    candidate="${staging}/android-ndk-${ANDROID_NDK_VERSION}"
-    [ -d "${candidate}" ] || { rm -rf -- "${staging}"; die "Android NDK 解压目录异常"; }
-    actual_tree="$(tree_sha256 "${candidate}")"
-    if [ "${actual_tree}" != "${ANDROID_NDK_TREE_SHA256}" ]; then
-        rm -rf -- "${staging}"
-        die "Android NDK 解压树指纹不匹配: ${actual_tree}"
-    fi
-    case "${ANDROID_NDK_DIR}" in
-        "${ENVIRONMENT_DIR}"/toolchain/android-ndk-"${ANDROID_NDK_VERSION}") ;;
-        *) rm -rf -- "${staging}"; die "拒绝替换异常 Android NDK 目录: ${ANDROID_NDK_DIR}" ;;
-    esac
-    backup="${ANDROID_NDK_DIR}.replace.$$"
-    [ ! -e "${backup}" ] || die "Android NDK 备份路径已存在: ${backup}"
-    [ ! -d "${ANDROID_NDK_DIR}" ] || mv "${ANDROID_NDK_DIR}" "${backup}"
-    if ! mv "${candidate}" "${ANDROID_NDK_DIR}"; then
-        [ ! -d "${backup}" ] || mv "${backup}" "${ANDROID_NDK_DIR}"
-        rm -rf -- "${staging}"
-        die "Android NDK 安装失败"
-    fi
-    rm -rf -- "${staging}"
-    [ ! -d "${backup}" ] || rm -rf -- "${backup}"
-    printf '%s\n' "${ANDROID_NDK_TREE_SHA256}" > "${marker}"
-    [ -x "${ANDROID_NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_NDK_API}-clang" ] || \
-        die "Android NDK arm64 API ${ANDROID_NDK_API} clang 缺失"
-    log_success "Android NDK ${ANDROID_NDK_VERSION} arm64 工具链准备完成"
-}
-
-prepare_userspace_sources() {
-    [ "${ENABLE_IPSET}" = "1" ] || return 0
-    ensure_repo "额外模块模板" "${EXTRA_MODULES_DIR}" "${EXTRA_MODULES_REPO:?缺少额外模块 URL pin}" \
-        "${EXTRA_MODULES_REF:?缺少额外模块 ref pin}" "${EXTRA_MODULES_COMMIT:?缺少额外模块 commit pin}"
-    [ "$(tree_sha256 "${EXTRA_MODULES_DIR}/ipset")" = "${IPSET_MODULE_TREE_SHA256:?缺少 IPSet 模板树 pin}" ] || \
-        die "IPSet 模板树完整性校验失败"
-    prepare_source_archive "ipset ${IPSET_VERSION}" "${IPSET_URL}" \
-        "${SOURCE_DOWNLOAD_DIR}/ipset-${IPSET_VERSION}.tar.bz2" sha512sum "${IPSET_SHA512}" \
-        "${IPSET_DIR}" "ipset-${IPSET_VERSION}" "${IPSET_TREE_SHA256}"
-    prepare_source_archive "libmnl ${LIBMNL_VERSION}" "${LIBMNL_URL}" \
-        "${SOURCE_DOWNLOAD_DIR}/libmnl-${LIBMNL_VERSION}.tar.bz2" sha256sum "${LIBMNL_SHA256}" \
-        "${LIBMNL_DIR}" "libmnl-${LIBMNL_VERSION}" "${LIBMNL_TREE_SHA256}"
-    prepare_android_ndk
-}
-
 prepare_build_dependencies() {
-    run_init_tasks prepare_userspace_sources prepare_kernel_sources setup_toolchain
+    run_init_tasks prepare_kernel_sources setup_toolchain
 }
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
@@ -564,24 +458,6 @@ BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
 BBG_COMMIT="${BBG_COMMIT:-028ff7fd509e2104596da7cc1ef8e6ce2a0c9082}"
 BBG_DIR="$(resolve_workspace_path "${BBG_SOURCE_DIR:-sources/baseband_guard}")"
-ENABLE_IPSET="${ENABLE_IPSET:-0}"
-IPSET_VERSION="${IPSET_VERSION:-7.24}"
-IPSET_URL="${IPSET_URL:-https://ipset.netfilter.org/ipset-7.24.tar.bz2}"
-IPSET_SHA512="${IPSET_SHA512:-18ccb49bd38083f0556b11e1d17f43791c52a2b094c9a500b6f770796b17e8e70c3860a628eac2252eb672b1fc9de734d3a0e0823d61dd9be7b4188adc6dd214}"
-IPSET_TREE_SHA256="${IPSET_TREE_SHA256:-70530678f3318aad36a3fb8acb3eba17a27ad5e464c0caeb8912dee43f0a81ea}"
-IPSET_DIR="$(resolve_workspace_path "${IPSET_SOURCE_DIR:-sources/ipset-7.24}")"
-EXTRA_MODULES_DIR="$(resolve_workspace_path "${EXTRA_MODULES_SOURCE_DIR:-sources/extra-modules}")"
-LIBMNL_VERSION="${LIBMNL_VERSION:-1.0.5}"
-LIBMNL_URL="${LIBMNL_URL:-https://www.netfilter.org/projects/libmnl/files/libmnl-1.0.5.tar.bz2}"
-LIBMNL_SHA256="${LIBMNL_SHA256:-274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525}"
-LIBMNL_TREE_SHA256="${LIBMNL_TREE_SHA256:-8d6597fd107489c8d90106d99302ff5efb061fe38bb3952f8a1062626b80a7c2}"
-LIBMNL_DIR="$(resolve_workspace_path "${LIBMNL_SOURCE_DIR:-sources/libmnl-1.0.5}")"
-ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:?缺少 NDK 版本 pin}"
-ANDROID_NDK_URL="${ANDROID_NDK_URL:?缺少 NDK URL pin}"
-ANDROID_NDK_SHA1="${ANDROID_NDK_SHA1:?缺少 NDK SHA-1 pin}"
-ANDROID_NDK_SHA256="${ANDROID_NDK_SHA256:?缺少 NDK SHA-256 pin}"
-ANDROID_NDK_TREE_SHA256="${ANDROID_NDK_TREE_SHA256:?缺少 NDK 安装树 pin}"
-ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 WORK_DIR="$(resolve_workspace_path "${BUILD_WORK_DIR:-work}")"
@@ -592,8 +468,6 @@ CI_CLANG_REVISION="${CI_CLANG_REVISION:?缺少 Clang revision pin}"
 [[ "${CI_CLANG_REVISION}" =~ ^r[0-9]+[a-z]?$ ]] || die "Clang revision 格式错误"
 CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME}"
 DL_DIR="${WORK_DIR}/cache/downloads/toolchain-${CI_CLANG_REVISION}"
-SOURCE_DOWNLOAD_DIR="${WORK_DIR}/cache/downloads/sources"
-ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:?缺少工具链安装树 pin}"
 AOSP_CLANG_COMMIT="${AOSP_CLANG_COMMIT:?缺少 AOSP Clang commit pin}"
 AOSP_CLANG_REPO="${AOSP_CLANG_REPO:?缺少 AOSP Clang repo pin}"
@@ -649,8 +523,8 @@ AOSP_HOST_BC_COMMIT="${AOSP_HOST_BC_COMMIT:?缺少 bc commit pin}"
 [ "${AOSP_BUILD_TOOLS_REPO}" = "https://android.googlesource.com/kernel/prebuilts/build-tools" ] || \
     die "build-tools 必须来自 AOSP 官方仓库"
 [ "${CI_BUILD_TOOLS_SUBTREE}" = "linux_musl-x86" ] || die "build-tools 子树异常"
-[[ "${ANDROID_NDK_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK SHA-256 格式错误"
-[[ "${ANDROID_NDK_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK 安装树 SHA-256 格式错误"
+
+
 [[ "${AOSP_BINDGEN_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "bindgen commit 格式错误"
 [[ "${AOSP_HOST_BC_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "bc commit 格式错误"
 [[ "${CI_BINDGEN_GIT_BLOB}" =~ ^[0-9a-f]{40}$ ]] || die "bindgen Git blob 格式错误"
@@ -749,7 +623,6 @@ log_info "GKI common: ${COMMON_DIR}"
 [ "${ENABLE_KERNELSU}" != "1" ] || log_info "KernelSU: ${KSU_DIR} (${KSU_REF} @ ${KSU_COMMIT})"
 [ "${ENABLE_SUSFS}" != "1" ] || log_info "SUSFS: ${SUSFS_DIR} (${SUSFS_REF} @ ${SUSFS_COMMIT})"
 [ "${ENABLE_BBG}" != "1" ] || log_info "Baseband Guard: ${BBG_DIR} (${BBG_REF} @ ${BBG_COMMIT})"
-[ "${ENABLE_IPSET}" != "1" ] || log_info "IPSet userspace: ${IPSET_DIR} + libmnl ${LIBMNL_DIR} (NDK ${ANDROID_NDK_VERSION})"
 log_info "toolchain: ${CI_TOOLCHAIN_DIR}"
 log_info "MagiskBoot: v${MAGISK_VERSION} (${MAGISK_COMMIT})"
 log_info "AnyKernel3: scripts ${AK3_UPSTREAM_COMMIT}, arm64 tools ${AK3_ARM64_TOOLS_COMMIT}"

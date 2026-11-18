@@ -43,17 +43,12 @@ class RunBuildTests(unittest.TestCase):
         image.write_bytes(b"public CI input fixture\n")
         # 只生成公开测试 pin，不读取项目真实 .env 或实际镜像。
         keys = """
-CI_TOOLCHAIN_TREE_SHA256 ANDROID_NDK_TREE_SHA256 SM8850_C_ARCH SM8850_TUNE_CPU
+CI_TOOLCHAIN_TREE_SHA256 SM8850_C_ARCH SM8850_TUNE_CPU
 AOSP_AUTOFDO_PROFILE_SHA256 CI_CLANG_REVISION STOCK_FSCK_EROFS_SHA256 STOCK_KMOD_SHA256
-STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REPO
+STOCK_LIBCXX_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REPO
 """.split()
         pins = dict.fromkeys(keys, "fixture")
         pins.update({
-            "ENABLE_IPSET": "1",
-            "ANDROID_NDK_VERSION": "r30",
-            "ANDROID_NDK_SHA256": "f" * 64,
-            "IPSET_VERSION": "7.24",
-            "LIBMNL_VERSION": "1.0.5",
             "AK3_TEMPLATE_URL": "https://example.invalid/ak3-template.tar.gz",
             "AK3_TEMPLATE_SHA256": "8" * 64,
             "AK3_TEMPLATE_TREE_SHA256": "9" * 64,
@@ -244,22 +239,7 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
             self.assert_success(self.run_step('metadata'))
             output = self.read_assignments('github.output')
             self.assertNotEqual(original, output['downloads_key'])
-            self.assertEqual(baseline['ndk_key'], output['ndk_key'])
             original = output['downloads_key']
-        self.commit_fixture_change('.env', '\nANDROID_NDK_SHA256=' + 'b' * 64 + '\n')
-        self.assert_success(self.run_step('metadata'))
-        output = self.read_assignments('github.output')
-        self.assertNotEqual(baseline['ndk_key'], output['ndk_key'])
-        self.assertEqual(original, output['downloads_key'])
-
-    def test_disabled_ipset_has_no_ndk_or_userspace_downloads(self):
-        self.commit_fixture_change('.env', '\nENABLE_IPSET=0\n')
-        self.assert_success(self.run_step('metadata'))
-        output = self.read_assignments('github.output')
-        self.assertNotIn('ndk_key', output)
-        self.assertNotIn('ndk_path', output)
-        self.assertNotIn('/sources/', output['downloads_paths'])
-
     def test_fixed_cache_paths_and_sizes_do_not_require_source_caches(self):
         # fixture 不创建来源目录；fixed 缓存不能依赖它们。
         backports = "work/cache/dependencies/backports-" + FIXED_PINS["BACKPORT_BUNDLE_MANIFEST_SHA256"]
@@ -267,7 +247,6 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
         output = self.read_assignments("github.output")
         self.assertEqual({key: value for key, value in output.items() if key.endswith("_path")}, {
             "common_path": COMMON_SOURCE, "backports_path": backports, "toolchain_path": TOOLCHAIN_PATH,
-            "ndk_path": "work/cache/downloads/sources/android-ndk-r30-linux.zip",
         })
         self.assertCountEqual(output['downloads_paths'].splitlines(), [
             'work/cache/downloads/toolchain-fixture/stock-fsck.erofs',
@@ -275,8 +254,6 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
             'work/cache/downloads/toolchain-fixture/stock-libc++.so',
             'work/cache/downloads/ci-dependencies/' + '8' * 64 + '.tar',
             'work/cache/downloads/ota/os4.0.6.0/system_dlkm.img',
-            'work/cache/downloads/sources/ipset-7.24.tar.bz2',
-            'work/cache/downloads/sources/libmnl-1.0.5.tar.bz2',
         ])
         self.assertEqual(output["backports_key"], "luna-backports-v1-ubuntu24-x64-" + "1" * 64)
         self.assertEqual(output["toolchain_key"], "luna-toolchain-v1-ubuntu24-x64-" + "e" * 64)
@@ -300,7 +277,7 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
                      "CI_TOOLCHAIN_BUNDLE_URL": "https://example.invalid/moved.tar.zst"}
         self.assert_success(self.run_step("metadata", **relocated, GITHUB_RUN_ID="456"))
         changed = self.read_assignments("github.output")
-        cache_keys = ('backports_key', 'toolchain_key', 'common_key', 'downloads_key', 'ndk_key', 'ccache_prefix')
+        cache_keys = ('backports_key', 'toolchain_key', 'common_key', 'downloads_key', 'ccache_prefix')
         for key in cache_keys:
             self.assertEqual(original[key], changed[key])
         self.assertNotEqual(original['ccache_key'], changed['ccache_key'])
@@ -489,18 +466,17 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
         self.assertIn("| build | 0 |", summary)
         self.assertIn("无法读取 ccache 统计", summary)
         self.assertNotIn("invalid option", result.stderr)
-        result = self.run_step("summary", CI_CCACHE_USED="true", CI_NDK_HIT="true")
+        result = self.run_step("summary", CI_CCACHE_USED="true")
         self.assert_success(result)
         self.assertIn("fixture ccache --show-stats", result.stdout)
         summary = (self.temp / "summary.md").read_text()
         self.assertIn("fixture ccache --show-stats", summary)
-        self.assertIn("NDK=true", summary)
 
-    def prepare_release(self):
+    def prepare_release(self, *, legacy=False):
         manager = "KernelSU_v3.3.1-29-gab05a062_32709-release.apk"
         self.commit_fixture_change(".env", "\nKSU_MANAGER_APK_NAME=" + manager +
                                    "\nKSU_MANAGER_APK_SHA256=" + hashlib.sha256(b"apk fixture").hexdigest() +
-                                   "\nIPSET_VERSION=7.24\nANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="
+                                   "\nANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT="
                                    "Xiaomi/pudding/pudding:16/build/OS4.0.6.0.XPCCN:user/release-keys\n")
         commit = self.env["GITHUB_SHA"]
         stem = f"luna-xiaomi17-g{commit[:8]}-20261108"
@@ -513,9 +489,10 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
             kernel + "/" + stem + ".zip": b"zip fixture",
             kernel + "/" + manager: b"apk fixture",
             audit + "/" + stem + "-audit.zip": b"audit fixture",
-            component + "/ipset-arm64-v7.24": b"ipset fixture",
-            component + "/ipset-v7.24-android-arm64-kernelsu-module.zip": b"module fixture",
         }
+        if legacy:
+            files[component + "/ipset-arm64-v7.24"] = b"ipset fixture"
+            files[component + "/ipset-v7.24-android-arm64-kernelsu-module.zip"] = b"module fixture"
         files[audit + "/.build-artifacts"] = "".join(
             hashlib.sha256(data).hexdigest() + "  " + name + "\n" for name, data in files.items()).encode()
         files[audit + "/release.tsv"] = (
@@ -558,7 +535,7 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
         self.assertIn("拒绝覆盖", result.stderr)
         self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(), digest)
 
-    def test_export_rejects_corrupt_artifacts_and_missing_component_record(self):
+    def test_export_rejects_corrupt_artifacts_and_missing_manager_record(self):
         files = self.prepare_release()
         for name, data in files.items():
             if name.endswith(("/.build-artifacts", "/release.tsv")):
@@ -572,12 +549,30 @@ STOCK_LIBCXX_SHA256 IPSET_SHA512 LIBMNL_SHA256 KSU_MANAGER_APK_SHA256 COMMON_REP
                 path.write_bytes(data)
         manifest = self.root / "work/audit" / self.env["LUNA_BUILD_ID"] / ".build-artifacts"
         manifest.write_text("".join(line for line in manifest.read_text().splitlines(keepends=True)
-                                    if not line.rstrip().endswith("/ipset-arm64-v7.24")))
+                                    if not line.rstrip().endswith("-release.apk")))
         result = self.run_step("export")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("完整六文件集合", result.stderr)
+        self.assertIn("缺少", result.stderr)
         self.assertFalse(list((self.root / self.env["CI_RUN_DIR"]).glob("*.tar.gz")))
         self.assertFalse((self.temp / "github.output").exists())
+
+    def test_import_preserves_legacy_components(self):
+        files = self.prepare_release(legacy=True)
+        bundle = self.temp / "legacy.tar.gz"
+        with tarfile.open(bundle, "w:gz") as archive:
+            for name in files:
+                archive.add(self.root / name, arcname=name)
+        restored = self.temp / "legacy-restored"
+        restored.mkdir()
+        result = subprocess.run([
+            "python3", "-c",
+            "import sys; from pathlib import Path; from release_artifacts import import_archive; "
+            "import_archive(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3])",
+            str(bundle), str(restored), self.env["LUNA_BUILD_ID"],
+        ], cwd=self.root / "tools", env=self.env, capture_output=True, text=True, timeout=10)
+        self.assert_success(result)
+        for name, data in files.items():
+            self.assertEqual((restored / name).read_bytes(), data)
 
     def test_summary_without_destination_is_optional(self):
         self.assert_success(self.run_step("summary", GITHUB_STEP_SUMMARY=""))

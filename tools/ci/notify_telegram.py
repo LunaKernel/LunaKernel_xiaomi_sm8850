@@ -33,17 +33,14 @@ def checked_documents(workspace, build_id, project_commit):
     require(re.fullmatch(r"[0-9a-f]{40}", project_commit), "项目提交必须是完整 SHA")
     manager = os.environ.get("KSU_MANAGER_APK_NAME", "")
     manager_sha = os.environ.get("KSU_MANAGER_APK_SHA256", "")
-    ipset = os.environ.get("IPSET_VERSION", "")
     fingerprint = os.environ.get("ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT", "")
     require(re.fullmatch(r"KernelSU_[A-Za-z0-9.+-]+_[0-9]+-release\.apk", manager), "Manager 文件名 pin 无效")
     require(re.fullmatch(r"[0-9a-f]{64}", manager_sha), "Manager SHA-256 pin 无效")
-    require(re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", ipset), "IPSet 版本 pin 无效")
     require(fingerprint.startswith("Xiaomi/pudding/pudding:") and
             fingerprint.endswith("/OS4.0.6.0.XPCCN:user/release-keys"), "OTA 与固定 system_dlkm 身份不一致")
 
-    # 先复用原发布检查，再施加当前 CI 六文件要求；历史发布规则不变。
     names = release_artifacts.verify(workspace, build_id)
-    kernel_dir, audit_dir, component_dir = release_artifacts.release_directories(build_id)
+    kernel_dir, audit_dir, _ = release_artifacts.release_directories(build_id)
     match = release_artifacts.BUILD_ID.fullmatch(build_id)
     stem = "luna-xiaomi17-g" + match[1] + "-" + match[2]
     kernel_zip = kernel_dir + "/" + stem + ".zip"
@@ -53,12 +50,10 @@ def checked_documents(workspace, build_id, project_commit):
         kernel_zip,
         manager_path,
         audit_dir + "/" + stem + "-audit.zip",
-        component_dir + "/ipset-arm64-v" + ipset,
-        component_dir + "/ipset-v" + ipset + "-android-arm64-kernelsu-module.zip",
     }
     state_path = audit_dir + "/release.tsv"
     manifest_path = audit_dir + "/.build-artifacts"
-    require(set(names) == expected | {state_path, manifest_path}, "CI 交付必须包含固定的完整六文件集合")
+    require(set(names) == expected | {state_path, manifest_path}, "CI 交付必须包含固定的完整四文件集合")
     state = dict(line.split("\t", 1) for line in
                  release_artifacts.checked_path(workspace, state_path).read_text().splitlines()[1:])
     require(state["project_commit"] == project_commit, "发布完整项目提交与本次 CI 不符")
@@ -165,7 +160,7 @@ def main(argv=None):
     documents = checked_documents(args.workspace.resolve(strict=True), args.build_id,
                                   args.project_commit)
     if args.check_only:
-        print("[OK] CI 六文件、项目身份、官方 Manager 与 TG 文件大小检查通过")
+        print("[OK] CI 四文件、项目身份、官方 Manager 与 TG 文件大小检查通过")
         return
     # 两个文件全部通过本地检查后，才访问 secret 并开始发送。
     token = os.environ.get("TG_BOT_TOKEN", "")

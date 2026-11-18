@@ -129,10 +129,8 @@ resolve_build_id() {
     WORK_DIR="${HOST_WORKSPACE_DIR}/work"
     BUILD_TEMP_DIR="${WORK_DIR}/tmp"
     PRODUCT_RELATIVE_DIR="kernel_out/${LUNA_BUILD_ID}"
-    COMPONENT_RELATIVE_DIR="work/components/${LUNA_BUILD_ID}"
     RELEASE_AUDIT_RELATIVE_DIR="work/audit/${LUNA_BUILD_ID}"
     PRODUCT_DIR="${HOST_WORKSPACE_DIR}/${PRODUCT_RELATIVE_DIR}"
-    COMPONENT_DIR="${HOST_WORKSPACE_DIR}/${COMPONENT_RELATIVE_DIR}"
     RELEASE_AUDIT_DIR="${HOST_WORKSPACE_DIR}/${RELEASE_AUDIT_RELATIVE_DIR}"
     ARTIFACT_MANIFEST="${RELEASE_AUDIT_DIR}/${ARTIFACT_MANIFEST_NAME}"
     RELEASE_DATE="${LUNA_BUILD_ID#luna-xiaomi17-g${LUNA_PROJECT_SHORT}-}"
@@ -145,11 +143,11 @@ resolve_build_id() {
 prepare_release_directories() {
     local relative path
     # Kernel packages remain until acceptance; work records rotate separately.
-    for relative in "${PRODUCT_RELATIVE_DIR}" "${COMPONENT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}"; do
+    for relative in "${PRODUCT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}"; do
         path="${HOST_WORKSPACE_DIR}/${relative}"
         [ ! -e "${path}" ] && [ ! -L "${path}" ] || die "拒绝覆盖已有构建目录: ${relative}"
     done
-    for relative in "${PRODUCT_RELATIVE_DIR}" "${COMPONENT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}" work/tmp; do
+    for relative in "${PRODUCT_RELATIVE_DIR}" "${RELEASE_AUDIT_RELATIVE_DIR}" work/tmp; do
         prepare_workspace_directory "${relative}"
     done
 }
@@ -1375,119 +1373,6 @@ enable_project_ccache() {
     export CCACHE_MAXSIZE="${CCACHE_MAX_SIZE:?缺少 ccache 容量上限}"
 }
 
-build_ipset_userspace() {
-    local ndk_bin cc userspace_root prefix libmnl_build ipset_build binary module_dir module_zip needed unexpected_needed
-    local common_cflags libmnl_cflags ipset_cflags cppflags ldflags input_key cached_key reconfigure directory
-    local -a libmnl_configure ipset_configure
-    [ "${ENABLE_IPSET}" = "1" ] || return
-    verify_repo_identity "额外模块模板" "${EXTRA_MODULES_DIR}" \
-        "${EXTRA_MODULES_REPO:?缺少额外模块 URL pin}" "${EXTRA_MODULES_COMMIT:?缺少额外模块 commit pin}"
-    [ "$(tree_sha256 "${EXTRA_MODULES_DIR}/ipset")" = "${IPSET_MODULE_TREE_SHA256:?缺少 IPSet 模板树 pin}" ] || \
-        die "IPSet 模板树完整性校验失败，请重新运行 ./patches/init.sh"
-    ndk_bin="${ANDROID_NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    [ -x "${ndk_bin}/clang" ] || die "Android NDK clang 缺失，请先运行 ./patches/init.sh"
-    cc="${ndk_bin}/clang --target=aarch64-linux-android${ANDROID_NDK_API}"
-    if enable_project_ccache; then
-        cc="ccache ${cc}"
-    fi
-    [ "$(tree_sha256 "${IPSET_DIR}")" = "${IPSET_TREE_SHA256}" ] || die "ipset 源码树完整性校验失败，请重新运行 ./patches/init.sh"
-    [ "$(tree_sha256 "${LIBMNL_DIR}")" = "${LIBMNL_TREE_SHA256}" ] || die "libmnl 源码树完整性校验失败，请重新运行 ./patches/init.sh"
-
-    case "${IPSET_BUILD_DIR:?缺少 IPSet 构建缓存目录}" in
-        work/cache/userspace/ipset-sm8850) ;;
-        *) die "IPSet 缓存必须位于 work/cache/userspace/ipset-sm8850" ;;
-    esac
-    prepare_workspace_directory "${IPSET_BUILD_DIR}"
-    userspace_root="${PREPARED_DIRECTORY}"
-    prefix="${userspace_root}/ipset-prefix"
-    libmnl_build="${userspace_root}/libmnl-build"
-    ipset_build="${userspace_root}/ipset-build"
-    common_cflags="-O2 -march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin} -ffunction-sections -fdata-sections"
-    libmnl_cflags="${common_cflags} -fPIC"
-    ipset_cflags="${common_cflags} -fPIE"
-    cppflags="-I${prefix}/include"
-    ldflags="-L${prefix}/lib -Wl,--gc-sections"
-    libmnl_configure=(--host=aarch64-linux-android --prefix="${prefix}" --disable-shared --enable-static)
-    ipset_configure=("${libmnl_configure[@]}" --disable-settype-modules --with-kmod=no)
-    input_key="$(printf '%s\0' ipset-cache-v1 \
-        "${IPSET_DIR}" "${IPSET_TREE_SHA256}" "${LIBMNL_DIR}" "${LIBMNL_TREE_SHA256}" \
-        "${ANDROID_NDK_DIR}" "${ANDROID_NDK_TREE_SHA256}" "${ANDROID_NDK_API}" "${cc}" \
-        "${userspace_root}" "${libmnl_cflags}" "${ipset_cflags}" "${cppflags}" "${ldflags}" \
-        'libmnl-CPPFLAGS=' 'LIBS=' \
-        "${libmnl_configure[@]}" "${ipset_configure[@]}" | sha256sum | awk '{ print $1 }')"
-    cached_key=""
-    [ ! -L "${userspace_root}/.configured-key" ] || die "IPSet 缓存身份不得为符号链接"
-    [ ! -f "${userspace_root}/.configured-key" ] || cached_key="$(cat "${userspace_root}/.configured-key")"
-    reconfigure=0
-    if [ "${input_key}" != "${cached_key}" ] || \
-        [ ! -s "${libmnl_build}/config.status" ] || [ ! -s "${ipset_build}/config.status" ] || \
-        [ ! -s "${libmnl_build}/Makefile" ] || [ ! -s "${ipset_build}/Makefile" ]; then
-        reconfigure=1
-        rm -rf -- "${userspace_root}"
-    fi
-    for directory in ipset-prefix libmnl-build ipset-build; do
-        prepare_workspace_directory "${IPSET_BUILD_DIR}/${directory}"
-    done
-
-    log_step "构建 SM8850 arm64 IPSet/libmnl: ${common_cflags} (配置缓存: ${input_key})"
-    (
-        # The complete NDK install tree was verified before any compiler runs.
-        export CCACHE_NAMESPACE="ndk-${ANDROID_NDK_TREE_SHA256}"
-        export CC="${cc}" AR="${ndk_bin}/llvm-ar" RANLIB="${ndk_bin}/llvm-ranlib" STRIP="${ndk_bin}/llvm-strip"
-        export LIBS=''
-        if [ "${reconfigure}" = 1 ]; then
-            (cd "${libmnl_build}" && env CPPFLAGS='' CFLAGS="${libmnl_cflags}" LDFLAGS='-Wl,--gc-sections' \
-                "${LIBMNL_DIR}/configure" "${libmnl_configure[@]}" >/dev/null)
-        fi
-        make -C "${libmnl_build}" -j"${BUILD_JOBS}" >/dev/null
-        # Reinstalling unchanged headers/archive would force an IPSet relink.
-        if ! cmp -s "${libmnl_build}/src/.libs/libmnl.a" "${prefix}/lib/libmnl.a" || \
-            ! cmp -s "${LIBMNL_DIR}/include/libmnl/libmnl.h" "${prefix}/include/libmnl/libmnl.h" || \
-            ! cmp -s "${libmnl_build}/libmnl.pc" "${prefix}/lib/pkgconfig/libmnl.pc"; then
-            make -C "${libmnl_build}" -j"${BUILD_JOBS}" install >/dev/null
-        fi
-        if [ "${reconfigure}" = 1 ]; then
-            (cd "${ipset_build}" && env \
-                PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
-                CPPFLAGS="${cppflags}" LDFLAGS="${ldflags}" CFLAGS="${ipset_cflags}" \
-                "${IPSET_DIR}/configure" "${ipset_configure[@]}" >/dev/null)
-            printf '%s\n' "${input_key}" > "${userspace_root}/.configured-key.tmp"
-            mv -f -- "${userspace_root}/.configured-key.tmp" "${userspace_root}/.configured-key"
-        else
-            log_success "复用 IPSet/libmnl 配置，执行增量构建"
-        fi
-        make -C "${ipset_build}" -j"${BUILD_JOBS}" >/dev/null
-    )
-    binary="${ipset_build}/src/ipset"
-    [ -s "${binary}" ] || die "Android arm64 ipset 命令未生成"
-    file "${binary}" | grep -Eq 'ELF 64-bit.*ARM aarch64' || die "ipset 不是 arm64 ELF"
-    "${ndk_bin}/llvm-readelf" -l "${binary}" | grep -F 'Requesting program interpreter: /system/bin/linker64' >/dev/null || \
-        die "ipset Android linker ABI 不匹配"
-    needed="$("${ndk_bin}/llvm-readelf" -d "${binary}" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' | LC_ALL=C sort -u)"
-    unexpected_needed="$(printf '%s\n' "${needed}" | grep -Ev '^(libc\.so|libdl\.so)$' || true)"
-    [ -z "${unexpected_needed}" ] || die "ipset 含非 Android 系统共享库依赖: ${unexpected_needed}"
-    printf '%s\n' "${needed}" | grep -Fxq 'libc.so' || die "ipset 缺少 Android libc 依赖标识"
-    strings "${binary}" | grep -Fx 'ipset' >/dev/null || die "ipset 二进制命令标识缺失"
-    strings "${binary}" | grep -Fx "${IPSET_VERSION}" >/dev/null || die "ipset 二进制版本标识不匹配"
-
-    cp -f "${binary}" "${COMPONENT_DIR}/ipset-arm64-v${IPSET_VERSION}"
-    chmod 0755 "${COMPONENT_DIR}/ipset-arm64-v${IPSET_VERSION}"
-    module_dir="$(mktemp -d "${BUILD_TEMP_DIR}/ipset-module.XXXXXX")"
-    mkdir -p "${module_dir}/system/bin" "${module_dir}/LICENSES"
-    cp -a "${EXTRA_MODULES_DIR}/ipset/"{customize.sh,module.prop,SOURCE.txt} "${module_dir}/"
-    cp -f "${binary}" "${module_dir}/system/bin/ipset"
-    cp -f "${IPSET_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.ipset"
-    cp -f "${LIBMNL_DIR}/COPYING" "${module_dir}/LICENSES/COPYING.libmnl"
-    chmod 0755 "${module_dir}/customize.sh" "${module_dir}/system/bin/ipset"
-    normalize_archive_timestamps "${module_dir}"
-    module_zip="${COMPONENT_DIR}/ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
-    (cd "${module_dir}" && TZ=UTC 7z a -tzip -mtc=off -mta=off "${module_zip}" . >/dev/null)
-    unzip -p "${module_zip}" system/bin/ipset | sha256sum | \
-        grep -Fx "$(sha256sum "${binary}" | awk '{ print $1 }')  -" >/dev/null || die "IPSet 模块内命令校验失败"
-    case "${module_dir}" in "${BUILD_TEMP_DIR}"/ipset-module.*) rm -rf -- "${module_dir}" ;; *) die "拒绝清理异常临时目录" ;; esac
-    log_success "IPSet 用户态命令与独立 KernelSU 模块已生成: $(basename "${module_zip}")"
-}
-
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 HOST_WORKSPACE_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")/.." && pwd -P)"
 
@@ -1603,16 +1488,6 @@ KSU_TRACKED_DIFF_SHA256="${KSU_TRACKED_DIFF_SHA256:-}"
 ENABLE_STAGE5_NAMESPACES="${ENABLE_STAGE5_NAMESPACES:-0}"
 ENABLE_STAGE5_NETWORK="${ENABLE_STAGE5_NETWORK:-0}"
 ENABLE_IPSET="${ENABLE_IPSET:-0}"
-IPSET_VERSION="${IPSET_VERSION:-7.24}"
-IPSET_TREE_SHA256="${IPSET_TREE_SHA256:-70530678f3318aad36a3fb8acb3eba17a27ad5e464c0caeb8912dee43f0a81ea}"
-IPSET_DIR="$(resolve_workspace_path "${IPSET_SOURCE_DIR:-sources/ipset-7.24}")"
-EXTRA_MODULES_DIR="$(resolve_workspace_path "${EXTRA_MODULES_SOURCE_DIR:-sources/extra-modules}")"
-LIBMNL_VERSION="${LIBMNL_VERSION:-1.0.5}"
-LIBMNL_TREE_SHA256="${LIBMNL_TREE_SHA256:-8d6597fd107489c8d90106d99302ff5efb061fe38bb3952f8a1062626b80a7c2}"
-LIBMNL_DIR="$(resolve_workspace_path "${LIBMNL_SOURCE_DIR:-sources/libmnl-1.0.5}")"
-ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:?缺少 NDK 版本 pin}"
-ANDROID_NDK_TREE_SHA256="${ANDROID_NDK_TREE_SHA256:?缺少 NDK 安装树摘要 pin}"
-ANDROID_NDK_API="${ANDROID_NDK_API:-35}"
 XIAOMI_ACK_BRANCH="${XIAOMI_ACK_BRANCH:-android16-6.12-2025-06_r8}"
 XIAOMI_ACK_COMMIT="${XIAOMI_ACK_COMMIT:-f1bdb13583da85a47fcf1632a78ef52d6e6da651}"
 
@@ -1777,7 +1652,6 @@ EXPECTED_VERSION_LINE="Linux version ${EXPECTED_RELEASE} (${KERNEL_BUILD_USER}@$
 
 ENVIRONMENT_DIR="$(resolve_workspace_path "${BUILD_ENVIRONMENT_DIR:-work/tools}")"
 CI_TOOLCHAIN_DIR="${ENVIRONMENT_DIR}/toolchain/${CI_TOOLCHAIN_NAME:?缺少工具链目录 pin}"
-ANDROID_NDK_DIR="${ENVIRONMENT_DIR}/toolchain/android-ndk-${ANDROID_NDK_VERSION}"
 MAGISKBOOT_ARM64_PATH="${ENVIRONMENT_DIR}/magisk/v${MAGISK_VERSION}/magiskboot-arm64"
 AK3_TEMPLATE_DIR="$(python3 "${HOST_WORKSPACE_DIR}/tools/ci_dependencies.py" ak3-check \
     --workspace "${HOST_WORKSPACE_DIR}")" || die "固定 AK3 模板未准备或内容不匹配"
@@ -1802,11 +1676,6 @@ CI_TOOLCHAIN_TREE_SHA256="${CI_TOOLCHAIN_TREE_SHA256:?缺少工具链安装树 p
 [ "$(tree_sha256 "${CI_TOOLCHAIN_DIR}")" = "${CI_TOOLCHAIN_TREE_SHA256}" ] || \
     die "工具链安装树完整性校验失败，请重新运行 ./patches/init.sh"
 verify_android17_stock_system_dlkm_identity
-if [ "${ENABLE_IPSET}" = "1" ]; then
-    [[ "${ANDROID_NDK_TREE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "Android NDK 安装树 SHA-256 格式错误"
-    [ "$(tree_sha256 "${ANDROID_NDK_DIR}")" = "${ANDROID_NDK_TREE_SHA256}" ] || \
-        die "Android NDK 安装树完整性校验失败，请重新运行 ./patches/init.sh"
-fi
 log_success "构建工具链安装树完整性校验通过"
 
 export PATH="${CI_TOOLCHAIN_DIR}/host-bin:${CI_TOOLCHAIN_DIR}/rust/bin:${CI_TOOLCHAIN_DIR}/build-tools/bin:${CI_TOOLCHAIN_DIR}/bin:${PATH}"
@@ -2132,13 +2001,6 @@ unzip -tq "${RELEASE_AUDIT_DIR}/${AUDIT_ARTIFACT}" >/dev/null || die "兼容性�
 [ "$(unzip -Z1 "${RELEASE_AUDIT_DIR}/${AUDIT_ARTIFACT}" | grep -Fxc 'summary.tsv')" = "1" ] || \
     die "兼容性审计归档缺少唯一 summary.tsv"
 RELEASE_ARTIFACTS+=("${RELEASE_AUDIT_RELATIVE_DIR}/${AUDIT_ARTIFACT}")
-build_ipset_userspace
-if [ "${ENABLE_IPSET}" = "1" ]; then
-    RELEASE_ARTIFACTS+=(
-        "${COMPONENT_RELATIVE_DIR}/ipset-arm64-v${IPSET_VERSION}"
-        "${COMPONENT_RELATIVE_DIR}/ipset-v${IPSET_VERSION}-android-arm64-kernelsu-module.zip"
-    )
-fi
 TARGET_IMAGE="${PRODUCT_DIR}/Image-luna-xiaomi17-g${LUNA_PROJECT_SHORT}-${RELEASE_DATE}"
 cp -f "${IMAGE_PATH}" "${TARGET_IMAGE}"
 RELEASE_ARTIFACTS+=("${PRODUCT_RELATIVE_DIR}/$(basename "${TARGET_IMAGE}")")

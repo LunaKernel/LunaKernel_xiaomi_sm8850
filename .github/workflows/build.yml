@@ -61,13 +61,6 @@ jobs:
           path: work/cache/ccache
           key: ${{ steps.meta.outputs.ccache_key }}
           restore-keys: ${{ steps.meta.outputs.ccache_prefix }}-
-      - name: Restore Android NDK archive
-        id: ndk
-        if: steps.meta.outputs.ndk_key != ''
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.meta.outputs.ndk_path }}
-          key: ${{ steps.meta.outputs.ndk_key }}
       - name: Restore fixed small downloads
         id: downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -103,13 +96,6 @@ jobs:
       - name: Prepare and verify pinned sources and tools
         id: init
         run: bash tools/ci/run_build.sh init
-      - name: Save verified Android NDK archive
-        if: steps.init.outcome == 'success' && steps.meta.outputs.ndk_key != '' && steps.ndk.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.meta.outputs.ndk_path }}
-          key: ${{ steps.meta.outputs.ndk_key }}
       - name: Save verified small downloads
         if: steps.init.outcome == 'success' && steps.downloads.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -184,7 +170,6 @@ jobs:
           CI_COMPILE_RESULT: ${{ steps.compile.outcome }}
           CI_UPLOAD_RESULT: ${{ steps.upload.outcome }}
           CI_CCACHE_HIT: ${{ steps.ccache.outputs.cache-matched-key }}
-          CI_NDK_HIT: ${{ steps.ndk.outputs.cache-hit }}
           CI_DOWNLOADS_HIT: ${{ steps.downloads.outputs.cache-hit }}
           CI_MANAGER_HIT: ${{ steps.manager.outputs.cache-hit }}
           CI_COMMON_HIT: ${{ steps.common.outputs.cache-hit }}

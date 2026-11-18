@@ -23,17 +23,14 @@ class NotifyTests(unittest.TestCase):
         self.build_id = "luna-xiaomi17-gaaaaaaaa-20261108-1200"
         self.stem = "luna-xiaomi17-gaaaaaaaa-20261108"
         self.manager = "KernelSU_v3.3.1-29-gab05a062_32709-release.apk"
-        kernel, audit, component = notify.release_artifacts.release_directories(self.build_id)
+        kernel, audit, self.component = notify.release_artifacts.release_directories(self.build_id)
         self.zip = kernel + "/" + self.stem + ".zip"
         self.apk = kernel + "/" + self.manager
-        self.ipset = component + "/ipset-arm64-v7.24"
         self.files = {
             kernel + "/Image-" + self.stem: b"kernel fixture",
             self.zip: b"zip fixture",
             self.apk: b"apk fixture",
             audit + "/" + self.stem + "-audit.zip": b"audit fixture",
-            self.ipset: b"ipset fixture",
-            component + "/ipset-v7.24-android-arm64-kernelsu-module.zip": b"module fixture",
         }
         for name, content in self.files.items():
             path = self.root / name
@@ -48,7 +45,6 @@ class NotifyTests(unittest.TestCase):
         self.env = {
             "KSU_MANAGER_APK_NAME": self.manager,
             "KSU_MANAGER_APK_SHA256": notify.release_artifacts.sha256(self.root / self.apk),
-            "IPSET_VERSION": "7.24",
             "ANDROID17_STOCK_SYSTEM_DLKM_FINGERPRINT":
                 "Xiaomi/pudding/pudding:16/build/OS4.0.6.0.XPCCN:user/release-keys",
             "TG_BOT_TOKEN": "123456:test_token_never_used_on_network",
@@ -116,15 +112,9 @@ class NotifyTests(unittest.TestCase):
         self.state.write_text(self.state.read_text().replace("awaiting-device", "accepted"))
         self.assert_local_failure()
 
-    def test_optional_legacy_ipset_is_required_by_ci(self):
-        self.files.pop(self.ipset)
-        (self.root / self.ipset).unlink()
-        self.write_manifest()
-        notify.release_artifacts.verify(self.root, self.build_id)
-        self.assert_local_failure()
-
     def test_extra_component_in_manifest_is_rejected(self):
-        name = self.ipset + "-extra"
+        name = self.component + "/ipset-arm64-v7.24"
+        (self.root / self.component).mkdir(parents=True)
         self.files[name] = b"extra"
         (self.root / name).write_bytes(b"extra")
         self.write_manifest()
