@@ -2,12 +2,16 @@
 """离线检查宿主准备策略；磁盘操作和 apt 命令均使用桩。"""
 
 import contextlib
+import hashlib
 import io
 from pathlib import Path
 import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import call, patch
+
+from tools.ci.apt_archives import copy_verified, package_plan
 
 
 SCRIPT = Path(__file__).with_name("prepare_runner.sh").read_text()
@@ -73,6 +77,9 @@ sudo() {
     esac
 }
 FIRST_STATUS=$1 UPDATE_STATUS=$2 SECOND_STATUS=$3
+LUNA_APT_STAGE=
+apt=(sudo -n env DEBIAN_FRONTEND=noninteractive apt-get)
+packages=(test)
 '''
         for statuses, calls, code in (
             ((0, 9, 9), ['install'], 0),
@@ -85,6 +92,33 @@ FIRST_STATUS=$1 UPDATE_STATUS=$2 SECOND_STATUS=$3
                                          'test', *map(str, statuses)], capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, code, result.stderr)
                 self.assertEqual(result.stderr.splitlines(), calls)
+
+
+class AptArchivesTests(unittest.TestCase):
+    def test_plan_requires_unique_names_and_sha256(self):
+        digest = hashlib.sha256(b'pkg').hexdigest()
+        line = f"'http://archive.ubuntu.com/ubuntu/pkg.deb' pkg_1%3a2_amd64.deb 3 SHA256:{digest}\n"
+        self.assertEqual(package_plan(['Reading package lists...\n', line]),
+                         {'pkg_1%3a2_amd64.deb': (3, digest)})
+        for lines in ([line, line], [line.replace('SHA256:', 'MD5Sum:')],
+                      [line.replace(' pkg_', ' ../pkg_')]):
+            with self.subTest(lines=lines), self.assertRaises(ValueError):
+                package_plan(lines)
+
+    def test_copy_verifies_bytes_and_rejects_symlinks_and_extras(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = (Path(directory) / name for name in ('restore', 'archives'))
+            source.mkdir()
+            target.mkdir()
+            (source / 'valid.deb').write_bytes(b'pkg')
+            (source / 'wrong.deb').write_bytes(b'bad')
+            (source / 'link.deb').symlink_to('valid.deb')
+            (source / 'extra.deb').write_bytes(b'pkg')
+            plan = dict.fromkeys(('valid.deb', 'wrong.deb', 'link.deb', 'missing.deb'),
+                                 (3, hashlib.sha256(b'pkg').hexdigest()))
+            self.assertEqual(copy_verified(plan, source, target), 1)
+            self.assertEqual([path.name for path in target.iterdir()], ['valid.deb'])
+            self.assertEqual((target / 'valid.deb').read_bytes(), b'pkg')
 
 
 if __name__ == "__main__":

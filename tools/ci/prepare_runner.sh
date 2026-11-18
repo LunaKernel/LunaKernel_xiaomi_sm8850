@@ -9,6 +9,28 @@ fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 . /etc/os-release
 [[ "${ID}" == ubuntu && "${VERSION_ID}" == 24.04 ]] || fail '需要 Ubuntu 24.04'
 
+apt=(sudo -n env DEBIAN_FRONTEND=noninteractive apt-get)
+packages=(build-essential flex bison libdw-dev libelf-dev zlib1g-dev libssl-dev
+    pkg-config ccache python3 git curl ca-certificates patch file
+    bzip2 xz-utils zip unzip p7zip-full zstd)
+
+if [[ "${1:-}" == apt-plan ]]; then
+    stage="$(mktemp -d "${RUNNER_TEMP:?}/luna-apt.XXXXXX")"
+    mkdir -m 0755 "${stage}/archives"
+    chmod 0755 "${stage}"
+    if key="$(timeout --kill-after=5s 30s "${apt[@]}" --print-uris \
+        -o Acquire::ForceHash=SHA256 -o Dir::Cache::Archives="${stage}/archives/" \
+        install -y --no-install-recommends "${packages[@]}" | \
+        python3 -I tools/ci/apt_archives.py plan "${stage}/plan.json")" && [[ -n "${key}" ]]; then
+        printf 'apt_key=%s\n' "${key}" >> "${GITHUB_OUTPUT:?}"
+        printf 'LUNA_APT_STAGE=%s\n' "${stage}" >> "${GITHUB_ENV:?}"
+    else
+        printf '[INFO] 无可用 APT 归档计划，沿用常规安装\n'
+    fi
+    exit 0
+fi
+[[ "$#" == 0 ]] || fail '未知宿主准备操作'
+
 # 空间足够时保留预装 SDK；不足时只清理白名单，且不跟随符号链接。
 prepare_started="$(date +%s)"
 timeout --kill-after=15s 5m sudo -n python3 - <<'PY'
@@ -41,15 +63,31 @@ PY
 printf '[INFO] SDK 空间准备耗时=%s 秒\n' "$(( $(date +%s) - prepare_started ))"
 
 install_runner_packages() {
-    local -a apt=(sudo -n env DEBIAN_FRONTEND=noninteractive apt-get)
-    local -a packages=(build-essential flex bison libdw-dev libelf-dev zlib1g-dev libssl-dev
-        pkg-config ccache python3 git curl ca-certificates patch file
-        bzip2 xz-utils zip unzip p7zip-full zstd)
-    if timeout --kill-after=15s 10m "${apt[@]}" install -y --no-install-recommends \
+    local stage="${LUNA_APT_STAGE:-}" count
+    local -a archives=()
+    if [[ -n "${stage}" ]]; then
+        if count="$(python3 -I tools/ci/apt_archives.py copy "${stage}/plan.json" \
+            "${RUNNER_TEMP}/luna-apt-debs" "${stage}/archives")"; then
+            printf '[INFO] 通过 SHA-256 校验的缓存 APT 包：%s\n' "${count}"
+            archives=(-o Dir::Cache::Archives="${stage}/archives/" -o APT::Keep-Downloaded-Packages=true)
+        else
+            printf '[INFO] 无法准备缓存 APT 包，沿用常规安装\n'
+        fi
+    fi
+    if timeout --kill-after=15s 10m "${apt[@]}" install -y --no-install-recommends "${archives[@]}" \
         -o Acquire::Retries=0 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
         "${packages[@]}"; then
         printf '[INFO] 使用 runner 现有 apt 索引准备宿主依赖\n'
-        return
+        if (( ${#archives[@]} )) && [[ "${LUNA_APT_HIT:-}" != true ]]; then
+            local cache="${RUNNER_TEMP}/luna-apt-debs"
+            if mkdir -m 0755 -- "${cache}" && \
+                count="$(python3 -I tools/ci/apt_archives.py publish "${stage}/plan.json" \
+                    "${stage}/archives" "${cache}")"; then
+                printf '[INFO] 可保存已校验的 APT 包：%s\n' "${count}"
+                printf 'apt_save=true\n' >> "${GITHUB_OUTPUT:?}"
+            fi
+        fi
+        return 0
     fi
     printf '[INFO] 现有 apt 索引安装失败，刷新索引后重试\n'
     timeout --kill-after=15s 5m "${apt[@]}" update -q -o Acquire::Languages=none

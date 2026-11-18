@@ -32,8 +32,28 @@ jobs:
       - name: Fix build identity and verify input pins
         id: meta
         run: bash tools/ci/run_build.sh metadata
+      - name: Identify runner package archives
+        id: apt_plan
+        run: bash tools/ci/prepare_runner.sh apt-plan
+      - name: Restore runner package archives
+        id: apt
+        if: steps.apt_plan.outputs.apt_key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/luna-apt-debs
+          key: ${{ steps.apt_plan.outputs.apt_key }}
       - name: Prepare temporary runner
+        id: runner
+        env:
+          LUNA_APT_HIT: ${{ steps.apt.outputs.cache-hit }}
         run: bash tools/ci/prepare_runner.sh
+      - name: Save verified runner package archives
+        if: steps.runner.outputs.apt_save == 'true' && steps.apt.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/luna-apt-debs
+          key: ${{ steps.apt_plan.outputs.apt_key }}
       - name: Restore ccache
         id: ccache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
