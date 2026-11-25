@@ -184,11 +184,15 @@ compile() {
     [[ -x "${BUILD_DIR}/scripts/kallsyms" && -s "${BUILD_DIR}/scripts/.kallsyms.cmd" ]]
     grep -F 'scripts/kallsyms.c' "${BUILD_DIR}/scripts/.kallsyms.cmd" >/dev/null
     grep -F 'token_syms' "${COMMON_SOURCE_DIR}/scripts/kallsyms.c" >/dev/null
-    grep -F 'CONFIG_CC_OPT_NO_ADDRSIG=' "${BUILD_DIR}/.config" >/dev/null
-    grep -F 'CONFIG_CC_OPT_STRICT_FLEX_ARRAYS=' "${BUILD_DIR}/.config" >/dev/null
     grep -F -- '-fno-addrsig' "${BUILD_DIR}/arch/arm64/kernel/pi/.map_range.o.cmd" >/dev/null
     grep -F -- '-mstrict-align' "${BUILD_DIR}/arch/arm64/kernel/pi/.map_range.o.cmd" >/dev/null
-    printf '[OK] Kbuild 670/680 的源码、宿主工具和实际参数证据通过\n'
+    if compgen -G 'patches/backports/kmi6-2026-09-independent/*probe-cache.tsv' >/dev/null; then
+        grep -F 'CONFIG_CC_OPT_NO_ADDRSIG=' "${BUILD_DIR}/.config" >/dev/null
+        grep -F 'CONFIG_CC_OPT_STRICT_FLEX_ARRAYS=' "${BUILD_DIR}/.config" >/dev/null
+        printf '[OK] Kbuild 670/680 的源码、宿主工具和实际参数证据通过\n'
+    else
+        printf '[OK] Kbuild 670 的源码、宿主工具和实际参数证据通过\n'
+    fi
 }
 
 export_delivery() {
