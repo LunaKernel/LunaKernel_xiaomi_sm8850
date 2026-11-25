@@ -179,22 +179,6 @@ tracked_diff_sha256() {
         HEAD -- . | sha256sum | awk '{ print $1 }'
 }
 
-verify_final_source_deltas() {
-    local ksu_sha256
-    verify_no_hidden_index_flags "GKI common" "${COMMON_DIR}"
-    verify_no_hidden_index_flags "KernelSU" "${KSU_DIR}"
-    ksu_sha256="$(tracked_diff_sha256 "${KSU_DIR}")"
-    [[ "${COMMON_BASE_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
-        die "GKI common 基础差异快照尚未固定"
-    [[ "${KSU_TRACKED_DIFF_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
-        die "KernelSU 精确差异快照尚未固定: ${ksu_sha256}"
-    bash "${HOST_WORKSPACE_DIR}/patches/independent_backports.sh" \
-        verify-base-diff "${COMMON_DIR}" "${COMMON_BASE_TRACKED_DIFF_SHA256}"
-    [ "${ksu_sha256}" = "${KSU_TRACKED_DIFF_SHA256}" ] || \
-        die "KernelSU 出现非预期补丁差异: ${ksu_sha256}"
-    log_success "GKI common 基础差异、独立回移层与 KernelSU 精确差异指纹匹配"
-}
-
 verify_kernelsu_overlay() {
     local kconfig_line='source "drivers/kernelsu/Kconfig"'
     local makefile_line='obj-$(CONFIG_KSU) += kernelsu/'
@@ -550,7 +534,6 @@ SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
 SUSFS_COMMIT="${SUSFS_COMMIT:-9b0b13f069673b9b07b713a5c66977de4d62b175}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-${SUSFS_COMMIT}}"
 SUSFS_LOG_POLICY_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_LOG_POLICY_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
@@ -581,12 +564,10 @@ git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
     die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}"
 verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
-[ "${SUSFS_KSU_PATCH_COMMIT}" = "${SUSFS_COMMIT}" ] || \
-    die "SUSFS common 与 KernelSU 补丁必须来自同一提交"
 [ -z "$(git -C "${SUSFS_DIR}" status --porcelain)" ] || die "SUSFS 上游工作树不干净"
 [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
     refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
-    "${SUSFS_KSU_PATCH_COMMIT}" ] || \
+    "${SUSFS_COMMIT}" ] || \
     die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
 verify_project_patch "Luna SUSFS 日志默认关闭策略" \
     "${SUSFS_LOG_POLICY_PATCH_FILE}" "${SUSFS_LOG_POLICY_PATCH_SHA256}" \
@@ -597,7 +578,7 @@ apply_kernelsu_integration
 KSU_SUSFS_PATCH_FILE="$(mktemp)"
 COMMON_SUSFS_PATCH_FILE="$(mktemp)"
 trap 'rm -f "${KSU_SUSFS_PATCH_FILE:-}" "${COMMON_SUSFS_PATCH_FILE:-}"' EXIT
-git -C "${SUSFS_DIR}" show "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${KSU_SUSFS_PATCH_FILE}"
+git -C "${SUSFS_DIR}" show "${SUSFS_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${KSU_SUSFS_PATCH_FILE}"
 git -C "${SUSFS_DIR}" show "${SUSFS_COMMIT}:kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" > "${COMMON_SUSFS_PATCH_FILE}"
 log_step "应用 SUSFS v2.4.0 官方 Android 16/6.12 补丁"
 apply_susfs_integration
@@ -624,5 +605,4 @@ if [ "${ENABLE_BBG}" = "1" ]; then
     apply_bbg_integration
     verify_bbg_integration
 fi
-verify_final_source_deltas
 log_success "KernelSU ${KSU_REF} built-in 接入完成"

@@ -452,7 +452,6 @@ SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
 SUSFS_COMMIT="${SUSFS_COMMIT:-9b0b13f069673b9b07b713a5c66977de4d62b175}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-${SUSFS_COMMIT}}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
@@ -583,15 +582,13 @@ prepare_kernel_sources() {
     fi
     if [ "${ENABLE_SUSFS}" = "1" ]; then
         [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"
-        [ "${SUSFS_KSU_PATCH_COMMIT}" = "${SUSFS_COMMIT}" ] || \
-            die "SUSFS common 与 KernelSU 补丁必须来自同一提交"
         ensure_repo "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_REF}" "${SUSFS_COMMIT}"
-        git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" 2>/dev/null || \
-            die "SUSFS KernelSU 兼容补丁不存在: ${SUSFS_KSU_PATCH_COMMIT}"
+        git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" 2>/dev/null || \
+            die "SUSFS KernelSU 兼容补丁不存在: ${SUSFS_COMMIT}"
         git -C "${SUSFS_DIR}" update-ref \
-            refs/backport-audit/susfs-kernelsu-patch "${SUSFS_KSU_PATCH_COMMIT}"
+            refs/backport-audit/susfs-kernelsu-patch "${SUSFS_COMMIT}"
         [ "$(git -C "${SUSFS_DIR}" rev-parse refs/backport-audit/susfs-kernelsu-patch)" = \
-            "${SUSFS_KSU_PATCH_COMMIT}" ] || die "SUSFS KernelSU 兼容补丁保活引用异常"
+            "${SUSFS_COMMIT}" ] || die "SUSFS KernelSU 兼容补丁保活引用异常"
     fi
     if [ "${ENABLE_BBG}" = "1" ]; then
         ensure_repo "Baseband Guard ${BBG_REF}" "${BBG_DIR}" "${BBG_REPO}" "${BBG_REF}" "${BBG_COMMIT}" "1"

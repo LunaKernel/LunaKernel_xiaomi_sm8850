@@ -426,12 +426,10 @@ verify_susfs_official_layer() {
 verify_susfs_source_state() {
     local ksu_patch common_patch allowed_ksu allowed_common
     local source_file
-    [ "${SUSFS_COMMIT}" = "${SUSFS_KSU_PATCH_COMMIT}" ] || \
-        die "SUSFS common 与 KernelSU 官方补丁必须固定到同一提交"
     verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
     [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
         refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
-        "${SUSFS_KSU_PATCH_COMMIT}" ] || \
+        "${SUSFS_COMMIT}" ] || \
         die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
     verify_project_patch "SUSFS common 日志策略补丁" \
         "${SUSFS_LOG_POLICY_PATCH_FILE}" "${SUSFS_LOG_POLICY_PATCH_SHA256}" \
@@ -1406,7 +1404,6 @@ SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
 SUSFS_COMMIT="${SUSFS_COMMIT:-9b0b13f069673b9b07b713a5c66977de4d62b175}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-${SUSFS_COMMIT}}"
 SUSFS_LOG_POLICY_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_LOG_POLICY_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
