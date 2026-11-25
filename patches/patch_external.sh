@@ -212,7 +212,7 @@ verify_kernelsu_overlay() {
 
 verify_susfs_official_layer() {
     local label="$1" repo_dir="$2" official_patch="$3" fixup="$4" excluded="$5"
-    local index_file overlay
+    local index_file overlay actual_blob upstream_blob
     shift 5
     index_file="$(mktemp)"
     (
@@ -226,7 +226,13 @@ verify_susfs_official_layer() {
                 git -C "${repo_dir}" apply --cached --check "${overlay}" || exit 1
             fi
         done
-        git -C "${repo_dir}" apply --cached --reverse "${fixup}" || exit 1
+        if [ -n "${fixup}" ]; then
+            git -C "${repo_dir}" apply --cached --reverse "${fixup}" || exit 1
+            actual_blob="$(git -C "${repo_dir}" rev-parse --verify :fs/susfs.c)" || exit 1
+            upstream_blob="$(git -C "${SUSFS_DIR}" rev-parse --verify HEAD:kernel_patches/fs/susfs.c)" || exit 1
+            [ "${actual_blob}" = "${upstream_blob}" ] || \
+                die "撤销 SUSFS 日志策略后 fs/susfs.c 与固定上游 blob 不匹配"
+        fi
         if [ -n "${excluded}" ]; then
             git -C "${repo_dir}" apply --cached --reverse --check \
                 --exclude="${excluded}" "${official_patch}"
@@ -238,45 +244,27 @@ verify_susfs_official_layer() {
 }
 
 verify_susfs_integration() {
-    local allowed_common allowed_ksu
-    local actual_sha256 source_file target_file
+    local allowed_common allowed_ksu source_file
     grep -Fxq "static const __u32 KERNEL_SU_UAPI_VERSION = ${KSU_UAPI_VERSION};" \
         "${KSU_DIR}/uapi/supercall.h" || die "KernelSU UAPI 版本与固定内核接口不匹配"
     verify_rejected_susfs_fdinfo_hunk \
         "${COMMON_SUSFS_PATCH_FILE}" "${COMMON_DIR}" \
-        "${SUSFS_COMMON_FIX_PATCH_FILE}"
-    [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
-        refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
-        "${SUSFS_KSU_PATCH_COMMIT}" ] || \
-        die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
+        "${SUSFS_LOG_POLICY_PATCH_FILE}"
     local -a ksu_overlays=() common_overlays=()
     if [ "${ENABLE_BBG}" = "1" ]; then
         ksu_overlays+=("${BBG_KSU_CREDENTIAL_PATCH}")
         common_overlays+=("${BBG_COMMON_CREDENTIAL_PATCH}")
     fi
     verify_susfs_official_layer "KernelSU SUSFS" "${KSU_DIR}" \
-        "${KSU_SUSFS_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_FILE}" "" "${ksu_overlays[@]}"
+        "${KSU_SUSFS_PATCH_FILE}" "" "" "${ksu_overlays[@]}"
     verify_susfs_official_layer "common SUSFS" "${COMMON_DIR}" \
-        "${COMMON_SUSFS_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_FILE}" \
+        "${COMMON_SUSFS_PATCH_FILE}" "${SUSFS_LOG_POLICY_PATCH_FILE}" \
         fs/notify/fdinfo.c "${common_overlays[@]}"
-    git -C "${COMMON_DIR}" apply --reverse --check "${SUSFS_COMMON_FIX_PATCH_FILE}" || \
-        die "基于 SUSFS 官方补丁的 common Luna 修正版状态异常"
-    git -C "${KSU_DIR}" apply --reverse --check "${SUSFS_KSU_FIX_PATCH_FILE}" || \
-        die "基于 SUSFS 官方补丁的 KernelSU Luna 修正版状态异常"
+    grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${COMMON_DIR}/fs/susfs.c" || \
+        die "SUSFS 日志必须默认关闭"
 
-    for source_file in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-        target_file="${COMMON_DIR}/${source_file}"
-        if [ "${source_file}" = "fs/susfs.c" ]; then
-            actual_sha256="$(sha256sum "${target_file}" | awk '{ print $1 }')"
-            [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
-                die "SUSFS Luna 修正源码摘要不匹配: ${source_file}"
-            grep -Fqx 'DEFINE_STATIC_KEY_FALSE(susfs_is_log_enabled);' "${target_file}" || \
-                die "SUSFS 日志必须默认关闭"
-            [ "$(grep -Fc 'static_branch_unlikely(&susfs_is_log_enabled)' "${target_file}")" = "4" ] || \
-                die "SUSFS 日志静态分支提示异常"
-            continue
-        fi
-        cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${target_file}" || \
+    for source_file in include/linux/susfs.h include/linux/susfs_def.h; do
+        cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}" || \
             die "SUSFS 源文件不是固定上游内容: ${source_file}"
     done
 
@@ -284,7 +272,6 @@ verify_susfs_integration() {
     allowed_common="$(mktemp)"
     {
         patch_paths_excluding "${KSU_SUSFS_PATCH_FILE}"
-        patch_paths_excluding "${SUSFS_KSU_FIX_PATCH_FILE}"
         if [ "${ENABLE_BBG}" = "1" ]; then
             patch_paths_excluding "${BBG_KSU_CREDENTIAL_PATCH}"
         fi
@@ -294,7 +281,6 @@ verify_susfs_integration() {
         patch_paths_excluding "${TEGRA_MC_KMI_PATCH_FILE}"
         patch_paths_excluding "${COMMON_SUSFS_PATCH_FILE}" \
             fs/notify/fdinfo.c
-        patch_paths_excluding "${SUSFS_COMMON_FIX_PATCH_FILE}"
         printf '%s\n' fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h
         if [ "${ENABLE_BBG}" = "1" ]; then
             printf '%s\n' security/Kconfig security/Makefile security/baseband-guard include/linux/lsm_count.h
@@ -342,7 +328,7 @@ verify_susfs_integration() {
     verify_allowed_paths "GKI common" "${COMMON_DIR}" "${allowed_common}"
     rm -f "${allowed_ksu}" "${allowed_common}"
     verify_kernelsu_overlay
-    log_success "SUSFS v2.4.0 官方补丁、经审计拒绝项与 Luna 修正版状态校验通过"
+    log_success "SUSFS 官方补丁、经审计拒绝项与默认日志策略校验通过"
 }
 
 verify_bbg_integration() {
@@ -491,22 +477,14 @@ apply_bbg_integration() {
 }
 
 apply_susfs_integration() {
-    local actual_sha256 source_file
+    local source_file target_file
 
-    if git -C "${KSU_DIR}" apply --reverse --check \
-        "${SUSFS_KSU_FIX_PATCH_FILE}" >/dev/null 2>&1; then
-        log_info "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁与 Luna fixup 已存在"
+    if [ "${ENABLE_BBG}" = "1" ] && git -C "${KSU_DIR}" apply --reverse --check \
+        "${BBG_KSU_CREDENTIAL_PATCH}" >/dev/null 2>&1; then
+        log_info "KernelSU 已叠加 BBG 凭据标记，将在临时索引中校验 SUSFS 官方层"
     else
         apply_patch_once "SUSFS 对 KernelSU ${KSU_REF} 的官方兼容补丁" \
             "${KSU_DIR}" "${KSU_SUSFS_PATCH_FILE}"
-        apply_patch_once "基于 SUSFS v2.4.0 官方补丁的 KernelSU Luna fixup" \
-            "${KSU_DIR}" "${SUSFS_KSU_FIX_PATCH_FILE}"
-    fi
-
-    if git -C "${COMMON_DIR}" apply --reverse --check \
-        "${SUSFS_COMMON_FIX_PATCH_FILE}" >/dev/null 2>&1; then
-        log_info "SUSFS common 官方补丁与 Luna 最小修正已存在"
-        return
     fi
 
     # fdinfo hunk is deliberately excluded; verify_susfs_integration() proves
@@ -516,22 +494,14 @@ apply_susfs_integration() {
         --exclude=fs/notify/fdinfo.c
 
     for source_file in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-        if [ ! -e "${COMMON_DIR}/${source_file}" ]; then
-            cp "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}"
-            continue
+        target_file="${COMMON_DIR}/${source_file}"
+        if [ ! -e "${target_file}" ] && [ ! -L "${target_file}" ]; then
+            cp "${SUSFS_DIR}/kernel_patches/${source_file}" "${target_file}"
         fi
-        if cmp -s "${SUSFS_DIR}/kernel_patches/${source_file}" "${COMMON_DIR}/${source_file}"; then
-            continue
-        fi
-        [ "${source_file}" = "fs/susfs.c" ] || \
-            die "目标已存在不同的 SUSFS 源文件: ${source_file}"
-        actual_sha256="$(sha256sum "${COMMON_DIR}/${source_file}" | awk '{ print $1 }')"
-        [ "${actual_sha256}" = "${SUSFS_CORRECTED_SOURCE_SHA256}" ] || \
-            die "目标已存在未授权的 SUSFS 修正源码: ${source_file}"
     done
 
-    apply_patch_once "基于 SUSFS v2.4.0 官方补丁的 common Luna 修正版" \
-        "${COMMON_DIR}" "${SUSFS_COMMON_FIX_PATCH_FILE}"
+    apply_patch_once "Luna SUSFS 日志默认关闭策略" \
+        "${COMMON_DIR}" "${SUSFS_LOG_POLICY_PATCH_FILE}"
 }
 
 apply_kernelsu_integration() {
@@ -571,18 +541,17 @@ TEGRA_MC_KMI_PATCH_SHA256="${TEGRA_MC_KMI_PATCH_SHA256:-ed862fd9b766ba5ee47baef5
 TEGRA_MC_KMI_PATCH_ID="${TEGRA_MC_KMI_PATCH_ID:-120d76a884b594c227377b034f0eecf1071b5b91}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-main}"
-KSU_COMMIT="${KSU_COMMIT:-dbb73665d103da40c7ecbd21ba3b5ac76eb95784}"
+KSU_COMMIT="${KSU_COMMIT:-cfc60f8d9a29a5e7a5d458e04b8810af6123f72b}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
 KSU_INTEGRATION_MODE="${KSU_INTEGRATION_MODE:-builtin}"
 [ "${KSU_INTEGRATION_MODE}" = "builtin" ] || die "本阶段只允许经批准的 KernelSU built-in 模式"
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-395a8c0c88d348e9fe7c14f66a456fde4653287c}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-9b0b13f069673b9b07b713a5c66977de4d62b175}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-395a8c0c88d348e9fe7c14f66a456fde4653287c}"
-SUSFS_COMMON_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_COMMON_FIX_PATCH}"
-SUSFS_KSU_FIX_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_KSU_FIX_PATCH}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-${SUSFS_COMMIT}}"
+SUSFS_LOG_POLICY_PATCH_FILE="${HOST_WORKSPACE_DIR}/${SUSFS_LOG_POLICY_PATCH}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
@@ -612,17 +581,16 @@ git -C "${COMMON_DIR}" apply --reverse --check "${TEGRA_MC_KMI_PATCH_FILE}" || \
     die "Tegra MC opaque-pointer KMI compatibility patch status is invalid"
 verify_repo_identity "KernelSU ${KSU_REF}" "${KSU_DIR}" "${KSU_REPO}" "${KSU_COMMIT}"
 verify_repo_identity "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_COMMIT}"
+[ "${SUSFS_KSU_PATCH_COMMIT}" = "${SUSFS_COMMIT}" ] || \
+    die "SUSFS common 与 KernelSU 补丁必须来自同一提交"
 [ -z "$(git -C "${SUSFS_DIR}" status --porcelain)" ] || die "SUSFS 上游工作树不干净"
 [ "$(env GIT_NO_LAZY_FETCH=1 git -C "${SUSFS_DIR}" rev-parse \
     refs/backport-audit/susfs-kernelsu-patch 2>/dev/null || true)" = \
     "${SUSFS_KSU_PATCH_COMMIT}" ] || \
     die "SUSFS KernelSU 兼容补丁固定引用缺失，请先运行 ./patches/init.sh"
-verify_project_patch "基于 SUSFS v2.4.0 官方补丁的 common Luna 修正版" \
-    "${SUSFS_COMMON_FIX_PATCH_FILE}" "${SUSFS_COMMON_FIX_PATCH_SHA256}" \
-    "${SUSFS_COMMON_FIX_PATCH_ID}"
-verify_project_patch "基于 SUSFS v2.4.0 官方补丁的 KernelSU Luna 修正版" \
-    "${SUSFS_KSU_FIX_PATCH_FILE}" "${SUSFS_KSU_FIX_PATCH_SHA256}" \
-    "${SUSFS_KSU_FIX_PATCH_ID}"
+verify_project_patch "Luna SUSFS 日志默认关闭策略" \
+    "${SUSFS_LOG_POLICY_PATCH_FILE}" "${SUSFS_LOG_POLICY_PATCH_SHA256}" \
+    "${SUSFS_LOG_POLICY_PATCH_ID}"
 
 log_step "应用 KernelSU ${KSU_REF} built-in 外部补丁"
 apply_kernelsu_integration
@@ -630,7 +598,7 @@ KSU_SUSFS_PATCH_FILE="$(mktemp)"
 COMMON_SUSFS_PATCH_FILE="$(mktemp)"
 trap 'rm -f "${KSU_SUSFS_PATCH_FILE:-}" "${COMMON_SUSFS_PATCH_FILE:-}"' EXIT
 git -C "${SUSFS_DIR}" show "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" > "${KSU_SUSFS_PATCH_FILE}"
-cp "${SUSFS_DIR}/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" "${COMMON_SUSFS_PATCH_FILE}"
+git -C "${SUSFS_DIR}" show "${SUSFS_COMMIT}:kernel_patches/50_add_susfs_in_gki-android16-6.12.patch" > "${COMMON_SUSFS_PATCH_FILE}"
 log_step "应用 SUSFS v2.4.0 官方 Android 16/6.12 补丁"
 apply_susfs_integration
 verify_susfs_integration

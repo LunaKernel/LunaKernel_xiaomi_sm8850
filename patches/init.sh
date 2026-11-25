@@ -434,9 +434,9 @@ COMMON_ABI_STG_SHA256="${COMMON_ABI_STG_SHA256:-5ffdd2e5f56596dfcd829af8d3f1200e
 ENABLE_KERNELSU="${ENABLE_KERNELSU:-0}"
 KSU_REPO="${KSU_REPO:-https://github.com/tiann/KernelSU.git}"
 KSU_REF="${KSU_REF:-main}"
-KSU_COMMIT="${KSU_COMMIT:-dbb73665d103da40c7ecbd21ba3b5ac76eb95784}"
+KSU_COMMIT="${KSU_COMMIT:-cfc60f8d9a29a5e7a5d458e04b8810af6123f72b}"
 KSU_DIR="$(resolve_workspace_path "${KSU_SOURCE_DIR:-sources/kernelsu}")"
-KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2727}"
+KSU_GIT_VERSION_COUNT="${KSU_GIT_VERSION_COUNT:-2736}"
 KSU_ENHANCED_SECURITY_REMOVAL_COMMIT="${KSU_ENHANCED_SECURITY_REMOVAL_COMMIT:-1b6e2ed6b38dad1c8af90402a82ed2f752b05cfa}"
 MAGISK_VERSION="${MAGISK_VERSION:-31.1}"
 MAGISK_COMMIT="${MAGISK_COMMIT:-0972f67d97f9b6302b67c5171283330c74114b4a}"
@@ -450,9 +450,9 @@ AK3_BUSYBOX_SHA256="${AK3_BUSYBOX_SHA256:-c629fce4b0dd3ba9775f851d0941e74582115f
 ENABLE_SUSFS="${ENABLE_SUSFS:-0}"
 SUSFS_REPO="${SUSFS_REPO:-https://gitlab.com/simonpunk/susfs4ksu.git}"
 SUSFS_REF="${SUSFS_REF:-gki-android16-6.12}"
-SUSFS_COMMIT="${SUSFS_COMMIT:-395a8c0c88d348e9fe7c14f66a456fde4653287c}"
+SUSFS_COMMIT="${SUSFS_COMMIT:-9b0b13f069673b9b07b713a5c66977de4d62b175}"
 SUSFS_DIR="$(resolve_workspace_path "${SUSFS_SOURCE_DIR:-sources/susfs4ksu}")"
-SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-395a8c0c88d348e9fe7c14f66a456fde4653287c}"
+SUSFS_KSU_PATCH_COMMIT="${SUSFS_KSU_PATCH_COMMIT:-${SUSFS_COMMIT}}"
 ENABLE_BBG="${ENABLE_BBG:-0}"
 BBG_REPO="${BBG_REPO:-https://github.com/vc-teahouse/Baseband-guard.git}"
 BBG_REF="${BBG_REF:-main}"
@@ -583,11 +583,9 @@ prepare_kernel_sources() {
     fi
     if [ "${ENABLE_SUSFS}" = "1" ]; then
         [ "${ENABLE_KERNELSU}" = "1" ] || die "SUSFS 需要先启用官方 KernelSU"
+        [ "${SUSFS_KSU_PATCH_COMMIT}" = "${SUSFS_COMMIT}" ] || \
+            die "SUSFS common 与 KernelSU 补丁必须来自同一提交"
         ensure_repo "SUSFS ${SUSFS_REF}" "${SUSFS_DIR}" "${SUSFS_REPO}" "${SUSFS_REF}" "${SUSFS_COMMIT}"
-        if ! git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}^{commit}" 2>/dev/null; then
-            log_step "获取与 KernelSU ${KSU_REF} 兼容的官方 SUSFS 补丁提交"
-            git_network -C "${SUSFS_DIR}" fetch --depth 1 origin "${SUSFS_KSU_PATCH_COMMIT}"
-        fi
         git -C "${SUSFS_DIR}" cat-file -e "${SUSFS_KSU_PATCH_COMMIT}:kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" 2>/dev/null || \
             die "SUSFS KernelSU 兼容补丁不存在: ${SUSFS_KSU_PATCH_COMMIT}"
         git -C "${SUSFS_DIR}" update-ref \

@@ -32,7 +32,7 @@ Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `
 组件版本和全部来源、摘要以 `.env` 为唯一 pin 来源；集成边界如下：
 
 - KernelSU：built-in，与 SUSFS 官方兼容补丁配套集成；preinit runner 按独立 arm64 静态用户态程序构建并嵌入 Image。
-- SUSFS：common 与 KernelSU 兼容补丁取自同一官方提交，保留完整隐藏设计，仅交付内核能力。`OPEN_REDIRECT` 等待上游修复，暂不启用；日志默认关闭。补修依据见 `patches/susfs/395a8c0-absorption.tsv`。
+- SUSFS：common 与 KernelSU 兼容补丁取自同一官方提交，仅交付内核能力。保留原生 inotify fdinfo；`OPEN_REDIRECT` 暂不启用，日志默认关闭。
 - Baseband Guard：按 KernelSU 凭据保护基带块设备，覆盖块设备及 raw SCSI、UFS BSG、io_uring 和共享可写映射路径；保留官方活动槽匹配、boot/recovery 白名单及限速拒绝日志。
 - 内核保留 IPSet 支持；其用户态模块独立构建和交付。
 
