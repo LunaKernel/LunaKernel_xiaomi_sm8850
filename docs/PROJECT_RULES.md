@@ -19,7 +19,7 @@ Luna Kernel 面向小米 17（`pudding`）HyperOS 4 / Android 17，以小米 SM8
 | 职责 | 项目内路径 | 上游 | 分支 | 固定提交 |
 | --- | --- | --- | --- | --- |
 | 小米 SoC/vendor 公开基线与完整性元数据 | `sources/xiaomi_sm8850_soc/` | `https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git` | `popsicle-w-oss` | `45705be1220b4cfa8100516ad86711656c0b634e` |
-| 实际 GKI Image 源码 | `sources/aosp_common_6.12.92_kmi6_2026-09/` | `https://android.googlesource.com/kernel/common` | `android16-6.12-2026-09_r16` 发布标签 | `7cc7455426123221ba503e4251c3e829baf3a56c` |
+| 实际 GKI Image 源码 | `sources/aosp_common_6.12.92_kmi6_2026-09/` | `https://android.googlesource.com/kernel/common` | `android16-6.12-2026-09_r18` 发布标签 | `ea16424de1900583be7e32ab3a897f231116196a` |
 
 Image MUST 从 AOSP common 构建。小米仓库 `android/ACK_SHA` 中的 r8 / `f1bdb13583da85a47fcf1632a78ef52d6e6da651` 仅用于完整性检查；不得复制目录伪造单仓源码树。
 
