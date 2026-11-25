@@ -923,7 +923,7 @@ verify_project_config() {
     for symbol in \
         LOCALVERSION_AUTO TRIM_UNUSED_KSYMS SECCOMP_CACHE_DEBUG BLK_WBT_MQ \
         CRYPTO_AES_ARM64_NEON_BLK EFIVAR_FS PSTORE_BLK \
-        SND_AUDIO_GRAPH_CARD USB_XHCI_PCI_RENESAS NINTENDO_FF \
+        SND_AUDIO_GRAPH_CARD USB_XHCI_PCI_RENESAS \
         LTO_CLANG_FULL LTO_CLANG_THIN; do
         require_config_disabled "${symbol}"
     done
@@ -1765,7 +1765,6 @@ bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
     --disable SND_AUDIO_GRAPH_CARD \
     --disable SND_SIMPLE_CARD_UTILS \
     --disable USB_XHCI_PCI_RENESAS \
-    --disable NINTENDO_FF \
     --set-str LOCALVERSION ""
 if [ "${ENABLE_KERNELSU}" = "1" ]; then
     bash "${COMMON_DIR}/scripts/config" --file "${BUILD_DIR}/.config" \
