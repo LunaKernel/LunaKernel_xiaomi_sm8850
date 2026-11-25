@@ -102,7 +102,7 @@ IPSet 用户态命令与 KernelSU 模块由 [LunaKernel/extra-modules](https://g
 - `bash tools/ci/check.sh` 统一执行 Shell/Python 语法检查、单元测试、构建输入检查和 actionlint；`metadata` 与轻量检查对 AK3 模板、OTA 镜像仅核对 pin 格式，实际输入在 init 准备后验证。该轻量检查可在本地开发时执行，完整编译与发布门禁由 CI 执行。
 - common 版本必须为 `.env` 固定的 6.12.92，QCOM/Xiaomi symbol list 必须存在。
 - 项目配置、modules.order 及摘要以 `.env` 为准；保留 stock Rust Binder 黑名单和工具探测缓存项，后者 MUST NOT 成为启动门禁。完整构建与实机状态按第 3、6 节独立记录。
-- 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF、BLK_WBT_MQ 必须启用。
+- 4 KiB、SMP、PREEMPT、模块、MODVERSIONS、BASIC/EXTENDED_MODVERSIONS、GENDWARFKSYMS、Android vendor hooks、IKCONFIG、CFI、Rust、BPF JIT、module BTF、MODULE_ALLOW_BTF_MISMATCH、FUSE BPF 必须启用。写回节流与原厂默认一致：保留 `BLK_WBT=y`，使用 `BLK_WBT_MQ=n`。
 - 按用户本轮确认，仅构建和交付 4 KiB 版本；16 KiB 暂不交付。16/64 KiB、`LOCALVERSION_AUTO`、`TRIM_UNUSED_KSYMS`、强制模块签名、Full/Thin LTO 必须关闭；使用 `LTO_NONE`。
 - 按本轮授权，Rust Binder 必须内置并作为唯一实际 Binder 实现：`ANDROID_BINDER_IPC_RUST=y`、`ANDROID_BINDER_IPC=n`，不启用 C 实现专用的 `ANDROID_BINDERFS`；Binderfs 由 Rust 驱动自带实现提供。不得同时内置 C/Rust 两套同名 tracepoint。保留独立 vendor hooks，固定 OTA 的其余模块继续严格闭包检查。配置使用 `CMDLINE_EXTEND=y`，保留 common 原始参数并追加 `module_blacklist=rust_binder`，仅阻止 stock 同名 `.ko` 的符号解析，不影响内置驱动。模块屏蔽策略独立于最小启动门禁；Rust Binder 本身提供核心 IPC，必须纳入启动配置检查。
 - `BPF_UNPRIV_DEFAULT_OFF=y`；DMA-BUF system/CMA heaps、GUNYAH_QCOM_PLATFORM、ARM_SMMU、ARM_SMMU_V3、ARM_SMMU_V3_PKVM 与 QCOM_IOMMU 必须保持关闭。ARM_PKVM_GUEST、VFIO_PKVM_IOMMU 与 PKVM_PVIOMMU 必须启用。
