@@ -16,7 +16,7 @@
 
 [`patches/backports/`](../patches/backports/) 固定来源、顺序、吸收证明和质量审查。selected 集合不可拆分；independent 每份清单只含一个逻辑项，不可拆的官方前置/补修链放在同一清单。新增回移须固定完整 commit、提交者日期（`git show -s --format=%cs`）、patch-id、路径及适配摘要，核实基线缺失、目标路径相关且无明确回退或回归证据，并用临时 Git index 证明单项应用、撤销及完整顺序重放。
 
-更新外部组件时，按上游设计意图和完整调用链审查项目差异，优先保留完整上游实现，仅做必要适配和有缺陷证据的修复。
+更新外部组件时，按 [常规维护流程](MAINTENANCE.md#4-更新外部组件) 审查和集成上游候选。
 
 KernelSU/SUSFS 按 [集成边界](PROJECT_RULES.md#2-来源与改动边界)配套集成，清理已吸收补修；同步核对官方 Manager 的版本、UAPI 和签名兼容性。
 

@@ -64,9 +64,9 @@
 | SUSFS | `simonpunk/susfs4ksu` 的 `gki-android16-6.12` | common 与 KSU 补丁来自同一提交 |
 | Baseband Guard | `vc-teahouse/Baseband-guard` 的 `main` | common 接口、KSU 凭据标记与 LSM 接入 |
 
-按固定上游的完整实现集成组件，保留必要适配和已确认定制，清理已吸收的旧层。按 [集成约束](PROJECT_RULES.md#2-来源与改动边界)复核组件间兼容性与项目安全边界。
+先在隔离环境原样应用官方补丁，再独立叠加 [项目产品策略](PROJECT_RULES.md#2-来源与改动边界)。只有原样接入遇到明确兼容冲突时，才做不改变上游语义的最小适配；逐轮清理不再需要的旧层。
 
-长期定制见 [项目约束](PROJECT_RULES.md#2-来源与改动边界)；逐轮复核临时措施，随上游修复清理重复层。
+外部组件的内部问题由上游处理；确认存在严重缺陷或兼容冲突无法局部解决时，放弃该候选。没有明确收益不是停止跟进的理由。
 
 Manager 选用匹配新 KSU 源码、UAPI 和签名要求的官方 CI 产物，固定 run/artifact、摘要与证书，并完成现有验证。AK3 或 extra-modules 有相关更新时，在所属仓库审查并制作固定输入。
 
