@@ -1904,11 +1904,10 @@ cp -f "${AUDIT_DIR}/autofdo-compile-commands.current.tsv" \
 cp -f "${AUDIT_DIR}/llvm-target-attributes.current.tsv" \
     "${AUDIT_DIR}/llvm-target-attributes.preflight.tsv"
 
-log_step "编译 GKI arm64 Image 与模块 (并行度: ${BUILD_JOBS})"
-make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" Image modules -j"${BUILD_JOBS}"
+log_step "编译 GKI arm64 Image 与模块对象 (并行度: ${BUILD_JOBS})"
+make -C "${COMMON_DIR}" "${MAKE_ARGS[@]}" KBUILD_MODPOST_NOFINAL=1 Image modules -j"${BUILD_JOBS}"
 
 IMAGE_PATH="${BUILD_DIR}/arch/arm64/boot/Image"
-verify_autofdo_compile_commands
 [ -f "${IMAGE_PATH}" ] || die "编译完成但未找到 Image: ${IMAGE_PATH}"
 [ -s "${BUILD_DIR}/Module.symvers" ] || die "编译完成但未找到 Module.symvers"
 [ -s "${BUILD_DIR}/modules.order" ] || die "编译完成但未找到 modules.order"
@@ -1923,12 +1922,21 @@ while IFS= read -r module_path; do
         *) die "modules.order 条目不是模块对象: ${module_path}" ;;
     esac
     [ -s "${BUILD_DIR}/${module_path}" ] || die "活动模块对象缺失: ${module_path}"
-    module_path="${module_path%.o}.ko"
-    [ -s "${BUILD_DIR}/${module_path}" ] || die "活动模块 ELF 缺失: ${module_path}"
-    [ -n "${MODULE_SAMPLE_PATH}" ] || MODULE_SAMPLE_PATH="${module_path}"
+    [ -s "${BUILD_DIR}/${module_path%.o}.mod.c" ] || die "活动模块 modpost 输出缺失: ${module_path}"
+    [ ! -e "${BUILD_DIR}/${module_path%.o}.ko" ] || die "活动模块意外生成 ELF: ${module_path}"
+    [ -n "${MODULE_SAMPLE_PATH}" ] || MODULE_SAMPLE_PATH="${module_path%.o}.ko"
 done < "${BUILD_DIR}/modules.order"
 [ -n "${MODULE_SAMPLE_PATH}" ] || die "modules.order 不含活动模块"
 cp -f "${BUILD_DIR}/modules.order" "${AUDIT_DIR}/modules.order.current"
+MODULE_SAMPLE_ORDER="${BUILD_DIR}/.luna-vermagic.order"
+printf '%s\n' "${MODULE_SAMPLE_PATH%.ko}.o" > "${MODULE_SAMPLE_ORDER}"
+# 从输出目录调用顶层 Kbuild，使 -o 在同一层生效并保留全量 modpost 结果。
+make --no-print-directory -C "${BUILD_DIR}" -f "${COMMON_DIR}/Makefile" "${MAKE_ARGS[@]}" \
+    -o modpost -o modules_prepare -o vmlinux \
+    KBUILD_MODPOST_NOFINAL=0 MODORDER="${MODULE_SAMPLE_ORDER}" modules
+[ -s "${BUILD_DIR}/${MODULE_SAMPLE_PATH}" ] || die "vermagic 样本 ELF 缺失: ${MODULE_SAMPLE_PATH}"
+cmp -s "${BUILD_DIR}/modules.order" "${AUDIT_DIR}/modules.order.current" || die "样本链接改变了全量 modules.order"
+verify_autofdo_compile_commands
 MODULE_SAMPLE_VERMAGIC="$("${CI_TOOLCHAIN_DIR}/bin/llvm-readelf" -p .modinfo \
     "${BUILD_DIR}/${MODULE_SAMPLE_PATH}" | sed -n 's/^.*] vermagic=//p')"
 [ "$(printf '%s\n' "${MODULE_SAMPLE_VERMAGIC}" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] || \
@@ -1939,7 +1947,7 @@ audit_compare "hard.module-vermagic.suffix" "${ANDROID17_STOCK_MODULE_VERMAGIC_S
     "${MODULE_SAMPLE_VERMAGIC#* }"
 audit_compare "modules.order.count" "${STAGE_MODULE_COUNT}" "${MODULE_COUNT}"
 audit_compare "modules.order.sha256" "${STAGE_MODULES_ORDER_SHA256}" "${MODULES_ORDER_SHA256}"
-log_success "活动模块产物与固定 OTA vermagic 后缀兼容 (${MODULE_COUNT} 个模块)"
+log_success "全量模块通过 modpost (${MODULE_COUNT} 个)，仅链接 ${MODULE_SAMPLE_PATH}，vermagic 后缀与固定 OTA 一致"
 
 [ "${ENABLE_KERNELSU}" != "1" ] || verify_kernelsu_build
 [ "${ENABLE_BBG}" != "1" ] || verify_bbg_build
