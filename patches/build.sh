@@ -1699,7 +1699,7 @@ MAKE_ARGS=(
     CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
     RUSTC=rustc HOSTRUSTC=rustc HOSTRUSTFLAGS="-Clinker=/usr/bin/x86_64-linux-gnu-gcc"
     BINDGEN=bindgen HOSTLD=/usr/bin/ld
-    KCFLAGS="-Wno-error=unknown-warning-option -march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin}${KERNEL_LLVM_CFLAGS}"
+    KCFLAGS="-march=${SM8850_C_ARCH:?缺少 SM8850 C ISA pin} -mtune=${SM8850_TUNE_CPU:?缺少 SM8850 调度模型 pin}${KERNEL_LLVM_CFLAGS}"
     KRUSTFLAGS="-Ctarget-cpu=generic -Ztune-cpu=${SM8850_TUNE_CPU} -Ctarget-feature=${SM8850_RUST_FEATURES:?缺少 SM8850 Rust ISA pin}${KERNEL_LLVM_RUSTFLAGS}"
     RUSTFLAGS_core.o="-Zthreads=${RUST_CORE_THREADS}"
     LOCALVERSION="${KERNEL_LOCALVERSION}"
