@@ -534,6 +534,7 @@ verify_bbg_source_state() {
     allowed="$(mktemp)"
     printf '%s\n' \
         baseband_guard.c \
+        baseband_guard.h \
         blkdev_helper.c \
         blkdev_helper.h \
         tracing/tracing.c > "${allowed}"

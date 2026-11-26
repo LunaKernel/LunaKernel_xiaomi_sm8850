@@ -318,6 +318,18 @@ index 4f2080cc961852f77fb39e63c19dfa9b76a7353e..c34d8d59dec2ed34bd61f3a917ab306e
  };
  
  static int __init bbg_init(void)
+diff --git a/baseband_guard.h b/baseband_guard.h
+index 5d6d5935960d04f21d718b6bf4a788f67e597f5e..00223ff307baf9f2f93a0bb5ebd046cc7ee67b9f 100644
+--- a/baseband_guard.h
++++ b/baseband_guard.h
+@@ -17,6 +17,7 @@ static const char * const allowlist_names[] = {
+ 	"vendor_boot", "vendor_kernel_boot",
+ #endif
+ 	"dtbo",
++	"cdt", "sdam2",
+ 	"userdata", "cache", "metadata", "misc",
+ 	"vbmeta", "vbmeta_system", "vbmeta_vendor",
+ #ifndef CONFIG_BBG_BLOCK_RECOVERY
 diff --git a/blkdev_helper.c b/blkdev_helper.c
 index 38ab4645d7792764a40d08c5c6dc0f9a8678f901..d2e1143949062dddea2c09ab79707e7b9d6fb42c 100644
 --- a/blkdev_helper.c
